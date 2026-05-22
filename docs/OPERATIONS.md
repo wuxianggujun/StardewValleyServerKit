@@ -1,0 +1,188 @@
+# 日常维护
+
+## 启动和停止
+
+Windows：
+
+```powershell
+.\setup.ps1 login
+.\setup.ps1 download
+.\setup.ps1 steamcmd-download
+.\setup.ps1 smoke
+.\setup.ps1 start
+.\setup.ps1 stop
+.\setup.ps1 restart
+.\setup.ps1 backup
+```
+
+Linux / macOS：
+
+```bash
+./scripts/sdv-server.sh login
+./scripts/sdv-server.sh download
+./scripts/sdv-server.sh steamcmd-download
+./scripts/sdv-server.sh smoke
+./scripts/sdv-server.sh start
+./scripts/sdv-server.sh stop
+./scripts/sdv-server.sh restart
+./scripts/sdv-server.sh backup
+```
+
+## 查看状态
+
+```powershell
+.\setup.ps1 status
+.\setup.ps1 logs
+```
+
+重点关注：
+
+- `sdv-server` 是否持续运行。
+- `sdv-steam-auth` 是否健康。
+- SMAPI 是否出现红色异常。
+- 玩家加入和退出是否正常记录。
+
+## Steam 授权
+
+首次部署需要完成一次 Steam Guard：
+
+```powershell
+.\setup.ps1 login
+```
+
+验证码必须输入到运行该命令的本机终端里。不要把验证码、账号密码或 token 发到聊天、Issue 或截图里。
+
+授权成功后再执行：
+
+```powershell
+.\setup.ps1 download
+.\setup.ps1 smoke
+```
+
+如果 `download` 已经通过账号授权和 license 校验，但 manifest 下载返回
+`403 (Forbidden)`，按 [Steam 下载备用流程](STEAM_DOWNLOAD_FALLBACK.md)
+使用 SteamCMD 下载游戏文件：
+
+```powershell
+.\setup.ps1 steamcmd-download -Retries 5
+```
+
+如果 SteamCMD 下载过程中出现 `state is 0x402 after update job`，
+脚本会自动重试，并复用已经下载到 `game-data` volume 的部分文件。
+
+SteamCMD 备用流程也可能触发 Steam Guard。验证码必须输入到运行
+SteamCMD 或 `docker attach` 的本机终端里，不要发送到聊天、Issue 或截图。
+
+## 更新镜像
+
+```powershell
+.\setup.ps1 update
+```
+
+更新前建议：
+
+1. 停止玩家操作。
+2. 完成一次过夜保存。
+3. 执行 `.\setup.ps1 backup` 备份存档。
+4. 记录当前 `IMAGE_VERSION`。
+
+如果更新后异常，回退 `.env` 中的 `IMAGE_VERSION` 后重启。
+
+## 添加 Mod
+
+1. 停止服务器。
+2. 将 Mod 解压到 `data/mods/`。
+3. 启动服务器。
+4. 查看日志确认依赖完整。
+5. 按 `TEST_PLAN.md` 做过夜和事件测试。
+
+```powershell
+.\setup.ps1 stop
+.\setup.ps1 start
+.\setup.ps1 logs
+```
+
+## 备份建议
+
+建议至少备份：
+
+- Docker volume：`stardew-valley-server-kit_saves`
+- 本地目录：`data/settings`
+- 本地目录：`data/mods`
+- 私密配置：`.env`
+
+不要把 `.env` 上传到公开仓库。
+
+当前脚本提供只追加、不删除旧文件的存档备份命令：
+
+```powershell
+.\setup.ps1 backup
+```
+
+前置条件：
+
+- 至少启动过一次服务器。
+- Docker volume `stardew-valley-server-kit_saves` 已创建。
+- 最好已经完成一次过夜保存。
+
+备份会导出 Docker volume：
+
+```text
+stardew-valley-server-kit_saves
+```
+
+输出文件位于：
+
+```text
+backups/saves-YYYYMMDD-HHMMSS.tar.gz
+backups/saves-YYYYMMDD-HHMMSS.meta.txt
+```
+
+建议在以下时机备份：
+
+- 完成一次过夜保存后。
+- 测试雷雨、绿色雨、地震、节日前。
+- 新增、删除或升级 Mod 前。
+- 更新 Docker 镜像前。
+- 迁移真实存档前。
+
+不要在过夜保存动画、节日结算、剧情切场时强制停止容器或备份。
+
+## 端口说明
+
+- `5800/tcp`：Web VNC 管理入口。
+- `8080/tcp`：HTTP API。
+- `24642/udp`：游戏连接端口。
+- `27015/udp`：查询端口。
+
+公网部署时，需要同时配置系统防火墙和云厂商安全组。
+
+## Discord Bot
+
+默认不启动 Discord Bot。
+
+启用方式：
+
+```powershell
+.\setup.ps1 start -EnableDiscord
+```
+
+需要在 `.env` 中配置：
+
+```env
+DISCORD_BOT_TOKEN=""
+DISCORD_CHAT_CHANNEL_ID=""
+```
+
+## 真实存档迁移
+
+建议流程：
+
+1. 先用全新测试存档跑完基础冒烟测试。
+2. 停止服务器。
+3. 执行 `.\setup.ps1 backup` 备份当前 saves volume。
+4. 导入真实存档。
+5. 启动服务器。
+6. 完成一次加入、过夜、重启验证。
+
+真实存档迁移前，不要一次性新增大量 Mod。

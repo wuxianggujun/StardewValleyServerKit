@@ -1,0 +1,13 @@
+.env
+.env.local
+data/
+backups/
+logs/
+*.log
+
+.DS_Store
+Thumbs.db
+
+.idea/
+.vscode/
+.ace-tool/
