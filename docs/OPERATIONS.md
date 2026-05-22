@@ -155,6 +155,10 @@ backups/saves-YYYYMMDD-HHMMSS.meta.txt
 - `24642/udp`：游戏连接端口。
 - `27015/udp`：查询端口。
 
+局域网直连需要 `data/settings/server-settings.json` 中的
+`Server.AllowIpConnections` 为 `true`。脚本新建配置时会默认启用。
+同一台 Windows 主机测试可以在游戏里输入 `127.0.0.1`；其他局域网设备输入服务器主机 IPv4。
+
 公网部署时，需要同时配置系统防火墙和云厂商安全组。
 
 ## Discord Bot

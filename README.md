@@ -108,6 +108,13 @@ Linux / macOS：
 - 游戏 UDP 端口：`24642`
 - 查询 UDP 端口：`27015`
 
+玩家可以在游戏的合作模式里使用局域网 IP 直连。当前脚本生成的
+`data/settings/server-settings.json` 默认设置 `"AllowIpConnections": true`。
+Windows 本机测试可输入 `127.0.0.1`，同一局域网其他设备输入服务器主机的 IPv4 地址。
+如果改过端口，直连时使用 `.env` 里的 `GAME_PORT`。
+
+也可以使用日志中的 invite code 加入；但如果 Steam / Galaxy P2P 不稳定，优先使用局域网 IP。
+
 如果 noVNC 页面一直显示 `Connecting...` 或看起来像一张静态图片，通常是浏览器端还没完成
 VNC 密码认证。可以临时使用带参数的地址打开：
 
@@ -155,6 +162,7 @@ RealVNC 如果能看到画面但不能点击，先确认 Viewer 没有开启 `Vi
 
 - `server` 和 `steam-auth` 容器都是 `healthy`
 - `5800` 和 `8080` 端口可达
+- 日志中有 `IP connections enabled (AllowIpConnections=true)`
 - 日志中有 `SaveGame.Save() completed without exceptions`
 - 日志中没有持续刷出的 `Callback dispatcher is not initialized`
 

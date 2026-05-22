@@ -873,6 +873,38 @@ function Ensure-EnvFile {
     }
 
     New-Item -ItemType Directory -Force -Path (Join-Path $RootDir "data\settings"), (Join-Path $RootDir "data\mods") | Out-Null
+    Initialize-ServerSettings
+}
+
+function Initialize-ServerSettings {
+    $settingsPath = Join-Path $RootDir "data\settings\server-settings.json"
+    if (Test-Path $settingsPath) {
+        return
+    }
+
+    @'
+{
+  "Game": {
+    "FarmName": "Junimo",
+    "FarmType": 0,
+    "ProfitMargin": 1.0,
+    "StartingCabins": 1,
+    "SpawnMonstersAtNight": "auto"
+  },
+  "Server": {
+    "MaxPlayers": 10,
+    "CabinStrategy": "CabinStack",
+    "SeparateWallets": false,
+    "ExistingCabinBehavior": "KeepExisting",
+    "VerboseLogging": false,
+    "AllowIpConnections": true,
+    "LobbyMode": "Shared",
+    "ActiveLobbyLayout": "default",
+    "AdminSteamIds": []
+  }
+}
+'@ | Set-Content -LiteralPath $settingsPath -Encoding UTF8
+    Write-Ok "Created data/settings/server-settings.json with IP connections enabled"
 }
 
 function Assert-Docker {

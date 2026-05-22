@@ -65,6 +65,35 @@ set_env_value() {
   fi
 }
 
+initialize_server_settings() {
+  local settings_path="$ROOT_DIR/data/settings/server-settings.json"
+  [[ -f "$settings_path" ]] && return 0
+
+  cat >"$settings_path" <<'JSON'
+{
+  "Game": {
+    "FarmName": "Junimo",
+    "FarmType": 0,
+    "ProfitMargin": 1.0,
+    "StartingCabins": 1,
+    "SpawnMonstersAtNight": "auto"
+  },
+  "Server": {
+    "MaxPlayers": 10,
+    "CabinStrategy": "CabinStack",
+    "SeparateWallets": false,
+    "ExistingCabinBehavior": "KeepExisting",
+    "VerboseLogging": false,
+    "AllowIpConnections": true,
+    "LobbyMode": "Shared",
+    "ActiveLobbyLayout": "default",
+    "AdminSteamIds": []
+  }
+}
+JSON
+  ok "Created data/settings/server-settings.json with IP connections enabled"
+}
+
 ensure_env_file() {
   if [[ ! -f "$ENV_FILE" ]]; then
     cp "$ENV_EXAMPLE_FILE" "$ENV_FILE"
@@ -87,6 +116,7 @@ ensure_env_file() {
   fi
 
   mkdir -p "$ROOT_DIR/data/settings" "$ROOT_DIR/data/mods"
+  initialize_server_settings
 }
 
 env_or_default() {
