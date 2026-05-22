@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup", "start", "stop", "restart", "logs", "status", "update", "backup", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
+    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup", "start", "stop", "restart", "logs", "status", "update", "backup", "join-info", "admin", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
     [string]$Action = "setup",
 
     [string]$SteamUsername,
@@ -221,8 +221,8 @@ function Show-CredentialStatus {
 function Protect-LogLine {
     param([string]$Line)
 
-    $protected = $Line
-    foreach ($key in @("STEAM_USERNAME", "STEAM_PASSWORD", "STEAM_REFRESH_TOKEN", "VNC_PASSWORD", "API_KEY", "SERVER_PASSWORD", "DISCORD_BOT_TOKEN")) {
+    $protected = $Line -replace '\x1B\[[0-9;?]*[ -/]*[@-~]', ''
+    foreach ($key in @("STEAM_USERNAME", "STEAM_PASSWORD", "STEAM_REFRESH_TOKEN", "VNC_PASSWORD", "API_KEY", "ADMIN_TOKEN", "SERVER_PASSWORD", "DISCORD_BOT_TOKEN")) {
         $value = Get-EnvValue $key
         if ($value) {
             $protected = $protected.Replace($value, "<redacted>")
@@ -256,6 +256,46 @@ function Test-TcpPort {
     }
 }
 
+function Test-UdpPort {
+    param(
+        [string]$HostName,
+        [int]$Port
+    )
+
+    $udp = [System.Net.Sockets.UdpClient]::new()
+    try {
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes("sdv-port-probe")
+        [void]$udp.Send($bytes, $bytes.Length, $HostName, $Port)
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        $udp.Close()
+    }
+}
+
+function Get-LanIPv4Addresses {
+    if (-not (Get-Command Get-NetIPConfiguration -ErrorAction SilentlyContinue)) {
+        return @()
+    }
+
+    return @(Get-NetIPConfiguration |
+        Where-Object { $_.IPv4Address -and $_.NetAdapter.Status -eq "Up" } |
+        ForEach-Object {
+            foreach ($address in $_.IPv4Address) {
+                $ip = $address.IPAddress
+                if ($ip -and $ip -ne "127.0.0.1" -and $ip -notlike "169.254.*") {
+                    [pscustomobject]@{
+                        Interface = $_.InterfaceAlias
+                        IPAddress = $ip
+                    }
+                }
+            }
+        })
+}
+
 function Get-EnvOrDefault {
     param(
         [string]$Key,
@@ -267,6 +307,135 @@ function Get-EnvOrDefault {
         return $value
     }
     return $DefaultValue
+}
+
+function Show-AccessInfo {
+    if (-not (Test-Path $EnvFile)) {
+        Write-Warn ".env does not exist. Showing default local access URLs."
+    }
+
+    $adminHost = Get-EnvOrDefault "ADMIN_HOST" "127.0.0.1"
+    $adminPort = Get-EnvOrDefault "ADMIN_PORT" "8088"
+    $vncPort = Get-EnvOrDefault "VNC_PORT" "5800"
+    $apiPort = Get-EnvOrDefault "API_PORT" "8080"
+    $gamePort = Get-EnvOrDefault "GAME_PORT" "24642"
+    $queryPort = Get-EnvOrDefault "QUERY_PORT" "27015"
+    $adminUrlHost = $adminHost
+    if ($adminUrlHost -eq "0.0.0.0") {
+        $adminUrlHost = "127.0.0.1"
+    }
+
+    Write-Step "Access URLs"
+    Write-Host "Admin panel: http://${adminUrlHost}:$adminPort"
+    Write-Host "noVNC:       http://127.0.0.1:$vncPort"
+    Write-Host "HTTP API:    http://127.0.0.1:$apiPort"
+    Write-Host "Game IP:     127.0.0.1"
+    Write-Host "Game UDP:    $gamePort"
+    Write-Host "Query UDP:   $queryPort"
+    Write-Host "Admin command: .\setup.ps1 admin"
+
+    $lanAddresses = Get-LanIPv4Addresses
+    if ($lanAddresses.Count -gt 0) {
+        Write-Step "LAN IPv4 candidates"
+        foreach ($item in $lanAddresses) {
+            Write-Host "$($item.IPAddress)  ($($item.Interface))"
+        }
+        Write-Warn "Players on another LAN device should use the real WLAN/Ethernet IPv4 address."
+    }
+    else {
+        Write-Warn "No LAN IPv4 address found from Windows network adapters."
+    }
+
+    if ($adminHost -eq "0.0.0.0") {
+        Write-Warn "ADMIN_HOST=0.0.0.0 listens on all interfaces. Use a firewall or reverse proxy before exposing it."
+    }
+    Write-Warn "VNC passwords, API keys, and admin tokens are stored in .env and are not printed here."
+}
+
+function Prompt-AdminPanelAfterSetup {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-Warn "Node.js was not found. Install Node.js, then run '.\setup.ps1 admin' to start the web admin panel."
+        return
+    }
+
+    if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) {
+        Write-Warn "Run '.\setup.ps1 admin' later if you want to open the local web admin panel."
+        return
+    }
+
+    Write-Step "Optional web admin panel"
+    Write-Host "Start the local web admin panel now? This keeps this terminal open. [y/N]: " -NoNewline
+    $answer = Read-Host
+    if ($answer -match '^(y|yes)$') {
+        Invoke-AdminPanel
+    }
+    else {
+        Write-Ok "Skipped admin panel. Run '.\setup.ps1 admin' later when needed."
+    }
+}
+
+function Show-JoinInfo {
+    if (-not (Test-Path $EnvFile)) {
+        Write-Warn ".env does not exist. Showing default ports; run setup before starting the real server."
+    }
+
+    $gamePort = [int](Get-EnvOrDefault "GAME_PORT" "24642")
+    $queryPort = [int](Get-EnvOrDefault "QUERY_PORT" "27015")
+    $serverRunning = $false
+    $inspectOutput = & docker inspect -f "{{.State.Running}}" sdv-server 2>$null
+    if ($LASTEXITCODE -eq 0 -and $inspectOutput -eq "true") {
+        $serverRunning = $true
+    }
+
+    Write-Step "Player join targets"
+    Write-Host "Same Windows PC: 127.0.0.1"
+    Write-Host "Game UDP port: $gamePort"
+    Write-Host "Query UDP port: $queryPort"
+    Write-Host "In Stardew Valley, use Co-op -> Join LAN Game / Enter IP. Do not paste an invite code into the IP field."
+
+    $lanAddresses = Get-LanIPv4Addresses
+    if ($lanAddresses.Count -gt 0) {
+        Write-Step "LAN IPv4 candidates"
+        foreach ($item in $lanAddresses) {
+            Write-Host "$($item.IPAddress)  ($($item.Interface))"
+        }
+        Write-Warn "For another device on the same Wi-Fi/LAN, use the real network adapter IP, usually WLAN or Ethernet."
+        Write-Warn "Do not use VMware, VirtualBox, WSL, Hyper-V, or Docker adapter addresses for normal players."
+    }
+    else {
+        Write-Warn "No LAN IPv4 address found from Windows network adapters."
+    }
+
+    Write-Step "Docker published ports"
+    & docker port sdv-server 2>$null | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "sdv-server container was not found. Start the server before checking published ports."
+    }
+
+    Write-Step "Local UDP probe"
+    if (Test-UdpPort "127.0.0.1" $gamePort) {
+        Write-Ok "Sent UDP probe to 127.0.0.1:$gamePort"
+    }
+    else {
+        Write-Warn "Could not send UDP probe to 127.0.0.1:$gamePort"
+    }
+    Write-Warn "UDP is connectionless; this proves Windows can send the packet, not that Stardew accepted the game protocol."
+
+    if ($serverRunning) {
+        Write-Step "Runtime server signals"
+        & docker exec sdv-server sh -lc "printf 'invite_code='; cat /tmp/invite-code.txt 2>/dev/null || printf 'n/a'; printf '\n'; ss -lunp 2>/dev/null | grep -E '(:24642|:27015)' || true; tail -n 120 /tmp/server-output.log 2>/dev/null | grep -E 'IP connections enabled|Invite code|Connected to game session|Network:|Healthcheck' | tail -n 20 || true" 2>&1 |
+            ForEach-Object { Protect-LogLine ([string]$_) } |
+            Where-Object { $_ -and $_ -notmatch "Connected to the docker container shell|Exit and run 'make cli'" }
+    }
+    else {
+        Write-Warn "sdv-server is not running. Start it before reading invite code and runtime logs."
+    }
+
+    Write-Step "What to try next"
+    Write-Host "1. If the game client runs on this same Windows PC, enter 127.0.0.1."
+    Write-Host "2. If the game client runs on another LAN device, enter the WLAN/Ethernet IPv4 shown above."
+    Write-Host "3. If LAN IP still fails, run '.\setup.ps1 logs' while joining and check whether a connection attempt appears."
+    Write-Host "4. Invite codes use Steam/Galaxy P2P and can fail independently from IP direct connect."
 }
 
 function Show-RecentLogs {
@@ -311,6 +480,7 @@ function Invoke-SmokeTest {
     }
 
     Show-RecentLogs
+    Show-AccessInfo
 }
 
 function Invoke-SavesBackup {
@@ -379,6 +549,25 @@ function Invoke-NativeVncProxy {
     Write-Warn "Connect the VNC client to 127.0.0.1:5900 and use VNC_PASSWORD from .env."
     Write-Warn "Do not paste VNC_PASSWORD into chat, issues, or screenshots."
     & node $proxyScript
+}
+
+function Invoke-AdminPanel {
+    Assert-Command "node"
+
+    $adminScript = Join-Path $PSScriptRoot "admin-panel.js"
+    if (-not (Test-Path $adminScript)) {
+        Write-ErrorExit "Admin panel script not found: $adminScript"
+    }
+
+    $adminHost = Get-EnvOrDefault "ADMIN_HOST" "127.0.0.1"
+    $adminPort = Get-EnvOrDefault "ADMIN_PORT" "8088"
+
+    Write-Step "Starting local admin panel"
+    Write-Host "Open: http://${adminHost}:$adminPort"
+    Write-Warn "Keep this terminal open while using the admin panel."
+    Write-Warn "ADMIN_TOKEN is printed only in this local terminal and is also stored in .env."
+    Write-Warn "Do not expose ADMIN_HOST=0.0.0.0 on a public server without a trusted firewall or reverse proxy."
+    & node $adminScript
 }
 
 function Show-NoVncUrl {
@@ -847,6 +1036,10 @@ function Ensure-EnvFile {
         Set-EnvValue "API_KEY" (New-Secret 32)
     }
 
+    if (-not (Get-EnvValue "ADMIN_TOKEN")) {
+        Set-EnvValue "ADMIN_TOKEN" (New-Secret 32)
+    }
+
     if ($ServerPassword) {
         Set-EnvValue "SERVER_PASSWORD" $ServerPassword
     }
@@ -1026,12 +1219,17 @@ switch ($Action) {
         if (-not $NoStart) {
             Invoke-SmokeTest
         }
+        else {
+            Show-AccessInfo
+        }
+        Prompt-AdminPanelAfterSetup
     }
     "start" {
         Ensure-EnvFile
         Write-Step "Starting server"
         $upArgs = Get-UpArgs
         Invoke-Compose @upArgs
+        Show-AccessInfo
     }
     "stop" {
         Write-Step "Stopping server"
@@ -1043,6 +1241,7 @@ switch ($Action) {
         Invoke-Compose down
         $upArgs = Get-UpArgs
         Invoke-Compose @upArgs
+        Show-AccessInfo
     }
     "logs" {
         Ensure-EnvFile
@@ -1061,9 +1260,16 @@ switch ($Action) {
         Invoke-Compose down
         $upArgs = Get-UpArgs
         Invoke-Compose @upArgs
+        Show-AccessInfo
     }
     "backup" {
         Invoke-SavesBackup
+    }
+    "join-info" {
+        Show-JoinInfo
+    }
+    "admin" {
+        Invoke-AdminPanel
     }
     "vnc-url" {
         Show-NoVncUrl

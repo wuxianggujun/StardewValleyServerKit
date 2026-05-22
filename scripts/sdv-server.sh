@@ -102,6 +102,7 @@ ensure_env_file() {
 
   [[ -n "$(get_env_value VNC_PASSWORD)" ]] || set_env_value VNC_PASSWORD "$(new_secret)"
   [[ -n "$(get_env_value API_KEY)" ]] || set_env_value API_KEY "$(new_secret)"
+  [[ -n "$(get_env_value ADMIN_TOKEN)" ]] || set_env_value ADMIN_TOKEN "$(new_secret)"
 
   if [[ -z "$(get_env_value STEAM_USERNAME)" ]]; then
     read -r -p "Steam username (must own Stardew Valley; leave blank to edit .env later): " steam_username
@@ -131,6 +132,66 @@ env_or_default() {
   fi
 }
 
+show_access_info() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    warn ".env does not exist. Showing default local access URLs."
+  fi
+
+  local admin_host admin_port admin_url_host vnc_port api_port game_port query_port
+  admin_host="$(env_or_default ADMIN_HOST 127.0.0.1)"
+  admin_port="$(env_or_default ADMIN_PORT 8088)"
+  admin_url_host="$admin_host"
+  [[ "$admin_url_host" == "0.0.0.0" ]] && admin_url_host="127.0.0.1"
+  vnc_port="$(env_or_default VNC_PORT 5800)"
+  api_port="$(env_or_default API_PORT 8080)"
+  game_port="$(env_or_default GAME_PORT 24642)"
+  query_port="$(env_or_default QUERY_PORT 27015)"
+
+  step "Access URLs"
+  printf 'Admin panel: http://%s:%s\n' "$admin_url_host" "$admin_port"
+  printf 'noVNC:       http://127.0.0.1:%s\n' "$vnc_port"
+  printf 'HTTP API:    http://127.0.0.1:%s\n' "$api_port"
+  printf 'Game IP:     127.0.0.1\n'
+  printf 'Game UDP:    %s\n' "$game_port"
+  printf 'Query UDP:   %s\n' "$query_port"
+  printf 'Admin command: ./scripts/sdv-server.sh admin\n'
+
+  step "LAN IPv4 candidates"
+  if ! list_lan_ipv4_addresses; then
+    warn "No LAN IPv4 address found from local network adapters."
+  fi
+  warn "Players on another LAN device should use the real Ethernet/Wi-Fi IPv4 address."
+
+  if [[ "$admin_host" == "0.0.0.0" ]]; then
+    warn "ADMIN_HOST=0.0.0.0 listens on all interfaces. Use a firewall or reverse proxy before exposing it."
+  fi
+  warn "VNC passwords, API keys, and admin tokens are stored in .env and are not printed here."
+}
+
+prompt_admin_panel_after_setup() {
+  if ! command -v node >/dev/null 2>&1; then
+    warn "Node.js was not found. Install Node.js, then run ./scripts/sdv-server.sh admin to start the web admin panel."
+    return 0
+  fi
+
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    warn "Run ./scripts/sdv-server.sh admin later if you want to open the local web admin panel."
+    return 0
+  fi
+
+  local answer
+  step "Optional web admin panel"
+  read -r -p "Start the local web admin panel now? This keeps this terminal open. [y/N]: " answer
+  case "$answer" in
+    y|Y|yes|YES)
+      admin_panel
+      ;;
+    *)
+      ok "Skipped admin panel. Run ./scripts/sdv-server.sh admin later when needed."
+      ;;
+  esac
+}
+
 test_tcp_port() {
   local host="$1"
   local port="$2"
@@ -141,6 +202,102 @@ test_tcp_port() {
   else
     bash -c "cat < /dev/null > /dev/tcp/$host/$port" >/dev/null 2>&1
   fi
+}
+
+test_udp_send() {
+  local host="$1"
+  local port="$2"
+  if command -v nc >/dev/null 2>&1; then
+    printf 'sdv-port-probe' | nc -u -w1 "$host" "$port" >/dev/null 2>&1
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$host" "$port" <<'PY'
+import socket
+import sys
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.sendto(b"sdv-port-probe", (sys.argv[1], int(sys.argv[2])))
+sock.close()
+PY
+  else
+    return 1
+  fi
+}
+
+list_lan_ipv4_addresses() {
+  if command -v ip >/dev/null 2>&1; then
+    ip -4 -o addr show scope global up \
+      | awk '{ split($4, a, "/"); if (a[1] != "127.0.0.1") print a[1] "  (" $2 ")" }'
+  elif command -v ifconfig >/dev/null 2>&1; then
+    ifconfig \
+      | awk '
+        /^[^[:space:]]/ { iface=$1; sub(":", "", iface) }
+        /inet / && $2 != "127.0.0.1" { print $2 "  (" iface ")" }
+      '
+  fi
+}
+
+join_info() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    warn ".env does not exist. Showing default ports; run setup before starting the real server."
+  fi
+
+  local game_port query_port
+  game_port="$(env_or_default GAME_PORT 24642)"
+  query_port="$(env_or_default QUERY_PORT 27015)"
+
+  step "Player join targets"
+  printf 'Same machine: 127.0.0.1\n'
+  printf 'Game UDP port: %s\n' "$game_port"
+  printf 'Query UDP port: %s\n' "$query_port"
+  printf '%s\n' 'In Stardew Valley, use Co-op -> Join LAN Game / Enter IP. Do not paste an invite code into the IP field.'
+
+  step "LAN IPv4 candidates"
+  if ! list_lan_ipv4_addresses; then
+    warn "No LAN IPv4 address found from local network adapters."
+  fi
+  warn "For another device on the same LAN, use the real Ethernet/Wi-Fi adapter IP."
+  warn "Do not use VM, WSL, Docker, or bridge adapter addresses for normal players."
+
+  step "Docker published ports"
+  docker port sdv-server 2>/dev/null || warn "sdv-server container was not found. Start the server before checking published ports."
+
+  step "Local UDP probe"
+  if test_udp_send 127.0.0.1 "$game_port"; then
+    ok "Sent UDP probe to 127.0.0.1:$game_port"
+  else
+    warn "Could not send UDP probe to 127.0.0.1:$game_port; install nc or python3 for this probe."
+  fi
+  warn "UDP is connectionless; this proves the packet can be sent, not that Stardew accepted the game protocol."
+
+  if [[ "$(docker inspect -f '{{.State.Running}}' sdv-server 2>/dev/null || true)" == "true" ]]; then
+    step "Runtime server signals"
+    docker exec sdv-server sh -lc "printf 'invite_code='; cat /tmp/invite-code.txt 2>/dev/null || printf 'n/a'; printf '\n'; ss -lunp 2>/dev/null | grep -E '(:24642|:27015)' || true; tail -n 120 /tmp/server-output.log 2>/dev/null | grep -E 'IP connections enabled|Invite code|Connected to game session|Network:|Healthcheck' | tail -n 20 || true" \
+      | sed -E 's/\x1B\[[0-9;?]*[ -/]*[@-~]//g' \
+      | grep -Ev "Connected to the docker container shell|Exit and run 'make cli'" || true
+  else
+    warn "sdv-server is not running. Start it before reading invite code and runtime logs."
+  fi
+
+  step "What to try next"
+  printf '%s\n' '1. If the game client runs on this same machine, enter 127.0.0.1.'
+  printf '%s\n' '2. If the game client runs on another LAN device, enter the Ethernet/Wi-Fi IPv4 shown above.'
+  printf '%s\n' '3. If LAN IP still fails, run ./scripts/sdv-server.sh logs while joining and check whether a connection attempt appears.'
+  printf '%s\n' '4. Invite codes use Steam/Galaxy P2P and can fail independently from IP direct connect.'
+}
+
+admin_panel() {
+  command -v node >/dev/null 2>&1 || die "Command not found: node. Please install Node.js first."
+
+  local admin_host admin_port
+  admin_host="$(env_or_default ADMIN_HOST 127.0.0.1)"
+  admin_port="$(env_or_default ADMIN_PORT 8088)"
+
+  step "Starting local admin panel"
+  printf 'Open: http://%s:%s\n' "$admin_host" "$admin_port"
+  warn "Keep this terminal open while using the admin panel."
+  warn "ADMIN_TOKEN is printed only in this local terminal and is also stored in .env."
+  warn "Do not expose ADMIN_HOST=0.0.0.0 on a public server without a trusted firewall or reverse proxy."
+  node "$ROOT_DIR/scripts/admin-panel.js"
 }
 
 smoke_test() {
@@ -167,6 +324,7 @@ smoke_test() {
 
   step "Recent logs"
   compose logs --tail 120 --no-color server steam-auth || true
+  show_access_info
 }
 
 vnc_input_check() {
@@ -579,6 +737,7 @@ case "$ACTION" in
     step "Downloading or updating game files"
     compose run --rm steam-auth download
     smoke_test
+    prompt_admin_panel_after_setup
     ;;
   login)
     ensure_env_file
@@ -600,6 +759,7 @@ case "$ACTION" in
     ensure_env_file
     step "Starting server"
     start_server
+    show_access_info
     ;;
   stop)
     step "Stopping server"
@@ -610,6 +770,7 @@ case "$ACTION" in
     step "Restarting server"
     compose down
     start_server
+    show_access_info
     ;;
   logs)
     ensure_env_file
@@ -627,6 +788,7 @@ case "$ACTION" in
     compose pull
     compose down
     start_server
+    show_access_info
     ;;
   vnc-check)
     vnc_input_check
@@ -646,7 +808,13 @@ case "$ACTION" in
   backup)
     backup_saves
     ;;
+  join-info)
+    join_info
+    ;;
+  admin)
+    admin_panel
+    ;;
   *)
-    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/smoke/setup/start/stop/restart/logs/status/update/backup/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
+    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/smoke/setup/start/stop/restart/logs/status/update/backup/join-info/admin/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
     ;;
 esac

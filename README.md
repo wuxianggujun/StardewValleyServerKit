@@ -32,6 +32,8 @@ cd C:\Users\wuxianggujun\CodeSpace\StardewValleyServerKit
 - 拉取 Docker 镜像
 - 执行 Steam 授权和游戏文件下载
 - 启动无头服务器
+- 打印管理面板、noVNC、HTTP API、游戏直连 IP/端口等访问入口
+- 询问是否立即启动本地 Web 管理面板
 
 ### Linux / macOS
 
@@ -59,6 +61,8 @@ Windows：
 .\setup.ps1 status
 .\setup.ps1 update
 .\setup.ps1 backup
+.\setup.ps1 join-info
+.\setup.ps1 admin
 .\setup.ps1 vnc-check
 .\setup.ps1 vnc-fix
 .\setup.ps1 vnc-resize
@@ -94,6 +98,8 @@ Linux / macOS：
 ./scripts/sdv-server.sh status
 ./scripts/sdv-server.sh update
 ./scripts/sdv-server.sh backup
+./scripts/sdv-server.sh join-info
+./scripts/sdv-server.sh admin
 ./scripts/sdv-server.sh vnc-check
 ./scripts/sdv-server.sh vnc-fix
 ./scripts/sdv-server.sh vnc-resize
@@ -105,15 +111,55 @@ Linux / macOS：
 
 - Web noVNC：`http://localhost:5800`
 - HTTP API：`http://localhost:8080`
+- 本地 Web 管理面板：`http://localhost:8088`
 - 游戏 UDP 端口：`24642`
 - 查询 UDP 端口：`27015`
 
+执行 `setup`、`smoke`、`start`、`restart`、`update` 后，脚本会自动打印当前
+`.env` 对应的访问入口和局域网 IPv4 候选地址。普通启动日志不会打印
+`VNC_PASSWORD`、`API_KEY` 或 `ADMIN_TOKEN`。
+
 玩家可以在游戏的合作模式里使用局域网 IP 直连。当前脚本生成的
 `data/settings/server-settings.json` 默认设置 `"AllowIpConnections": true`。
-Windows 本机测试可输入 `127.0.0.1`，同一局域网其他设备输入服务器主机的 IPv4 地址。
-如果改过端口，直连时使用 `.env` 里的 `GAME_PORT`。
+Windows 本机测试必须先输入 `127.0.0.1`；同一局域网其他设备输入服务器主机的
+WLAN / Ethernet IPv4 地址。如果改过端口，直连时使用 `.env` 里的 `GAME_PORT`。
+不确定该填哪个地址时执行：
+
+```powershell
+.\setup.ps1 join-info
+```
+
+Linux / macOS：
+
+```bash
+./scripts/sdv-server.sh join-info
+```
+
+## Web 管理面板
+
+如果不想手动编辑 `.env` 和 `data/settings/server-settings.json`，可以启动本地管理面板：
+
+Windows：
+
+```powershell
+.\setup.ps1 admin
+```
+
+Linux / macOS：
+
+```bash
+./scripts/sdv-server.sh admin
+```
+
+默认地址是 `http://127.0.0.1:8088`。首次启动会在 `.env` 中生成 `ADMIN_TOKEN`，终端也会打印一次。管理面板可以查看容器健康状态、加入地址、最近玩家活动、最近日志，并保存农场地图、人数、小屋数量、端口、进服密码、管理员 Steam64 ID 等配置。
+
+首次执行 `setup` 结束后，脚本会询问是否立即启动本地 Web 管理面板。选择 `y`
+会保持当前终端用于运行面板；跳过后也可以随时执行上面的 `admin` 命令再打开。
+
+保存配置不会热更新游戏进程。端口、人数、IP 直连等配置需要重启服务端后生效；农场地图、农场名、初始小屋数量、利润比例通常只对新建农场生效。管理面板默认只监听 `127.0.0.1`，公网服务器不要直接暴露 `ADMIN_HOST=0.0.0.0`，除非已经放在可信防火墙或反向代理之后。
 
 也可以使用日志中的 invite code 加入；但如果 Steam / Galaxy P2P 不稳定，优先使用局域网 IP。
+邀请码和 IP 直连是两个入口：邀请码填邀请码入口，IP 地址填 LAN/IP 入口，不要混用。
 
 如果 noVNC 页面一直显示 `Connecting...` 或看起来像一张静态图片，通常是浏览器端还没完成
 VNC 密码认证。可以临时使用带参数的地址打开：
@@ -179,6 +225,8 @@ RealVNC 如果能看到画面但不能点击，先确认 Viewer 没有开启 `Vi
 - `IMAGE_VERSION`：默认 `preview`，因为部分 JunimoServer sidecar 镜像目前没有 `latest` 标签。
 - `VNC_PASSWORD`：Web 管理入口密码。
 - `API_KEY`：HTTP API 密钥。
+- `ADMIN_TOKEN`：本地 Web 管理面板令牌。
+- `ADMIN_HOST` / `ADMIN_PORT`：本地 Web 管理面板监听地址和端口。
 - `SERVER_PASSWORD`：玩家进服后的登录密码，留空表示关闭。
 - `GAME_PORT` / `QUERY_PORT`：游戏连接和查询端口。
 

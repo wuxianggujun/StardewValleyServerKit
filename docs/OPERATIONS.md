@@ -13,6 +13,7 @@ Windows：
 .\setup.ps1 stop
 .\setup.ps1 restart
 .\setup.ps1 backup
+.\setup.ps1 admin
 ```
 
 Linux / macOS：
@@ -26,6 +27,7 @@ Linux / macOS：
 ./scripts/sdv-server.sh stop
 ./scripts/sdv-server.sh restart
 ./scripts/sdv-server.sh backup
+./scripts/sdv-server.sh admin
 ```
 
 ## 查看状态
@@ -41,6 +43,30 @@ Linux / macOS：
 - `sdv-steam-auth` 是否健康。
 - SMAPI 是否出现红色异常。
 - 玩家加入和退出是否正常记录。
+
+## Web 管理面板
+
+启动本地管理面板：
+
+```powershell
+.\setup.ps1 admin
+```
+
+Linux / macOS：
+
+```bash
+./scripts/sdv-server.sh admin
+```
+
+默认打开 `http://127.0.0.1:8088`。首次执行 `setup` 结束后，脚本会打印管理面板、noVNC、HTTP API、游戏直连 IP/端口等访问入口，并询问是否立即启动本地 Web 管理面板。
+
+首次启动面板会在 `.env` 中生成 `ADMIN_TOKEN`，终端也会打印一次。面板可以查看容器健康、加入地址、端口映射、资源占用、最近玩家活动和最近日志，也可以保存常用开服配置。
+
+执行 `smoke`、`start`、`restart`、`update` 后，脚本也会重新打印当前 `.env` 对应的访问入口和局域网 IPv4 候选地址。普通启动日志不会打印 `VNC_PASSWORD`、`API_KEY` 或 `ADMIN_TOKEN`。
+
+保存配置后通常需要重启服务端。面板里的重启按钮等价于停止并重新启动 Docker Compose，在线玩家会断开。地图、农场名、初始小屋和利润比例主要影响新建农场；已有存档不一定会被这些字段 retroactive 修改。
+
+管理面板默认只监听 `127.0.0.1`。公网部署时不要直接开放 `ADMIN_PORT`，除非已经通过防火墙、SSH 隧道或反向代理限制访问。
 
 ## Steam 授权
 
@@ -152,12 +178,26 @@ backups/saves-YYYYMMDD-HHMMSS.meta.txt
 
 - `5800/tcp`：Web VNC 管理入口。
 - `8080/tcp`：HTTP API。
+- `8088/tcp`：本地 Web 管理面板，默认只监听 `127.0.0.1`。
 - `24642/udp`：游戏连接端口。
 - `27015/udp`：查询端口。
 
 局域网直连需要 `data/settings/server-settings.json` 中的
 `Server.AllowIpConnections` 为 `true`。脚本新建配置时会默认启用。
-同一台 Windows 主机测试可以在游戏里输入 `127.0.0.1`；其他局域网设备输入服务器主机 IPv4。
+同一台 Windows 主机测试先在游戏里输入 `127.0.0.1`；其他局域网设备输入服务器主机
+WLAN / Ethernet IPv4。不要使用 VMware、VirtualBox、WSL、Hyper-V 或 Docker 网卡地址。
+
+查看当前加入信息和端口状态：
+
+```powershell
+.\setup.ps1 join-info
+```
+
+Linux / macOS：
+
+```bash
+./scripts/sdv-server.sh join-info
+```
 
 公网部署时，需要同时配置系统防火墙和云厂商安全组。
 
