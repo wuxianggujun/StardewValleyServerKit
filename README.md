@@ -70,15 +70,24 @@ Windows：
 .\setup.ps1 host-visibility
 ```
 
-如果 Steam 登录成功，但 `download` 在 manifest 下载阶段出现 `403 (Forbidden)`，
-或 SteamCMD 出现 `state is 0x402 after update job`，请改用：
+如果 `login` 出现 `The SteamClient instance must be connected`，或 Steam 登录成功后
+`download` 在 manifest 下载阶段出现 `403 (Forbidden)`，脚本会在下载阶段自动切换到
+SteamCMD 备用流程。也可以手动执行：
 
 ```powershell
 .\setup.ps1 steamcmd-download -Retries 5
 ```
 
-该备用流程会同时下载 Stardew Valley 本体和 Steamworks SDK。SDK 缺失时，
-JunimoServer 的 Steam SDR / GameServer 模式可能启动不完整。
+Linux / macOS：
+
+```bash
+RETRIES=5 ./scripts/sdv-server.sh steamcmd-download
+```
+
+该备用流程使用 Valve 官方 SteamCMD 下载链路，会同时下载 Stardew Valley 本体和
+Steamworks SDK。SDK 缺失时，JunimoServer 的 Steam SDR / GameServer 模式可能启动不完整。
+如果 SteamCMD 下载中途出现 `state is 0x402 after update job`，重新执行同一命令即可，
+已下载到 Docker volume 的部分文件会被复用。
 
 详见 [Steam 下载备用流程](docs/STEAM_DOWNLOAD_FALLBACK.md)。
 

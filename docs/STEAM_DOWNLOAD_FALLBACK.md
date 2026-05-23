@@ -1,17 +1,29 @@
 # Steam 下载备用流程
 
-> 适用场景：`.\setup.ps1 login` 已经成功，但 `.\setup.ps1 download`
-> 在下载 manifest 时失败，例如出现 `403 (Forbidden)`；或者 SteamCMD
-> 下载中途出现 `state is 0x402 after update job`。
+> 适用场景：`login` 出现 `The SteamClient instance must be connected`；
+> 或 `login` 已经成功，但 `download` 在下载 manifest 时失败，例如出现
+> `403 (Forbidden)`；或者 SteamCMD 下载中途出现
+> `state is 0x402 after update job`。
 
 ## 背景
 
 本项目默认使用 `steam-auth` 服务下载 Stardew Valley 正版游戏文件。
-少数网络、CDN 或 SteamKit 状态下，登录和 license 校验都能通过，
-但 manifest 下载会返回 403。
+少数网络、CDN 或 SteamKit 状态下，Steam 网页可以访问，但 SteamClient
+登录链路不一定已经可用，日志可能出现：
 
-这种情况不代表账号没有游戏，也不代表 Steam Guard 失败。可以改用
-SteamCMD 把 Linux 版游戏文件下载到同一个 Docker volume：
+```text
+The SteamClient instance must be connected.
+```
+
+也可能是登录和 license 校验都能通过，但 manifest 下载返回 403。
+
+SteamCMD 是 Valve 官方的 Steam Console Client，登录和下载走另一条客户端链路。
+因此在 `steam-auth` 的 SteamClient 连接阶段失败时，SteamCMD 仍然可能正常连接
+Steam Public，并进入 Steam Guard 验证或下载流程。
+
+这种情况不代表账号没有游戏，也不代表 Steam Guard 失败。当前脚本会在
+`download` 阶段失败后自动切换到 SteamCMD；也可以手动执行备用命令，把 Linux
+版游戏文件下载到同一个 Docker volume：
 
 ```text
 stardew-valley-server-kit_game-data

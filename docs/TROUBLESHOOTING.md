@@ -21,6 +21,7 @@
 - 密码错误。
 - Steam Guard 需要二次验证。
 - Steam 登录风控。
+- `steam-auth` 的 SteamClient 连接阶段失败。
 
 处理：
 
@@ -31,6 +32,38 @@
 ```powershell
 .\setup.ps1 login
 ```
+
+如果账号密码登录和二维码登录都出现：
+
+```text
+The SteamClient instance must be connected.
+```
+
+通常不是密码错误。它表示 `steam-auth` 还没有连上 SteamClient 链路，就执行了认证。
+Steam 网页能 `curl` 通也不代表这条客户端链路可用。当前脚本会在 `download`
+阶段失败后自动切换到 SteamCMD 备用流程；也可以手动执行：
+
+Windows：
+
+```powershell
+.\setup.ps1 steamcmd-download -Retries 5
+```
+
+Linux / macOS：
+
+```bash
+RETRIES=5 ./scripts/sdv-server.sh steamcmd-download
+```
+
+如果 SteamCMD 显示：
+
+```text
+This computer has not been authenticated for your account using Steam Guard.
+Steam Guard code:
+```
+
+说明 SteamCMD 已经连上 Steam Public，并且账号已被识别。此时在同一个服务器终端
+输入最新的 Steam Guard 验证码并回车。不要把验证码发到聊天、Issue 或截图里。
 
 ## Steam 下载 403 或 0x402
 

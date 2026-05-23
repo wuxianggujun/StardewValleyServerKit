@@ -34,6 +34,12 @@ compose() {
   (cd "$ROOT_DIR" && docker compose --env-file "$ENV_FILE" "$@")
 }
 
+show_steamcmd_fallback_hint() {
+  warn "steam-auth uses the SteamClient/SteamKit login path; SteamCMD uses Valve's official console client path."
+  warn "If SteamCMD asks for a Steam Guard code, type the newest code into this terminal and press Enter."
+  warn "Do not paste Steam passwords, Steam Guard codes, or tokens into chat, issues, or screenshots."
+}
+
 new_secret() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'
@@ -642,6 +648,7 @@ steamcmd_download() {
 
   step "Downloading game files with SteamCMD"
   printf 'WARN Steam Guard codes must be typed into this terminal. Do not paste codes into chat or issues.\n'
+  printf 'WARN If SteamCMD shows "Steam Guard code:", type the newest code here and press Enter.\n'
   prepare_steamcmd_volumes "$image" "$game_volume" "$steamcmd_volume"
 
   while (( attempt <= max_attempts )); do
@@ -670,6 +677,26 @@ steamcmd_download() {
   done
 
   die "SteamCMD download failed after $max_attempts attempts. See docs/STEAM_DOWNLOAD_FALLBACK.md."
+}
+
+run_steam_auth_login() {
+  if compose run --rm -it steam-auth login; then
+    return 0
+  fi
+
+  warn "steam-auth login failed. If the log says \"The SteamClient instance must be connected\", this is usually not a password error."
+  show_steamcmd_fallback_hint
+  return 1
+}
+
+run_steam_auth_download_or_fallback() {
+  if compose run --rm steam-auth download; then
+    return 0
+  fi
+
+  warn "steam-auth download failed. Falling back to SteamCMD."
+  show_steamcmd_fallback_hint
+  steamcmd_download
 }
 
 start_server() {
@@ -733,21 +760,21 @@ case "$ACTION" in
     step "Pulling Docker images"
     compose pull
     step "Running Steam login"
-    compose run --rm -it steam-auth login
+    run_steam_auth_login || true
     step "Downloading or updating game files"
-    compose run --rm steam-auth download
+    run_steam_auth_download_or_fallback
     smoke_test
     prompt_admin_panel_after_setup
     ;;
   login)
     ensure_env_file
     step "Running Steam login"
-    compose run --rm -it steam-auth login
+    run_steam_auth_login
     ;;
   download)
     ensure_env_file
     step "Downloading or updating game files"
-    compose run --rm steam-auth download
+    run_steam_auth_download_or_fallback
     ;;
   steamcmd-download)
     steamcmd_download

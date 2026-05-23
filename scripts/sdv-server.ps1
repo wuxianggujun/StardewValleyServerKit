@@ -69,6 +69,12 @@ function Invoke-Compose {
     }
 }
 
+function Show-SteamCmdFallbackHint {
+    Write-Warn "steam-auth uses the SteamClient/SteamKit login path; SteamCMD uses Valve's official console client path."
+    Write-Warn "If SteamCMD asks for a Steam Guard code, type the newest code into this terminal and press Enter."
+    Write-Warn "Do not paste Steam passwords, Steam Guard codes, or tokens into chat, issues, or screenshots."
+}
+
 function New-Secret {
     param([int]$Bytes = 32)
 
@@ -957,6 +963,7 @@ function Invoke-SteamCmdDownload {
 
     Write-Step "Downloading game files with SteamCMD"
     Write-Warn "Steam Guard codes must be typed into this terminal. Do not paste codes into chat or issues."
+    Write-Warn "If SteamCMD shows 'Steam Guard code:', type the newest code here and press Enter."
     Initialize-SteamCmdVolumes $image $gameVolume $steamCmdVolume
 
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
@@ -1018,6 +1025,28 @@ function Invoke-SteamCmdDownload {
     }
 
     Write-ErrorExit "SteamCMD download failed after $maxAttempts attempts. See docs\STEAM_DOWNLOAD_FALLBACK.md."
+}
+
+function Invoke-SteamAuthLogin {
+    try {
+        Invoke-Compose run --rm -it steam-auth login
+    }
+    catch {
+        Write-Warn "steam-auth login failed. If the log says 'The SteamClient instance must be connected', this is usually not a password error."
+        Show-SteamCmdFallbackHint
+        throw
+    }
+}
+
+function Invoke-SteamAuthDownloadOrFallback {
+    try {
+        Invoke-Compose run --rm steam-auth download
+    }
+    catch {
+        Write-Warn "steam-auth download failed. Falling back to SteamCMD."
+        Show-SteamCmdFallbackHint
+        Invoke-SteamCmdDownload
+    }
 }
 
 function Ensure-EnvFile {
@@ -1190,12 +1219,17 @@ switch ($Action) {
     "login" {
         Ensure-EnvFile
         Write-Step "Running Steam login"
-        Invoke-Compose run --rm -it steam-auth login
+        try {
+            Invoke-SteamAuthLogin
+        }
+        catch {
+            Write-ErrorExit "steam-auth login failed. Run '.\setup.ps1 steamcmd-download -Retries $Retries' if you want to use the fallback directly."
+        }
     }
     "download" {
         Ensure-EnvFile
         Write-Step "Downloading or updating game files"
-        Invoke-Compose run --rm steam-auth download
+        Invoke-SteamAuthDownloadOrFallback
     }
     "steamcmd-download" {
         Invoke-SteamCmdDownload
@@ -1211,10 +1245,15 @@ switch ($Action) {
         Invoke-Compose pull
 
         Write-Step "Running Steam login"
-        Invoke-Compose run --rm -it steam-auth login
+        try {
+            Invoke-SteamAuthLogin
+        }
+        catch {
+            Write-Warn "Continuing to download; if steam-auth is not logged in, the script will fall back to SteamCMD."
+        }
 
         Write-Step "Downloading or updating game files"
-        Invoke-Compose run --rm steam-auth download
+        Invoke-SteamAuthDownloadOrFallback
 
         if (-not $NoStart) {
             Invoke-SmokeTest
