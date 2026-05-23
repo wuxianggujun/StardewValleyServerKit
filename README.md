@@ -21,7 +21,7 @@
 ### Windows
 
 ```powershell
-cd C:\Users\wuxianggujun\CodeSpace\StardewValleyServerKit
+cd <repo-root>
 .\setup.ps1 setup
 ```
 
