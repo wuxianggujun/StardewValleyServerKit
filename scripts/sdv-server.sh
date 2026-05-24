@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT_DIR/.env"
 ENV_EXAMPLE_FILE="$ROOT_DIR/.env.example"
 BACKUP_DIR="$ROOT_DIR/backups"
+SYSTEMD_SERVICE_NAME="sdv-admin.service"
 STABLE_VNC_PARAMS='-AcceptPointerEvents=1 -AcceptKeyEvents=1 -AcceptSetDesktopSize=1 -AlwaysShared=1 -DisconnectClients=0'
 
 step() {
@@ -46,6 +47,17 @@ new_secret() {
   else
     date +%s%N | sha256sum | awk '{print $1}'
   fi
+}
+
+require_linux_systemd() {
+  [[ "$(uname -s)" == "Linux" ]] || die "systemd admin service is only supported on Linux."
+  command -v systemctl >/dev/null 2>&1 || die "Command not found: systemctl. Use './scripts/sdv-server.sh admin' for a foreground admin panel."
+  [[ -d /run/systemd/system ]] || die "systemd is not running. Use './scripts/sdv-server.sh admin' for a foreground admin panel."
+}
+
+require_linux_systemd_root() {
+  require_linux_systemd
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "Run this command as root, for example: sudo ./scripts/sdv-server.sh admin-service-install"
 }
 
 get_env_value() {
@@ -101,14 +113,7 @@ JSON
 }
 
 ensure_env_file() {
-  if [[ ! -f "$ENV_FILE" ]]; then
-    cp "$ENV_EXAMPLE_FILE" "$ENV_FILE"
-    ok "Created .env from .env.example"
-  fi
-
-  [[ -n "$(get_env_value VNC_PASSWORD)" ]] || set_env_value VNC_PASSWORD "$(new_secret)"
-  [[ -n "$(get_env_value API_KEY)" ]] || set_env_value API_KEY "$(new_secret)"
-  [[ -n "$(get_env_value ADMIN_TOKEN)" ]] || set_env_value ADMIN_TOKEN "$(new_secret)"
+  ensure_admin_env_file
 
   if [[ -z "$(get_env_value STEAM_USERNAME)" ]]; then
     read -r -p "Steam username (must own Stardew Valley; leave blank to edit .env later): " steam_username
@@ -121,6 +126,17 @@ ensure_env_file() {
     printf '\n'
     [[ -z "$steam_password" ]] || set_env_value STEAM_PASSWORD "$steam_password"
   fi
+}
+
+ensure_admin_env_file() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    cp "$ENV_EXAMPLE_FILE" "$ENV_FILE"
+    ok "Created .env from .env.example"
+  fi
+
+  [[ -n "$(get_env_value VNC_PASSWORD)" ]] || set_env_value VNC_PASSWORD "$(new_secret)"
+  [[ -n "$(get_env_value API_KEY)" ]] || set_env_value API_KEY "$(new_secret)"
+  [[ -n "$(get_env_value ADMIN_TOKEN)" ]] || set_env_value ADMIN_TOKEN "$(new_secret)"
 
   mkdir -p "$ROOT_DIR/data/settings" "$ROOT_DIR/data/mods"
   initialize_server_settings
@@ -320,6 +336,109 @@ admin_panel() {
   warn "Keep this terminal open while using the admin panel."
   warn "ADMIN_TOKEN is printed only in this local terminal and is also stored in .env."
   node "$ROOT_DIR/scripts/admin-panel.js"
+}
+
+admin_token_rotate() {
+  ensure_admin_env_file
+
+  local token
+  token="$(new_secret)"
+  set_env_value ADMIN_TOKEN "$token"
+
+  step "Rotated admin token"
+  printf 'ADMIN_TOKEN: %s\n' "$token"
+  warn "Existing browser sessions must log in again."
+
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$SYSTEMD_SERVICE_NAME" >/dev/null 2>&1; then
+    warn "If the admin panel is running as a systemd service, restart it with: systemctl restart $SYSTEMD_SERVICE_NAME"
+  fi
+}
+
+admin_service_file() {
+  cat <<EOF
+[Unit]
+Description=Stardew Valley Server Kit Admin Panel
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=$ROOT_DIR
+Environment=SDV_ADMIN_ROOT=$ROOT_DIR
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/env node $ROOT_DIR/scripts/admin-panel.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+admin_service_install() {
+  require_linux_systemd_root
+  ensure_admin_env_file
+  command -v node >/dev/null 2>&1 || die "Command not found: node. Please install Node.js first."
+
+  set_env_value ADMIN_HOST "127.0.0.1"
+  set_env_value ADMIN_PORT "$(env_or_default ADMIN_PORT 8088)"
+
+  step "Installing systemd admin service"
+  admin_service_file >"/etc/systemd/system/$SYSTEMD_SERVICE_NAME"
+  systemctl daemon-reload
+  systemctl enable --now "$SYSTEMD_SERVICE_NAME"
+
+  sleep 2
+  admin_service_status
+}
+
+admin_service_start() {
+  require_linux_systemd_root
+  ensure_admin_env_file
+  systemctl start "$SYSTEMD_SERVICE_NAME"
+  sleep 1
+  admin_service_status
+}
+
+admin_service_stop() {
+  require_linux_systemd_root
+  systemctl stop "$SYSTEMD_SERVICE_NAME"
+  ok "Stopped $SYSTEMD_SERVICE_NAME"
+}
+
+admin_service_restart() {
+  require_linux_systemd_root
+  ensure_admin_env_file
+  systemctl restart "$SYSTEMD_SERVICE_NAME"
+  sleep 1
+  admin_service_status
+}
+
+admin_service_status() {
+  require_linux_systemd
+  local admin_port
+  admin_port="$(env_or_default ADMIN_PORT 8088)"
+
+  step "Admin service status"
+  systemctl status "$SYSTEMD_SERVICE_NAME" --no-pager || true
+
+  step "Local admin probe"
+  if test_tcp_port 127.0.0.1 "$admin_port"; then
+    ok "Admin panel is listening on 127.0.0.1:$admin_port"
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsS "http://127.0.0.1:$admin_port/" | head -5 || true
+    fi
+  else
+    warn "Admin panel is not reachable on 127.0.0.1:$admin_port"
+    warn "Read logs with: journalctl -u $SYSTEMD_SERVICE_NAME -n 100 --no-pager"
+  fi
+
+  warn "For 1Panel reverse proxy, proxy to http://127.0.0.1:$admin_port"
+}
+
+admin_service_logs() {
+  require_linux_systemd
+  journalctl -u "$SYSTEMD_SERVICE_NAME" -n 120 --no-pager
 }
 
 smoke_test() {
@@ -723,8 +842,14 @@ start_server() {
   fi
 }
 
-step "Checking Docker"
-require_docker
+case "$ACTION" in
+  admin|admin-public|admin-token-rotate|admin-service-install|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
+    ;;
+  *)
+    step "Checking Docker"
+    require_docker
+    ;;
+esac
 
 case "$ACTION" in
   doctor)
@@ -860,7 +985,28 @@ case "$ACTION" in
   admin-public)
     admin_panel 1
     ;;
+  admin-token-rotate)
+    admin_token_rotate
+    ;;
+  admin-service-install)
+    admin_service_install
+    ;;
+  admin-service-start)
+    admin_service_start
+    ;;
+  admin-service-stop)
+    admin_service_stop
+    ;;
+  admin-service-restart)
+    admin_service_restart
+    ;;
+  admin-service-status)
+    admin_service_status
+    ;;
+  admin-service-logs)
+    admin_service_logs
+    ;;
   *)
-    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/smoke/setup/start/stop/restart/logs/status/update/backup/join-info/admin/admin-public/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
+    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/smoke/setup/start/stop/restart/logs/status/update/backup/join-info/admin/admin-public/admin-token-rotate/admin-service-install/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
     ;;
 esac

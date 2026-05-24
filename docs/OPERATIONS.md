@@ -14,7 +14,7 @@ Windows：
 .\setup.ps1 restart
 .\setup.ps1 backup
 .\setup.ps1 admin
-.\setup.ps1 admin-public
+.\setup.ps1 admin-token-rotate
 ```
 
 Linux / macOS：
@@ -29,7 +29,10 @@ Linux / macOS：
 ./scripts/sdv-server.sh restart
 ./scripts/sdv-server.sh backup
 ./scripts/sdv-server.sh admin
-./scripts/sdv-server.sh admin-public
+./scripts/sdv-server.sh admin-service-install
+./scripts/sdv-server.sh admin-service-status
+./scripts/sdv-server.sh admin-service-logs
+./scripts/sdv-server.sh admin-token-rotate
 ```
 
 ## 查看状态
@@ -60,18 +63,33 @@ Linux / macOS：
 ./scripts/sdv-server.sh admin
 ```
 
-默认监听 `0.0.0.0:8088`，本机可打开 `http://127.0.0.1:8088`，服务器部署时可打开
-`http://服务器公网IP:8088`。首次执行 `setup` 结束后，脚本会打印管理面板、noVNC、
+`admin` 是前台临时模式，终端关闭后面板会停止。Linux 服务器部署建议改用 systemd 常驻：
+
+```bash
+sudo ./scripts/sdv-server.sh admin-service-install
+sudo ./scripts/sdv-server.sh admin-service-status
+sudo ./scripts/sdv-server.sh admin-service-logs
+```
+
+systemd 模式默认监听 `127.0.0.1:8088`。1Panel 反向代理站点应转发到
+`http://127.0.0.1:8088`；如果站点启用 HTTPS，证书配置在 1Panel 网站层，反代目标仍然
+保持 HTTP。首次执行 `setup` 结束后，脚本会打印管理面板、noVNC、
 HTTP API、游戏直连 IP/端口等访问入口，并询问是否立即启动 Web 管理面板。
 
 首次启动面板会在 `.env` 中生成 `ADMIN_TOKEN`，终端也会打印一次。面板可以查看容器健康、加入地址、端口映射、资源占用、最近玩家活动和最近日志，也可以保存常用开服配置。
+如果令牌已经暴露，执行：
+
+```bash
+./scripts/sdv-server.sh admin-token-rotate
+sudo ./scripts/sdv-server.sh admin-service-restart
+```
 
 执行 `smoke`、`start`、`restart`、`update` 后，脚本也会重新打印当前 `.env` 对应的访问入口和局域网 IPv4 候选地址。普通启动日志不会打印 `VNC_PASSWORD`、`API_KEY` 或 `ADMIN_TOKEN`。
 
 保存配置后通常需要重启服务端。面板里的重启按钮等价于停止并重新启动 Docker Compose，在线玩家会断开。地图、农场名、初始小屋和利润比例主要影响新建农场；已有存档不一定会被这些字段 retroactive 修改。
 
-公网部署时需要在 1Panel 防火墙和云安全组中限制 `ADMIN_PORT` 的来源 IP。
-建议只允许自己的公网 IP 访问，不要对全网无限制开放。
+公网部署优先只开放 80/443 给 1Panel 站点。除非你明确需要直连管理端口，否则不要把
+`ADMIN_PORT` 暴露到公网。
 
 ## Steam 授权
 
@@ -183,7 +201,7 @@ backups/saves-YYYYMMDD-HHMMSS.meta.txt
 
 - `5800/tcp`：Web VNC 管理入口。
 - `8080/tcp`：HTTP API。
-- `8088/tcp`：Web 管理面板，公网部署时建议只允许可信 IP 访问。
+- `8088/tcp`：Web 管理面板。推荐只监听 `127.0.0.1`，由 1Panel 通过 80/443 反向代理访问。
 - `24642/udp`：游戏连接端口。
 - `27015/udp`：查询端口。
 
@@ -204,7 +222,8 @@ Linux / macOS：
 ./scripts/sdv-server.sh join-info
 ```
 
-公网部署时，需要同时配置系统防火墙和云厂商安全组。
+公网玩家直连游戏时，需要同时在系统防火墙和云厂商安全组放行 `24642/udp` 与
+`27015/udp`。Web 管理面板建议只通过 1Panel 站点访问，不直接开放 `8088/tcp`。
 
 ## Discord Bot
 

@@ -63,7 +63,7 @@ Windows：
 .\setup.ps1 backup
 .\setup.ps1 join-info
 .\setup.ps1 admin
-.\setup.ps1 admin-public
+.\setup.ps1 admin-token-rotate
 .\setup.ps1 vnc-check
 .\setup.ps1 vnc-fix
 .\setup.ps1 vnc-resize
@@ -110,7 +110,10 @@ Linux / macOS：
 ./scripts/sdv-server.sh backup
 ./scripts/sdv-server.sh join-info
 ./scripts/sdv-server.sh admin
-./scripts/sdv-server.sh admin-public
+./scripts/sdv-server.sh admin-service-install
+./scripts/sdv-server.sh admin-service-status
+./scripts/sdv-server.sh admin-service-logs
+./scripts/sdv-server.sh admin-token-rotate
 ./scripts/sdv-server.sh vnc-check
 ./scripts/sdv-server.sh vnc-fix
 ./scripts/sdv-server.sh vnc-resize
@@ -122,7 +125,7 @@ Linux / macOS：
 
 - Web noVNC：`http://localhost:5800`
 - HTTP API：`http://localhost:8080`
-- Web 管理面板：`http://服务器公网IP:8088`
+- Web 管理面板：本机 `http://127.0.0.1:8088`，公网服务器建议通过 1Panel 域名反代访问
 - 游戏 UDP 端口：`24642`
 - 查询 UDP 端口：`27015`
 
@@ -162,15 +165,32 @@ Linux / macOS：
 ./scripts/sdv-server.sh admin
 ```
 
-默认地址是 `http://0.0.0.0:8088`。服务器部署时可用 `http://服务器公网IP:8088`
-访问。首次启动会在 `.env` 中生成 `ADMIN_TOKEN`，终端也会打印一次。管理面板可以查看
+`admin` 是前台临时模式，SSH 断开或终端关闭后面板也会停止。公网服务器建议使用
+systemd 常驻模式：
+
+```bash
+sudo ./scripts/sdv-server.sh admin-service-install
+sudo ./scripts/sdv-server.sh admin-service-status
+sudo ./scripts/sdv-server.sh admin-service-logs
+```
+
+systemd 模式默认监听 `127.0.0.1:8088`，再在 1Panel 里把
+`sdv.example.com` 反向代理到 `http://127.0.0.1:8088`。HTTPS 证书配置在
+1Panel 网站层，反代目标仍然使用 HTTP。首次启动会在 `.env` 中生成
+`ADMIN_TOKEN`，终端或 systemd 日志也会打印一次。管理面板可以查看
 容器健康状态、加入地址、最近玩家活动、最近日志，并保存农场地图、人数、小屋数量、
 端口、进服密码、管理员 Steam64 ID 等配置。
 
 首次执行 `setup` 结束后，脚本会询问是否立即启动 Web 管理面板。选择 `y`
 会保持当前终端用于运行面板；跳过后也可以随时执行上面的 `admin` 命令再打开。
+如果 `ADMIN_TOKEN` 已经泄露，执行：
 
-保存配置不会热更新游戏进程。端口、人数、IP 直连等配置需要重启服务端后生效；农场地图、农场名、初始小屋数量、利润比例通常只对新建农场生效。公网服务器请在 1Panel 防火墙和云安全组中限制 `ADMIN_PORT` 的来源 IP。
+```bash
+./scripts/sdv-server.sh admin-token-rotate
+sudo ./scripts/sdv-server.sh admin-service-restart
+```
+
+保存配置不会热更新游戏进程。端口、人数、IP 直连等配置需要重启服务端后生效；农场地图、农场名、初始小屋数量、利润比例通常只对新建农场生效。公网服务器优先只开放 80/443 给 1Panel；除非你明确需要直连管理端口，否则不要把 `ADMIN_PORT` 暴露到公网。
 
 也可以使用日志中的 invite code 加入；但如果 Steam / Galaxy P2P 不稳定，优先使用局域网 IP。
 邀请码和 IP 直连是两个入口：邀请码填邀请码入口，IP 地址填 LAN/IP 入口，不要混用。
@@ -227,6 +247,8 @@ RealVNC 如果能看到画面但不能点击，先确认 Viewer 没有开启 `Vi
 - 日志中没有持续刷出的 `Callback dispatcher is not initialized`
 
 如果部署在公网服务器，需要在防火墙和云厂商安全组中放行对应端口。
+Web 管理面板建议通过 1Panel 站点反向代理访问，不直接开放 `8088/tcp`；
+公网玩家直连游戏时重点放行 `24642/udp` 和 `27015/udp`。
 
 ## 配置说明
 

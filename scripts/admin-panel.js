@@ -1205,7 +1205,7 @@ const PAGE = String.raw`<!doctype html>
 async function main() {
   await ensureAdminFiles();
   const env = await readEnv();
-  const host = env.ADMIN_HOST || process.env.ADMIN_HOST || "0.0.0.0";
+  const host = env.ADMIN_HOST || process.env.ADMIN_HOST || "127.0.0.1";
   const port = Number.parseInt(env.ADMIN_PORT || process.env.ADMIN_PORT || "8088", 10);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error("ADMIN_PORT must be between 1 and 65535.");
@@ -1237,7 +1237,11 @@ async function main() {
       console.log(`Admin panel: http://${host}:${port}`);
     }
     console.log(`ADMIN_TOKEN: ${freshEnv.ADMIN_TOKEN}`);
-    console.log("Keep this terminal open while using the admin panel.");
+    if (process.env.INVOCATION_ID || process.env.JOURNAL_STREAM) {
+      console.log("Admin panel is running under systemd.");
+    } else {
+      console.log("Keep this terminal open while using the admin panel.");
+    }
   });
 }
 

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup", "start", "stop", "restart", "logs", "status", "update", "backup", "join-info", "admin", "admin-public", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
+    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup", "start", "stop", "restart", "logs", "status", "update", "backup", "join-info", "admin", "admin-public", "admin-token-rotate", "admin-service-install", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
     [string]$Action = "setup",
 
     [string]$SteamUsername,
@@ -592,6 +592,21 @@ function Invoke-AdminPanel {
     & node $adminScript
 }
 
+function Invoke-AdminTokenRotate {
+    Ensure-AdminEnvFile
+
+    $token = New-Secret 32
+    Set-EnvValue "ADMIN_TOKEN" $token
+
+    Write-Step "Rotated admin token"
+    Write-Host "ADMIN_TOKEN: $token"
+    Write-Warn "Existing browser sessions must log in again."
+}
+
+function Invoke-AdminSystemdUnsupported {
+    Write-ErrorExit "Admin systemd service commands are only supported by scripts/sdv-server.sh on Linux. On Windows, use '.\setup.ps1 admin' for a foreground panel."
+}
+
 function Show-NoVncUrl {
     Ensure-EnvFile
 
@@ -1066,24 +1081,9 @@ function Invoke-SteamAuthDownloadOrFallback {
 }
 
 function Ensure-EnvFile {
-    if (-not (Test-Path $EnvFile)) {
-        Copy-Item -LiteralPath $EnvExampleFile -Destination $EnvFile
-        Write-Ok "Created .env from .env.example"
-    }
+    Ensure-AdminEnvFile
 
     Import-SteamEnvIfAvailable
-
-    if (-not (Get-EnvValue "VNC_PASSWORD")) {
-        Set-EnvValue "VNC_PASSWORD" (New-Secret 18)
-    }
-
-    if (-not (Get-EnvValue "API_KEY")) {
-        Set-EnvValue "API_KEY" (New-Secret 32)
-    }
-
-    if (-not (Get-EnvValue "ADMIN_TOKEN")) {
-        Set-EnvValue "ADMIN_TOKEN" (New-Secret 32)
-    }
 
     if ($ServerPassword) {
         Set-EnvValue "SERVER_PASSWORD" $ServerPassword
@@ -1108,6 +1108,25 @@ function Ensure-EnvFile {
         if ($inputPassword) {
             Set-EnvValue "STEAM_PASSWORD" $inputPassword
         }
+    }
+}
+
+function Ensure-AdminEnvFile {
+    if (-not (Test-Path $EnvFile)) {
+        Copy-Item -LiteralPath $EnvExampleFile -Destination $EnvFile
+        Write-Ok "Created .env from .env.example"
+    }
+
+    if (-not (Get-EnvValue "VNC_PASSWORD")) {
+        Set-EnvValue "VNC_PASSWORD" (New-Secret 18)
+    }
+
+    if (-not (Get-EnvValue "API_KEY")) {
+        Set-EnvValue "API_KEY" (New-Secret 32)
+    }
+
+    if (-not (Get-EnvValue "ADMIN_TOKEN")) {
+        Set-EnvValue "ADMIN_TOKEN" (New-Secret 32)
     }
 
     New-Item -ItemType Directory -Force -Path (Join-Path $RootDir "data\settings"), (Join-Path $RootDir "data\mods") | Out-Null
@@ -1189,8 +1208,16 @@ function Get-UpArgs {
     return @("up", "-d")
 }
 
-Write-Step "Checking Docker"
-Assert-Docker
+$dockerRequiredActions = @(
+    "doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup",
+    "start", "stop", "restart", "logs", "status", "update", "backup", "join-info",
+    "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility"
+)
+
+if ($dockerRequiredActions -contains $Action) {
+    Write-Step "Checking Docker"
+    Assert-Docker
+}
 
 switch ($Action) {
     "doctor" {
@@ -1328,6 +1355,27 @@ switch ($Action) {
     }
     "admin-public" {
         Invoke-AdminPanel -Public
+    }
+    "admin-token-rotate" {
+        Invoke-AdminTokenRotate
+    }
+    "admin-service-install" {
+        Invoke-AdminSystemdUnsupported
+    }
+    "admin-service-start" {
+        Invoke-AdminSystemdUnsupported
+    }
+    "admin-service-stop" {
+        Invoke-AdminSystemdUnsupported
+    }
+    "admin-service-restart" {
+        Invoke-AdminSystemdUnsupported
+    }
+    "admin-service-status" {
+        Invoke-AdminSystemdUnsupported
+    }
+    "admin-service-logs" {
+        Invoke-AdminSystemdUnsupported
     }
     "vnc-url" {
         Show-NoVncUrl
