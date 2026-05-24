@@ -147,14 +147,18 @@ show_access_info() {
   admin_host="$(env_or_default ADMIN_HOST 127.0.0.1)"
   admin_port="$(env_or_default ADMIN_PORT 8088)"
   admin_url_host="$admin_host"
-  [[ "$admin_url_host" == "0.0.0.0" ]] && admin_url_host="127.0.0.1"
   vnc_port="$(env_or_default VNC_PORT 5800)"
   api_port="$(env_or_default API_PORT 8080)"
   game_port="$(env_or_default GAME_PORT 24642)"
   query_port="$(env_or_default QUERY_PORT 27015)"
 
   step "Access URLs"
-  printf 'Admin panel: http://%s:%s\n' "$admin_url_host" "$admin_port"
+  if [[ "$admin_host" == "0.0.0.0" ]]; then
+    printf 'Admin panel (local): http://127.0.0.1:%s\n' "$admin_port"
+    printf 'Admin panel (public): http://<server-public-ip>:%s\n' "$admin_port"
+  else
+    printf 'Admin panel: http://%s:%s\n' "$admin_url_host" "$admin_port"
+  fi
   printf 'noVNC:       http://127.0.0.1:%s\n' "$vnc_port"
   printf 'HTTP API:    http://127.0.0.1:%s\n' "$api_port"
   printf 'Game IP:     127.0.0.1\n'
@@ -169,7 +173,7 @@ show_access_info() {
   warn "Players on another LAN device should use the real Ethernet/Wi-Fi IPv4 address."
 
   if [[ "$admin_host" == "0.0.0.0" ]]; then
-    warn "ADMIN_HOST=0.0.0.0 listens on all interfaces. Use a firewall or reverse proxy before exposing it."
+    warn "ADMIN_HOST=0.0.0.0 listens on all interfaces. Restrict TCP access with firewall rules."
   fi
   warn "VNC passwords, API keys, and admin tokens are stored in .env and are not printed here."
 }
@@ -292,17 +296,29 @@ join_info() {
 }
 
 admin_panel() {
+  local public_mode="${1:-0}"
   command -v node >/dev/null 2>&1 || die "Command not found: node. Please install Node.js first."
 
   local admin_host admin_port
+  if [[ "$public_mode" == "1" ]]; then
+    set_env_value ADMIN_HOST "0.0.0.0"
+    warn "ADMIN_HOST has been set to 0.0.0.0 for server access."
+  fi
+
   admin_host="$(env_or_default ADMIN_HOST 127.0.0.1)"
   admin_port="$(env_or_default ADMIN_PORT 8088)"
 
-  step "Starting local admin panel"
-  printf 'Open: http://%s:%s\n' "$admin_host" "$admin_port"
+  step "Starting admin panel"
+  if [[ "$admin_host" == "0.0.0.0" ]]; then
+    printf 'Open (local): http://127.0.0.1:%s\n' "$admin_port"
+    printf 'Open (public): http://<server-public-ip>:%s\n' "$admin_port"
+    warn "Allow TCP $admin_port in both 1Panel firewall and cloud security group."
+    warn "Restrict TCP $admin_port to your own public IP whenever possible."
+  else
+    printf 'Open: http://%s:%s\n' "$admin_host" "$admin_port"
+  fi
   warn "Keep this terminal open while using the admin panel."
   warn "ADMIN_TOKEN is printed only in this local terminal and is also stored in .env."
-  warn "Do not expose ADMIN_HOST=0.0.0.0 on a public server without a trusted firewall or reverse proxy."
   node "$ROOT_DIR/scripts/admin-panel.js"
 }
 
@@ -841,7 +857,10 @@ case "$ACTION" in
   admin)
     admin_panel
     ;;
+  admin-public)
+    admin_panel 1
+    ;;
   *)
-    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/smoke/setup/start/stop/restart/logs/status/update/backup/join-info/admin/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
+    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/smoke/setup/start/stop/restart/logs/status/update/backup/join-info/admin/admin-public/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
     ;;
 esac

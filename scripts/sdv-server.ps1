@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup", "start", "stop", "restart", "logs", "status", "update", "backup", "join-info", "admin", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
+    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup", "start", "stop", "restart", "logs", "status", "update", "backup", "join-info", "admin", "admin-public", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
     [string]$Action = "setup",
 
     [string]$SteamUsername,
@@ -326,13 +326,15 @@ function Show-AccessInfo {
     $apiPort = Get-EnvOrDefault "API_PORT" "8080"
     $gamePort = Get-EnvOrDefault "GAME_PORT" "24642"
     $queryPort = Get-EnvOrDefault "QUERY_PORT" "27015"
-    $adminUrlHost = $adminHost
-    if ($adminUrlHost -eq "0.0.0.0") {
-        $adminUrlHost = "127.0.0.1"
-    }
 
     Write-Step "Access URLs"
-    Write-Host "Admin panel: http://${adminUrlHost}:$adminPort"
+    if ($adminHost -eq "0.0.0.0") {
+        Write-Host "Admin panel (local): http://127.0.0.1:$adminPort"
+        Write-Host "Admin panel (public): http://<server-public-ip>:$adminPort"
+    }
+    else {
+        Write-Host "Admin panel: http://${adminHost}:$adminPort"
+    }
     Write-Host "noVNC:       http://127.0.0.1:$vncPort"
     Write-Host "HTTP API:    http://127.0.0.1:$apiPort"
     Write-Host "Game IP:     127.0.0.1"
@@ -353,7 +355,7 @@ function Show-AccessInfo {
     }
 
     if ($adminHost -eq "0.0.0.0") {
-        Write-Warn "ADMIN_HOST=0.0.0.0 listens on all interfaces. Use a firewall or reverse proxy before exposing it."
+        Write-Warn "ADMIN_HOST=0.0.0.0 listens on all interfaces. Restrict TCP access with firewall rules."
     }
     Write-Warn "VNC passwords, API keys, and admin tokens are stored in .env and are not printed here."
 }
@@ -558,6 +560,8 @@ function Invoke-NativeVncProxy {
 }
 
 function Invoke-AdminPanel {
+    param([switch]$Public)
+
     Assert-Command "node"
 
     $adminScript = Join-Path $PSScriptRoot "admin-panel.js"
@@ -565,14 +569,26 @@ function Invoke-AdminPanel {
         Write-ErrorExit "Admin panel script not found: $adminScript"
     }
 
+    if ($Public) {
+        Set-EnvValue "ADMIN_HOST" "0.0.0.0"
+        Write-Warn "ADMIN_HOST has been set to 0.0.0.0 for server access."
+    }
+
     $adminHost = Get-EnvOrDefault "ADMIN_HOST" "127.0.0.1"
     $adminPort = Get-EnvOrDefault "ADMIN_PORT" "8088"
 
-    Write-Step "Starting local admin panel"
-    Write-Host "Open: http://${adminHost}:$adminPort"
+    Write-Step "Starting admin panel"
+    if ($adminHost -eq "0.0.0.0") {
+        Write-Host "Open (local): http://127.0.0.1:$adminPort"
+        Write-Host "Open (public): http://<server-public-ip>:$adminPort"
+        Write-Warn "Allow TCP $adminPort in both 1Panel firewall and cloud security group."
+        Write-Warn "Restrict TCP $adminPort to your own public IP whenever possible."
+    }
+    else {
+        Write-Host "Open: http://${adminHost}:$adminPort"
+    }
     Write-Warn "Keep this terminal open while using the admin panel."
     Write-Warn "ADMIN_TOKEN is printed only in this local terminal and is also stored in .env."
-    Write-Warn "Do not expose ADMIN_HOST=0.0.0.0 on a public server without a trusted firewall or reverse proxy."
     & node $adminScript
 }
 
@@ -1309,6 +1325,9 @@ switch ($Action) {
     }
     "admin" {
         Invoke-AdminPanel
+    }
+    "admin-public" {
+        Invoke-AdminPanel -Public
     }
     "vnc-url" {
         Show-NoVncUrl

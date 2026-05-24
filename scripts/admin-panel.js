@@ -828,7 +828,7 @@ const PAGE = String.raw`<!doctype html>
     <div class="topbar">
       <div class="brand">
         <h1>Stardew Valley Server Kit Admin</h1>
-        <p>本地管理面板，配置保存后通常需要重启服务端。</p>
+        <p>管理面板，配置保存后通常需要重启服务端。</p>
       </div>
       <div class="toolbar">
         <button id="refreshBtn" type="button">刷新</button>
@@ -1205,7 +1205,7 @@ const PAGE = String.raw`<!doctype html>
 async function main() {
   await ensureAdminFiles();
   const env = await readEnv();
-  const host = env.ADMIN_HOST || process.env.ADMIN_HOST || "127.0.0.1";
+  const host = env.ADMIN_HOST || process.env.ADMIN_HOST || "0.0.0.0";
   const port = Number.parseInt(env.ADMIN_PORT || process.env.ADMIN_PORT || "8088", 10);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error("ADMIN_PORT must be between 1 and 65535.");
@@ -1230,7 +1230,12 @@ async function main() {
 
   server.listen(port, host, async () => {
     const freshEnv = await readEnv();
-    console.log(`Admin panel: http://${host}:${port}`);
+    if (host === "0.0.0.0") {
+      console.log(`Admin panel (local): http://127.0.0.1:${port}`);
+      console.log(`Admin panel (public): http://<server-public-ip>:${port}`);
+    } else {
+      console.log(`Admin panel: http://${host}:${port}`);
+    }
     console.log(`ADMIN_TOKEN: ${freshEnv.ADMIN_TOKEN}`);
     console.log("Keep this terminal open while using the admin panel.");
   });
