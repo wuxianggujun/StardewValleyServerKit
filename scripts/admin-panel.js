@@ -619,24 +619,18 @@ function readSaveFarmType(xml) {
 function cabinPlacementPolicy(farmType) {
   if (farmType === STANDARD_FARM_TYPE) {
     return {
-      relocateEdgeCabins: true,
+      useSafeAreaForNewCabins: true,
       area: STANDARD_FARM_CABIN_AREA,
     };
   }
   return {
-    relocateEdgeCabins: false,
+    useSafeAreaForNewCabins: false,
     area: null,
   };
 }
 
-function cabinNeedsRelocation(rect, policy) {
-  if (!policy.relocateEdgeCabins) return false;
-  const area = policy.area;
-  return !rect || rect.x < area.minX || rect.y < area.minY;
-}
-
 function safeCabinPlacementOrigin(sourceRect, policy) {
-  if (!policy.relocateEdgeCabins) {
+  if (!policy.useSafeAreaForNewCabins) {
     return { x: sourceRect.x, y: sourceRect.y };
   }
   const area = policy.area;
@@ -684,42 +678,6 @@ function buildingReservedRect(building) {
   const rect = readBuildingRect(building.text || building);
   if (!rect) return null;
   return isCabinBuildingBlock(building.text || building) ? cabinReservedRect(rect) : rect;
-}
-
-function moveCabinBlock(sourceBlock, placement) {
-  let next = replaceXmlTagValue(sourceBlock, "tileX", placement.x);
-  next = replaceXmlTagValue(next, "tileY", placement.y);
-  return next;
-}
-
-function relocateUnsafeCabins(xml, buildings, policy) {
-  const replacements = [];
-  const occupiedRects = buildings
-    .filter((building) => !isCabinBuildingBlock(building.text))
-    .map((building) => buildingReservedRect(building))
-    .filter(Boolean);
-  let movedCabins = 0;
-
-  for (const cabin of buildings.filter((building) => isCabinBuildingBlock(building.text))) {
-    const rect = readBuildingRect(cabin.text);
-    if (!cabinNeedsRelocation(rect, policy)) {
-      occupiedRects.push(cabinReservedRect(rect));
-      continue;
-    }
-
-    const placement = findCabinPlacement(cabin.text, occupiedRects, policy);
-    const next = moveCabinBlock(cabin.text, placement);
-    if (next !== cabin.text) {
-      replacements.push({ start: cabin.start, end: cabin.end, text: next });
-      movedCabins += 1;
-    }
-    occupiedRects.push(cabinReservedRect(placement));
-  }
-
-  return {
-    xml: replacements.length ? applyTextReplacements(xml, replacements) : xml,
-    movedCabins,
-  };
 }
 
 function findNestedXmlBlocks(xml, tagName) {
@@ -845,10 +803,8 @@ function removeTileBlocksInRects(xml, tagName, rects, ignoredRanges = []) {
   };
 }
 
-function clearFarmObstaclesForCabins(xml) {
-  const cabinClearRects = findBuildingBlocks(xml)
-    .filter((building) => isCabinBuildingBlock(building.text))
-    .map((building) => readBuildingRect(building.text))
+function clearFarmObstaclesForCabins(xml, cabinRects) {
+  const cabinClearRects = (cabinRects || [])
     .filter(Boolean)
     .map((rect) => cabinReservedRect(rect));
   if (!cabinClearRects.length) return { xml, clearedFarmObstacles: 0 };
@@ -1178,30 +1134,23 @@ function patchCabinsXml(xml, targetCabins) {
 
   const farmType = readSaveFarmType(currentXml);
   const placementPolicy = cabinPlacementPolicy(farmType);
-  const relocated = relocateUnsafeCabins(currentXml, buildings, placementPolicy);
-  currentXml = relocated.xml;
-  if (relocated.movedCabins) {
-    buildings = findBuildingBlocks(currentXml);
-    cabins = buildings.filter((building) => isCabinBuildingBlock(building.text));
-  }
+  const movedCabins = 0;
+  const clearedFarmObstacles = 0;
 
   if (cabins.length >= targetCabins) {
-    const clear = clearFarmObstaclesForCabins(currentXml);
-    const linkRepair = repairCabinFarmhandLinks(clear.xml);
+    const linkRepair = repairCabinFarmhandLinks(currentXml);
     return {
       xml: linkRepair.xml,
       changed:
         normalized.fixedFarmhandIds > 0 ||
-        relocated.movedCabins > 0 ||
-        clear.clearedFarmObstacles > 0 ||
         linkRepair.fixedCabinReferences > 0 ||
         linkRepair.addedFarmhands > 0 ||
         linkRepair.fixedFarmhandHomes > 0,
       currentCabins: cabins.length,
       cabinCount: cabins.length,
       addedCabins: 0,
-      movedCabins: relocated.movedCabins,
-      clearedFarmObstacles: clear.clearedFarmObstacles,
+      movedCabins,
+      clearedFarmObstacles,
       fixedFarmhandIds: normalized.fixedFarmhandIds,
       fixedCabinReferences: linkRepair.fixedCabinReferences,
       addedFarmhands: linkRepair.addedFarmhands,
@@ -1216,15 +1165,17 @@ function patchCabinsXml(xml, targetCabins) {
   const sourceCabin = cabins[0].text;
   const occupiedRects = buildings.map((building) => buildingReservedRect(building)).filter(Boolean);
   const clones = [];
+  const clonedRects = [];
   for (let count = cabins.length; count < targetCabins; count += 1) {
     const placement = findCabinPlacement(sourceCabin, occupiedRects, placementPolicy);
     clones.push(cloneCabinBlock(sourceCabin, placement, existingIds));
+    clonedRects.push(placement);
     occupiedRects.push(cabinReservedRect(placement));
   }
 
   const insertAt = cabins[cabins.length - 1].end;
   const withClones = `${currentXml.slice(0, insertAt)}${clones.join("")}${currentXml.slice(insertAt)}`;
-  const clear = clearFarmObstaclesForCabins(withClones);
+  const clear = clearFarmObstaclesForCabins(withClones, clonedRects);
   const linked = repairCabinFarmhandLinks(clear.xml);
   return {
     xml: linked.xml,
@@ -1232,7 +1183,7 @@ function patchCabinsXml(xml, targetCabins) {
     currentCabins: cabins.length,
     cabinCount: targetCabins,
     addedCabins: clones.length,
-    movedCabins: relocated.movedCabins,
+    movedCabins,
     clearedFarmObstacles: clear.clearedFarmObstacles,
     fixedFarmhandIds: normalized.fixedFarmhandIds,
     fixedCabinReferences: linked.fixedCabinReferences,
