@@ -976,11 +976,7 @@ function applyGameCreationSettings(settings, payload) {
   ]);
 }
 
-async function saveConfig(payload) {
-  const previousSettings = await readSettings();
-  const settings = JSON.parse(JSON.stringify(previousSettings));
-  applyGameCreationSettings(settings, payload);
-
+function applyRuntimeSettings(settings, payload) {
   settings.Server.MaxPlayers = intInRange(payload.maxPlayers, "Max players", 1, 10);
   settings.Server.CabinStrategy = stringChoice(payload.cabinStrategy, "Cabin strategy", [
     "CabinStack",
@@ -993,6 +989,28 @@ async function saveConfig(payload) {
   settings.Server.VerboseLogging = bool(payload.verboseLogging);
   settings.Server.LobbyMode = stringChoice(payload.lobbyMode, "Lobby mode", ["Shared", "Individual"]);
   settings.Server.AdminSteamIds = parseSteamIds(payload.adminSteamIds);
+}
+
+async function saveNewGameConfig(payload) {
+  const previousSettings = await readSettings();
+  const settings = JSON.parse(JSON.stringify(previousSettings));
+  applyGameCreationSettings(settings, payload);
+  settings.Server.MaxPlayers = intInRange(payload.maxPlayers, "Max players", 1, 10);
+  settings.Server.SeparateWallets = bool(payload.separateWallets);
+
+  await writeSettings(settings);
+
+  return {
+    settings,
+    restartRequired: true,
+    newGameOnlyChanged: hasSettingChanges(previousSettings, settings, NEW_GAME_ONLY_SETTING_PATHS),
+  };
+}
+
+async function saveConfig(payload) {
+  const previousSettings = await readSettings();
+  const settings = JSON.parse(JSON.stringify(previousSettings));
+  applyRuntimeSettings(settings, payload);
 
   await writeSettings(settings);
 
@@ -1285,7 +1303,7 @@ async function createNewGame(payload) {
     }
   }
 
-  const savedConfig = await saveConfig(payload);
+  const savedConfig = await saveNewGameConfig(payload);
   let preNewGameBackup = null;
   if (volumeExistsBefore) {
     preNewGameBackup = await createSavesBackup(`Automatic backup before creating new farm ${farmName}.`);
@@ -2181,35 +2199,13 @@ const PAGE = String.raw`<!doctype html>
       <div class="panel span-12">
         <div class="section-title">
           <h2>开服配置</h2>
-          <span class="hint">农场字段只决定下一次新建农场。</span>
+          <span class="hint">这里只保存服务端运行配置；地图创建在存档管理里单独完成。</span>
         </div>
         <div id="runtimeFarmNotice" class="notice hidden"></div>
         <form id="configForm">
           <fieldset>
-            <legend>新农场</legend>
-            <label class="field-4"><strong>农场名称</strong><input name="farmName" maxlength="48" /></label>
-            <label class="field-4"><strong>地图类型</strong><select name="farmType"></select></label>
-            <label class="field-4"><strong>利润比例</strong>
-              <select name="profitMargin">
-                <option value="1">100%</option>
-                <option value="0.75">75%</option>
-                <option value="0.5">50%</option>
-                <option value="0.25">25%</option>
-              </select>
-            </label>
-            <label class="field-4"><strong>房间总人数</strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
-            <label class="field-4"><strong>初始小屋数量</strong><input name="startingCabins" type="number" min="0" max="9" /></label>
-            <label class="field-4"><strong>夜间怪物</strong>
-              <select name="spawnMonstersAtNight">
-                <option value="auto">自动</option>
-                <option value="true">开启</option>
-                <option value="false">关闭</option>
-              </select>
-            </label>
-          </fieldset>
-
-          <fieldset>
             <legend>联机</legend>
+            <label class="field-4"><strong>房间总人数</strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
             <label class="field-4"><strong>游戏 UDP 端口</strong><input name="gamePort" type="number" min="1" max="65535" /></label>
             <label class="field-4"><strong>查询 UDP 端口</strong><input name="queryPort" type="number" min="1" max="65535" /></label>
             <label class="field-4"><strong>大厅模式</strong>
@@ -2249,7 +2245,7 @@ const PAGE = String.raw`<!doctype html>
           </fieldset>
 
           <div class="notice">
-            保存只写配置文件。端口、人数、IP 直连等运行配置需要重启服务端后生效；农场名称、地图、利润、初始小屋和夜间怪物不会改写已有存档。
+            保存只写运行配置。端口、人数、IP 直连、密码和管理员等设置需要重启服务端后生效；农场名称和地图类型请在“存档管理”里点击“创建地图”单独设置。
           </div>
           <div class="toolbar">
             <button class="primary" type="submit">保存配置</button>
@@ -2264,11 +2260,11 @@ const PAGE = String.raw`<!doctype html>
           <div class="toolbar">
             <button id="refreshSavesBtn" type="button">刷新存档</button>
             <button id="createBackupBtn" type="button">创建备份</button>
-            <button id="createNewGameBtn" class="primary" type="button">用当前配置新建地图并开服</button>
+            <button id="createNewGameBtn" class="primary" type="button">创建地图</button>
           </div>
         </div>
         <div class="notice">
-          选择存档只设置下次重启要加载的存档。新建地图会先保存上方配置，再调用服务端官方 newgame 命令并重启。删除存档会先自动备份整个 saves 卷，再只移除选中的存档目录。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
+          选择存档只设置下次重启要加载的存档。创建地图会打开独立表单，保存新农场配置后调用服务端官方 newgame 命令并重启。删除存档会先自动备份整个 saves 卷，再只移除选中的存档目录。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
         </div>
         <div class="backup-policy">
           <label class="field-3 checkline"><input id="autoBackupEnabled" type="checkbox" />自动备份</label>
@@ -2315,6 +2311,40 @@ const PAGE = String.raw`<!doctype html>
       </div>
     </section>
   </main>
+
+  <div id="createMapDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="createMapTitle">
+    <form id="createMapForm" class="modal-panel">
+      <h2 id="createMapTitle">创建地图</h2>
+      <p class="modal-message">填写新农场信息后，面板会保存这些新地图配置，再调用服务端官方 newgame 命令并重启。旧存档不会删除。</p>
+      <fieldset>
+        <label class="field-6"><strong>农场名称</strong><input name="farmName" maxlength="48" /></label>
+        <label class="field-6"><strong>地图类型</strong><select name="farmType"></select></label>
+        <label class="field-4"><strong>利润比例</strong>
+          <select name="profitMargin">
+            <option value="1">100%</option>
+            <option value="0.75">75%</option>
+            <option value="0.5">50%</option>
+            <option value="0.25">25%</option>
+          </select>
+        </label>
+        <label class="field-4"><strong>房间总人数</strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
+        <label class="field-4"><strong>初始小屋数量</strong><input name="startingCabins" type="number" min="0" max="9" /></label>
+        <label class="field-4"><strong>夜间怪物</strong>
+          <select name="spawnMonstersAtNight">
+            <option value="auto">自动</option>
+            <option value="true">开启</option>
+            <option value="false">关闭</option>
+          </select>
+        </label>
+        <label class="field-4 checkline"><input name="separateWallets" type="checkbox" />玩家钱包分开</label>
+      </fieldset>
+      <div id="createMapMessage" class="message"></div>
+      <div class="toolbar modal-actions">
+        <button id="cancelCreateMapBtn" type="button">取消</button>
+        <button class="primary" type="submit">创建地图并开服</button>
+      </div>
+    </form>
+  </div>
 
   <div id="confirmDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmDialogTitle">
     <div class="modal-panel">
@@ -2363,6 +2393,10 @@ const PAGE = String.raw`<!doctype html>
     const backupPolicyStatus = document.querySelector("#backupPolicyStatus");
     const saveBackupPolicyBtn = document.querySelector("#saveBackupPolicyBtn");
     const createNewGameBtn = document.querySelector("#createNewGameBtn");
+    const createMapDialog = document.querySelector("#createMapDialog");
+    const createMapForm = document.querySelector("#createMapForm");
+    const createMapMessage = document.querySelector("#createMapMessage");
+    const cancelCreateMapBtn = document.querySelector("#cancelCreateMapBtn");
     const playersMessage = document.querySelector("#playersMessage");
     const onlinePlayersList = document.querySelector("#onlinePlayersList");
     const farmhandsList = document.querySelector("#farmhandsList");
@@ -2444,6 +2478,17 @@ const PAGE = String.raw`<!doctype html>
         document.addEventListener("keydown", handleKeydown);
         setTimeout(() => confirmDialogInput.focus(), 0);
       });
+    }
+
+    function openCreateMapDialog() {
+      setMessage(createMapMessage, "");
+      createMapDialog.classList.remove("hidden");
+      setTimeout(() => createMapForm.elements.farmName.focus(), 0);
+    }
+
+    function closeCreateMapDialog() {
+      createMapDialog.classList.add("hidden");
+      setMessage(createMapMessage, "");
     }
 
     async function request(path, options = {}) {
@@ -2660,17 +2705,19 @@ const PAGE = String.raw`<!doctype html>
     function fillConfig(data) {
       const settings = data.settings;
       const env = data.env;
-      const farmTypeSelect = configForm.elements.farmType;
-      farmTypeSelect.innerHTML = data.farmTypes.map((item) => (
+      const farmTypeOptions = data.farmTypes.map((item) => (
         '<option value="' + item.value + '">' + escapeHtml(item.label) + "</option>"
       )).join("");
+      createMapForm.elements.farmType.innerHTML = farmTypeOptions;
 
-      configForm.elements.farmName.value = settings.Game.FarmName || "Junimo";
-      configForm.elements.farmType.value = settings.Game.FarmType ?? 0;
-      configForm.elements.profitMargin.value = settings.Game.ProfitMargin ?? 1;
+      createMapForm.elements.farmName.value = settings.Game.FarmName || "Junimo";
+      createMapForm.elements.farmType.value = settings.Game.FarmType ?? 0;
+      createMapForm.elements.profitMargin.value = settings.Game.ProfitMargin ?? 1;
+      createMapForm.elements.maxPlayers.value = settings.Server.MaxPlayers ?? 4;
+      createMapForm.elements.startingCabins.value = settings.Game.StartingCabins ?? 1;
+      createMapForm.elements.spawnMonstersAtNight.value = String(settings.Game.SpawnMonstersAtNight ?? "auto");
+      createMapForm.elements.separateWallets.checked = Boolean(settings.Server.SeparateWallets);
       configForm.elements.maxPlayers.value = settings.Server.MaxPlayers ?? 4;
-      configForm.elements.startingCabins.value = settings.Game.StartingCabins ?? 1;
-      configForm.elements.spawnMonstersAtNight.value = String(settings.Game.SpawnMonstersAtNight ?? "auto");
       configForm.elements.gamePort.value = env.gamePort;
       configForm.elements.queryPort.value = env.queryPort;
       configForm.elements.vncPort.value = env.vncPort;
@@ -2690,12 +2737,7 @@ const PAGE = String.raw`<!doctype html>
     function formPayload() {
       const form = configForm.elements;
       return {
-        farmName: form.farmName.value,
-        farmType: form.farmType.value,
-        profitMargin: form.profitMargin.value,
         maxPlayers: form.maxPlayers.value,
-        startingCabins: form.startingCabins.value,
-        spawnMonstersAtNight: form.spawnMonstersAtNight.value,
         gamePort: form.gamePort.value,
         queryPort: form.queryPort.value,
         vncPort: form.vncPort.value,
@@ -2709,6 +2751,19 @@ const PAGE = String.raw`<!doctype html>
         serverPasswordAction: form.serverPasswordAction.value,
         serverPassword: form.serverPassword.value,
         adminSteamIds: form.adminSteamIds.value,
+      };
+    }
+
+    function createMapPayload() {
+      const form = createMapForm.elements;
+      return {
+        farmName: form.farmName.value,
+        farmType: form.farmType.value,
+        profitMargin: form.profitMargin.value,
+        maxPlayers: form.maxPlayers.value,
+        startingCabins: form.startingCabins.value,
+        spawnMonstersAtNight: form.spawnMonstersAtNight.value,
+        separateWallets: form.separateWallets.checked,
       };
     }
 
@@ -2835,13 +2890,10 @@ const PAGE = String.raw`<!doctype html>
       event.preventDefault();
       setMessage(saveMessage, "保存中...");
       try {
-        const result = await request("/api/config", { method: "POST", body: JSON.stringify(formPayload()) });
+        await request("/api/config", { method: "POST", body: JSON.stringify(formPayload()) });
         hasConfig = false;
         await loadAll();
-        const message = result?.newGameOnlyChanged
-          ? "已保存。运行配置重启后生效；农场名称、地图、利润、初始小屋和夜间怪物只对新建农场生效。"
-          : "已保存，运行配置重启后生效。";
-        setMessage(saveMessage, message, "ok");
+        setMessage(saveMessage, "已保存，运行配置重启后生效。", "ok");
       } catch (error) {
         setMessage(saveMessage, error.message, "bad");
       }
@@ -2954,17 +3006,25 @@ const PAGE = String.raw`<!doctype html>
       }
     });
 
-    createNewGameBtn.addEventListener("click", async () => {
-      const payload = formPayload();
+    createNewGameBtn.addEventListener("click", openCreateMapDialog);
+    cancelCreateMapBtn.addEventListener("click", closeCreateMapDialog);
+    createMapDialog.addEventListener("click", (event) => {
+      if (event.target === createMapDialog) closeCreateMapDialog();
+    });
+
+    createMapForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const payload = createMapPayload();
       const farmName = (String(payload.farmName || "").trim() || "Junimo").slice(0, 48);
-      const farmTypeSelect = configForm.elements.farmType;
+      const farmTypeSelect = createMapForm.elements.farmType;
       const farmTypeLabel = farmTypeSelect.options[farmTypeSelect.selectedIndex]?.textContent || payload.farmType;
       const confirmText = await exactConfirm({
         title: "新建地图并开服",
         message:
-          "这会保存当前表单配置，并按这些配置新建地图后重启服务端。旧存档不会删除；如果已有 saves volume，会先自动创建一份备份。\n\n" +
+          "这会保存当前地图表单，并按这些配置新建地图后重启服务端。旧存档不会删除；如果已有 saves volume，会先自动创建一份备份。\n\n" +
           "新农场：" + farmName + "\n" +
           "地图：" + farmTypeLabel + "\n\n" +
+          "人数：" + payload.maxPlayers + "\n" +
           "请输入新农场名称确认。",
         value: farmName,
         actionText: "新建地图",
@@ -2979,7 +3039,7 @@ const PAGE = String.raw`<!doctype html>
         });
       }
 
-      setMessage(savesMessage, "正在保存配置、设置新地图并重启服务端...");
+      setMessage(createMapMessage, "正在保存地图配置、设置新地图并重启服务端...");
       try {
         let result;
         try {
@@ -2987,16 +3047,17 @@ const PAGE = String.raw`<!doctype html>
         } catch (error) {
           if (error.status !== 409) throw error;
           if (!confirm(error.message + "\n\n仍然强制新建地图并重启？")) return;
-          setMessage(savesMessage, "正在强制新建地图并重启服务端...");
+          setMessage(createMapMessage, "正在强制新建地图并重启服务端...");
           result = await submit(true);
         }
 
         hasConfig = false;
         await loadAll();
+        closeCreateMapDialog();
         const backupText = result.preNewGameBackup ? "；执行前备份：" + result.preNewGameBackup : "";
         setMessage(savesMessage, "新地图已设置并重启：" + result.farmName + backupText, "ok");
       } catch (error) {
-        setMessage(savesMessage, error.message, "bad");
+        setMessage(createMapMessage, error.message, "bad");
       }
     });
 
