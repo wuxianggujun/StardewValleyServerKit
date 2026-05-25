@@ -1067,7 +1067,7 @@ async function waitForNewGameSave(farmName, sinceMs, timeoutMs = NEW_GAME_SAVE_W
       .join(", ");
     const exact = saves.find((save) => {
       const updatedMs = save.updatedAt ? Date.parse(save.updatedAt) : 0;
-      return save.cabinCount > 0 && save.farmName === farmName && (!updatedMs || updatedMs >= minUpdatedMs);
+      return save.farmName === farmName && (!updatedMs || updatedMs >= minUpdatedMs);
     });
     if (exact) return exact;
 
@@ -1179,29 +1179,54 @@ async function patchSaveCabins(saveName, targetCabins) {
   }
 }
 
-async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs) {
-  if (targetCabins <= 1) {
-    return {
-      ...(await restartStack()),
-      cabinPatch: null,
-    };
-  }
+function addOperationStep(steps, label, detail = "") {
+  steps.push({
+    at: new Date().toISOString(),
+    label,
+    detail,
+  });
+}
 
+async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps = []) {
   const save = await waitForNewGameSave(farmName, newGameStartedAtMs);
+  addOperationStep(steps, "已确认新存档生成", save.name);
+
   const down = await compose(["down"], { timeoutMs: 120000 });
   if (!down.ok) {
     throw new Error(await sanitize(down.stderr || down.stdout || "docker compose down failed"));
   }
+  addOperationStep(steps, "已停止服务端", "准备写入新存档补丁并重新启动。");
 
   try {
-    const cabinPatch = await patchSaveCabins(save.name, targetCabins);
+    const cabinPatch = targetCabins > 1 ? await patchSaveCabins(save.name, targetCabins) : null;
+    if (cabinPatch) {
+      addOperationStep(
+        steps,
+        "已补齐新存档小屋",
+        `目标 ${targetCabins}，补建 ${cabinPatch.addedCabins || 0}，新增角色槽 ${cabinPatch.addedFarmhands || 0}`,
+      );
+    } else {
+      addOperationStep(steps, "无需补齐小屋", `目标小屋数 ${targetCabins}`);
+    }
+
     const up = await compose(["up", "-d"], { timeoutMs: 120000 });
     if (!up.ok) {
       throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
     }
+    const stackState = await inspectStackState();
+    addOperationStep(
+      steps,
+      stackRestartVerified(stackState) ? "服务端重启已确认" : "服务端已发送启动命令",
+      stackState.ok ? "已读取 Docker 容器状态。" : stackState.error,
+    );
     return {
       message: "Server stack restarted.",
+      newSaveName: save.name,
       cabinPatch,
+      restarted: true,
+      restartVerified: stackRestartVerified(stackState),
+      stackState,
+      steps,
     };
   } catch (error) {
     await compose(["up", "-d"], { timeoutMs: 120000 }).catch(() => {});
@@ -1667,6 +1692,7 @@ async function saveConfig(payload) {
 }
 
 async function restartStack() {
+  const previousStackState = await inspectStackState();
   const down = await compose(["down"], { timeoutMs: 120000 });
   if (!down.ok) {
     throw new Error(await sanitize(down.stderr || down.stdout || "docker compose down failed"));
@@ -1675,7 +1701,14 @@ async function restartStack() {
   if (!up.ok) {
     throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
   }
-  return { message: "Server stack restarted." };
+  const stackState = await inspectStackState();
+  return {
+    message: "Server stack restarted.",
+    restarted: true,
+    restartVerified: stackRestartVerified(stackState),
+    previousStackState,
+    stackState,
+  };
 }
 
 async function startStack() {
@@ -1683,7 +1716,13 @@ async function startStack() {
   if (!up.ok) {
     throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
   }
-  return { message: "Server stack started." };
+  const stackState = await inspectStackState();
+  return {
+    message: "Server stack started.",
+    started: true,
+    startVerified: stackRestartVerified(stackState),
+    stackState,
+  };
 }
 
 async function stopStack(reason = "Stopped from admin panel.") {
@@ -1852,6 +1891,42 @@ async function isServerContainerRunning() {
   return result.ok && result.stdout.trim() === "true";
 }
 
+async function inspectStackState() {
+  const result = await docker(
+    [
+      "inspect",
+      "-f",
+      "{{.Name}}\t{{.State.Status}}\t{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}\t{{.State.StartedAt}}",
+      "sdv-server",
+      "sdv-steam-auth",
+    ],
+    { timeoutMs: 8000 },
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: await sanitize(result.stderr || result.stdout || "docker inspect failed"),
+      containers: [],
+    };
+  }
+  return {
+    ok: true,
+    containers: parseTableLines(result.stdout).map((line) => {
+      const [name, status, health, startedAt] = line.split("\t");
+      return {
+        name: name ? name.replace(/^\//, "") : "",
+        status,
+        health,
+        startedAt,
+      };
+    }),
+  };
+}
+
+function stackRestartVerified(state) {
+  return Boolean(state?.containers?.some((container) => container.name === "sdv-server" && container.status === "running"));
+}
+
 async function waitForSmapiCommandPipe(timeoutMs = SMAPI_COMMAND_PIPE_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   let lastOutput = "";
@@ -1919,9 +1994,7 @@ async function selectSave(payload) {
 
 async function createNewGame(payload) {
   const farmName = cleanText(payload.farmName, 48, "Junimo");
-  if (String(payload.confirm || "") !== farmName) {
-    throw new Error("New farm confirmation did not match the configured farm name.");
-  }
+  const steps = [];
 
   const wasRunning = await isServerContainerRunning();
   const volumeExistsBefore = await savesVolumeExists();
@@ -1936,9 +2009,11 @@ async function createNewGame(payload) {
   const savedConfig = await saveNewGameConfig(payload);
   const targetCabins = savedConfig.settings.Game.StartingCabins;
   const newGameStartedAtMs = Date.now();
+  addOperationStep(steps, "已保存新地图配置", `农场 ${farmName}，初始小屋 ${targetCabins}`);
   let preNewGameBackup = null;
   if (volumeExistsBefore) {
     preNewGameBackup = await createSavesBackup(`Automatic backup before creating new farm ${farmName}.`);
+    addOperationStep(steps, "已创建执行前备份", preNewGameBackup.archive);
   }
 
   if (!wasRunning && !volumeExistsBefore) {
@@ -1946,24 +2021,21 @@ async function createNewGame(payload) {
     if (!up.ok) {
       throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
     }
-    let cabinPatch = null;
-    let restarted = false;
-    let message = "Server stack started. A new farm will be created from the saved settings.";
-    if (targetCabins > 1) {
-      const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs);
-      cabinPatch = restart.cabinPatch;
-      restarted = true;
-      message = restart.message;
-    }
+    addOperationStep(steps, "已启动服务端", "正在等待服务端生成新存档。");
+    const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps);
     return {
       farmName,
       settings: savedConfig.settings,
       preNewGameBackup: null,
       commandStartedServer: true,
       readiness,
-      restarted,
-      cabinPatch,
-      message,
+      restarted: restart.restarted,
+      restartVerified: restart.restartVerified,
+      newSaveName: restart.newSaveName,
+      stackState: restart.stackState,
+      cabinPatch: restart.cabinPatch,
+      steps,
+      message: restart.message,
     };
   }
 
@@ -1972,11 +2044,16 @@ async function createNewGame(payload) {
     if (!down.ok) {
       throw new Error(await sanitize(down.stderr || down.stdout || "docker compose down failed"));
     }
+    addOperationStep(steps, "已停止原服务端", "准备启动 SMAPI 并发送 newgame 命令。");
   }
 
   const commandState = await ensureServerReadyForSmapiCommand();
+  if (commandState.started) {
+    addOperationStep(steps, "已启动服务端", "用于接收 SMAPI newgame 命令。");
+  }
   await sendSmapiCommand("settings newgame --confirm");
-  const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs);
+  addOperationStep(steps, "已发送官方 newgame 命令", "等待新存档落盘。");
+  const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps);
 
   return {
     farmName,
@@ -1984,17 +2061,18 @@ async function createNewGame(payload) {
     preNewGameBackup: preNewGameBackup?.archive || null,
     commandStartedServer: commandState.started,
     readiness,
-    restarted: true,
+    restarted: restart.restarted,
+    restartVerified: restart.restartVerified,
+    newSaveName: restart.newSaveName,
+    stackState: restart.stackState,
     cabinPatch: restart.cabinPatch,
+    steps,
     message: restart.message,
   };
 }
 
 async function repairSaveCabins(payload) {
   const saveName = validateSaveName(payload.saveName);
-  if (payload.confirm !== saveName) {
-    throw new Error("Repair confirmation did not match the save name.");
-  }
 
   const { saves } = await listSaves();
   if (!saves.some((save) => save.name === saveName)) {
@@ -2051,14 +2129,12 @@ async function repairSaveCabins(payload) {
 
 async function deleteSave(payload) {
   const saveName = validateSaveName(payload.saveName);
-  if (payload.confirm !== saveName) {
-    throw new Error("Delete confirmation did not match the save name.");
-  }
 
   const { saves } = await listSaves();
   if (!saves.some((save) => save.name === saveName)) {
     throw new Error(`Save not found: ${saveName}`);
   }
+  const remainingSaveCount = saves.filter((save) => save.name !== saveName).length;
 
   const wasRunning = await isServerContainerRunning();
   let readiness = null;
@@ -2104,7 +2180,8 @@ rm -rf -- "$target"`;
       throw new Error(await sanitize(result.stderr || result.stdout || "Save delete failed."));
     }
 
-    if (wasRunning) {
+    const shouldRestart = wasRunning && remainingSaveCount > 0;
+    if (shouldRestart) {
       const up = await compose(["up", "-d"], { timeoutMs: 120000 });
       if (!up.ok) {
         throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
@@ -2114,7 +2191,9 @@ rm -rf -- "$target"`;
     return {
       deleted: saveName,
       preDeleteBackup: preDeleteBackup.archive,
-      restarted: wasRunning,
+      restarted: shouldRestart,
+      stoppedBecauseNoSaves: wasRunning && remainingSaveCount === 0,
+      remainingSaveCount,
       readiness,
     };
   } catch (error) {
@@ -2169,9 +2248,6 @@ async function createSavesBackup(note = "Created from admin panel.", options = {
 
 async function restoreBackup(payload) {
   const archive = validateBackupArchive(payload.archive);
-  if (payload.confirm !== archive) {
-    throw new Error("Restore confirmation did not match the backup archive name.");
-  }
 
   const archivePath = path.join(BACKUP_DIR, archive);
   await fsp.access(archivePath, fs.constants.R_OK);
@@ -2355,9 +2431,6 @@ async function grantAdminRole(payload) {
 
 async function deleteFarmhand(payload) {
   const name = validatePlayerName(payload.name);
-  if (payload.confirm !== name) {
-    throw new Error("删除确认内容必须和角色名称完全一致。");
-  }
   const response = await serverApiRequest("DELETE", `/farmhands?name=${encodeURIComponent(name)}`);
   const result = ensureApiSuccess(response, "Delete farmhand");
   return {
@@ -2796,6 +2869,7 @@ const PAGE = String.raw`<!doctype html>
     .message {
       min-height: 22px;
       color: var(--muted);
+      white-space: pre-line;
     }
     .message.bad { color: var(--red); }
     .message.ok { color: var(--green); }
@@ -2827,15 +2901,6 @@ const PAGE = String.raw`<!doctype html>
       white-space: pre-line;
       color: var(--text);
     }
-    .copy-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px;
-    }
-    .copy-row input {
-      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-      user-select: all;
-    }
     .modal-actions {
       justify-content: flex-end;
     }
@@ -2846,7 +2911,6 @@ const PAGE = String.raw`<!doctype html>
       .manage-grid { grid-template-columns: 1fr; }
       .manage-item { grid-template-columns: 1fr; }
       .manage-actions { justify-content: flex-start; }
-      .copy-row { grid-template-columns: 1fr; }
       .topbar { align-items: flex-start; flex-direction: column; }
     }
   </style>
@@ -3087,29 +3151,6 @@ const PAGE = String.raw`<!doctype html>
     </form>
   </div>
 
-  <div id="confirmDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmDialogTitle">
-    <div class="modal-panel">
-      <h2 id="confirmDialogTitle">确认操作</h2>
-      <p id="confirmDialogMessage" class="modal-message"></p>
-      <label>
-        <strong>需要输入的完整内容</strong>
-        <div class="copy-row">
-          <input id="confirmDialogTarget" type="text" readonly />
-          <button id="confirmDialogCopyBtn" type="button">复制</button>
-        </div>
-      </label>
-      <label>
-        <strong>输入确认内容</strong>
-        <input id="confirmDialogInput" type="text" autocomplete="off" />
-      </label>
-      <div id="confirmDialogHint" class="hint"></div>
-      <div class="toolbar modal-actions">
-        <button id="confirmDialogCancelBtn" type="button">取消</button>
-        <button id="confirmDialogActionBtn" class="danger" type="button" disabled>确认</button>
-      </div>
-    </div>
-  </div>
-
   <script>
     const authPanel = document.querySelector("#authPanel");
     const appPanel = document.querySelector("#appPanel");
@@ -3143,15 +3184,6 @@ const PAGE = String.raw`<!doctype html>
     const onlinePlayersList = document.querySelector("#onlinePlayersList");
     const farmhandsList = document.querySelector("#farmhandsList");
     const playerManagerPanel = document.querySelector("#playerManagerPanel");
-    const confirmDialog = document.querySelector("#confirmDialog");
-    const confirmDialogTitle = document.querySelector("#confirmDialogTitle");
-    const confirmDialogMessage = document.querySelector("#confirmDialogMessage");
-    const confirmDialogTarget = document.querySelector("#confirmDialogTarget");
-    const confirmDialogCopyBtn = document.querySelector("#confirmDialogCopyBtn");
-    const confirmDialogInput = document.querySelector("#confirmDialogInput");
-    const confirmDialogHint = document.querySelector("#confirmDialogHint");
-    const confirmDialogCancelBtn = document.querySelector("#confirmDialogCancelBtn");
-    const confirmDialogActionBtn = document.querySelector("#confirmDialogActionBtn");
     const logsPanel = document.querySelector("#logs");
     const loadLogsBtn = document.querySelector("#loadLogsBtn");
     const copyLogsBtn = document.querySelector("#copyLogsBtn");
@@ -3172,68 +3204,6 @@ const PAGE = String.raw`<!doctype html>
       if (shouldStickToBottom || mode === "full") {
         logsPanel.scrollTop = logsPanel.scrollHeight;
       }
-    }
-
-    function exactConfirm(options) {
-      const value = String(options.value ?? "");
-      confirmDialogTitle.textContent = options.title || "确认操作";
-      confirmDialogMessage.textContent = options.message || "";
-      confirmDialogTarget.value = value;
-      confirmDialogInput.value = "";
-      confirmDialogHint.textContent = "可以点“复制”，也可以手动选中上面的内容复制。";
-      confirmDialogActionBtn.textContent = options.actionText || "确认";
-      confirmDialogActionBtn.className = options.danger === false ? "primary" : "danger";
-      confirmDialogActionBtn.disabled = true;
-      confirmDialog.classList.remove("hidden");
-
-      return new Promise((resolve) => {
-        const cleanup = (result) => {
-          confirmDialog.classList.add("hidden");
-          confirmDialogInput.removeEventListener("input", update);
-          confirmDialogCopyBtn.removeEventListener("click", copyTarget);
-          confirmDialogCancelBtn.removeEventListener("click", cancel);
-          confirmDialogActionBtn.removeEventListener("click", submit);
-          confirmDialog.removeEventListener("click", clickBackdrop);
-          document.removeEventListener("keydown", handleKeydown);
-          resolve(result);
-        };
-        const update = () => {
-          confirmDialogActionBtn.disabled = confirmDialogInput.value !== value;
-        };
-        const copyTarget = async () => {
-          confirmDialogTarget.focus();
-          confirmDialogTarget.select();
-          try {
-            await navigator.clipboard.writeText(value);
-            confirmDialogHint.textContent = "已复制。";
-          } catch (_) {
-            try {
-              document.execCommand("copy");
-              confirmDialogHint.textContent = "已复制。";
-            } catch (error) {
-              confirmDialogHint.textContent = "已选中，请按 Ctrl+C 复制。";
-            }
-          }
-        };
-        const cancel = () => cleanup(null);
-        const submit = () => {
-          if (confirmDialogInput.value === value) cleanup(value);
-        };
-        const clickBackdrop = (event) => {
-          if (event.target === confirmDialog) cancel();
-        };
-        const handleKeydown = (event) => {
-          if (event.key === "Escape") cancel();
-        };
-
-        confirmDialogInput.addEventListener("input", update);
-        confirmDialogCopyBtn.addEventListener("click", copyTarget);
-        confirmDialogCancelBtn.addEventListener("click", cancel);
-        confirmDialogActionBtn.addEventListener("click", submit);
-        confirmDialog.addEventListener("click", clickBackdrop);
-        document.addEventListener("keydown", handleKeydown);
-        setTimeout(() => confirmDialogInput.focus(), 0);
-      });
     }
 
     function openCreateMapDialog() {
@@ -3541,6 +3511,47 @@ const PAGE = String.raw`<!doctype html>
         .filter(Boolean);
     }
 
+    function stackStateText(state) {
+      if (!state) return "";
+      if (!state.ok && state.error) return "容器状态读取失败：" + state.error;
+      if (!state.containers?.length) return "未返回容器状态";
+      return state.containers.map((container) => {
+        const health = container.health && container.health !== "none" ? "/" + container.health : "";
+        const startedAt = container.startedAt ? "，启动：" + formatDateTime(container.startedAt) : "";
+        return container.name + "=" + (container.status || "unknown") + health + startedAt;
+      }).join("；");
+    }
+
+    function operationStepsText(steps) {
+      return (steps || [])
+        .map((step, index) => (index + 1) + ". " + step.label + (step.detail ? "：" + step.detail : ""))
+        .join("\n");
+    }
+
+    function createMapResultText(result) {
+      const patch = result.cabinPatch || {};
+      const lines = [
+        "新地图已创建：" + result.farmName,
+        result.newSaveName ? "新存档：" + result.newSaveName : "",
+        result.preNewGameBackup ? "执行前备份：" + result.preNewGameBackup : "",
+        result.restarted
+          ? (result.restartVerified ? "服务端重启已确认。" : "已执行重启命令，但未确认到 running 状态。")
+          : "服务端未重启。",
+      ];
+      if (result.cabinPatch) {
+        lines.push(
+          "小屋补丁：补建 " + (patch.addedCabins || 0) +
+            " 座，新增角色槽 " + (patch.addedFarmhands || 0) +
+            " 个，修正引用 " + (patch.fixedCabinReferences || 0) + " 个。",
+        );
+      }
+      const state = stackStateText(result.stackState);
+      if (state) lines.push("当前容器：" + state);
+      const steps = operationStepsText(result.steps);
+      if (steps) lines.push("执行记录：\n" + steps);
+      return lines.filter(Boolean).join("\n");
+    }
+
     function shutdownLabel(readiness) {
       if (!readiness) return "n/a";
       if (readiness.mode === "safe-empty") return "可停服：在线 0 人";
@@ -3717,17 +3728,11 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "delete-farmhand") {
           const name = button.dataset.name;
-          const confirmText = await exactConfirm({
-            title: "删除离线角色",
-            message: "删除离线角色会移除该角色和对应小屋。请输入完整角色名称确认。",
-            value: name,
-            actionText: "删除",
-          });
-          if (confirmText !== name) return;
+          if (!confirm("删除离线角色会移除该角色和对应小屋：" + name + "？")) return;
           setMessage(playersMessage, "正在删除离线角色...");
           const result = await request("/api/farmhands", {
             method: "DELETE",
-            body: JSON.stringify({ name, confirm: confirmText }),
+            body: JSON.stringify({ name }),
           });
           await reloadPlayerManagement();
           setMessage(playersMessage, result.message || "已删除离线角色：" + name, "ok");
@@ -3810,31 +3815,17 @@ const PAGE = String.raw`<!doctype html>
     createMapForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const payload = createMapPayload();
-      const farmName = (String(payload.farmName || "").trim() || "Junimo").slice(0, 48);
-      const farmTypeSelect = createMapForm.elements.farmType;
-      const farmTypeLabel = farmTypeSelect.options[farmTypeSelect.selectedIndex]?.textContent || payload.farmType;
-      const confirmText = await exactConfirm({
-        title: "新建地图并开服",
-        message:
-          "这会保存当前地图表单，并按这些配置新建地图后重启服务端。旧存档不会删除；如果已有 saves volume，会先自动创建一份备份。\n\n" +
-          "新农场：" + farmName + "\n" +
-          "地图：" + farmTypeLabel + "\n\n" +
-          "人数：" + payload.maxPlayers + "\n" +
-          "请输入新农场名称确认。",
-        value: farmName,
-        actionText: "新建地图",
-        danger: false,
-      });
-      if (confirmText !== farmName) return;
+      const submitBtn = createMapForm.querySelector('button[type="submit"]');
 
       async function submit(force) {
         return request("/api/saves/newgame", {
           method: "POST",
-          body: JSON.stringify({ ...payload, confirm: confirmText, force }),
+          body: JSON.stringify({ ...payload, force }),
         });
       }
 
-      setMessage(createMapMessage, "正在保存地图配置、设置新地图并重启服务端...");
+      submitBtn.disabled = true;
+      setMessage(createMapMessage, "正在执行真实创建流程，完成前不会显示成功。\n正在保存配置、备份、发送 newgame、等待新存档并重启服务端...");
       try {
         let result;
         try {
@@ -3849,10 +3840,11 @@ const PAGE = String.raw`<!doctype html>
         hasConfig = false;
         await loadAll();
         closeCreateMapDialog();
-        const backupText = result.preNewGameBackup ? "；执行前备份：" + result.preNewGameBackup : "";
-        setMessage(savesMessage, "新地图已设置并重启：" + result.farmName + backupText, "ok");
+        setMessage(savesMessage, createMapResultText(result), "ok");
       } catch (error) {
         setMessage(createMapMessage, error.message, "bad");
+      } finally {
+        submitBtn.disabled = false;
       }
     });
 
@@ -3876,20 +3868,11 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "repair-cabins") {
           const saveName = button.dataset.name;
-          const confirmText = await exactConfirm({
-            title: "修复小屋",
-            message:
-              "这会先备份整个 saves 卷，然后停止服务端，修复该存档里重复的小屋角色 ID，并按当前配置补齐小屋。完成后会重新启动服务端。\n\n" +
-              "请输入完整存档名确认。",
-            value: saveName,
-            actionText: "修复小屋",
-          });
-          if (confirmText !== saveName) return;
 
           async function submit(force) {
             return request("/api/saves/repair-cabins", {
               method: "POST",
-              body: JSON.stringify({ saveName, confirm: confirmText, force }),
+              body: JSON.stringify({ saveName, force }),
             });
           }
 
@@ -3923,21 +3906,11 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "delete-save") {
           const saveName = button.dataset.name;
-          const confirmText = await exactConfirm({
-            title: "删除存档",
-            message:
-              "删除存档不可撤销。面板会先自动创建一份 saves 整卷备份，再删除这个存档目录。\n\n" +
-              "如果服务端正在运行，会先停止、删除后再启动，避免存档写入冲突。\n\n" +
-              "请输入完整存档名称确认。",
-            value: saveName,
-            actionText: "删除",
-          });
-          if (confirmText !== saveName) return;
 
           async function submit(force) {
             return request("/api/saves/delete", {
               method: "POST",
-              body: JSON.stringify({ saveName, confirm: confirmText, force }),
+              body: JSON.stringify({ saveName, force }),
             });
           }
 
@@ -3954,7 +3927,9 @@ const PAGE = String.raw`<!doctype html>
 
           hasConfig = false;
           await loadAll();
-          const restartText = result.restarted ? "；服务端已重启" : "";
+          const restartText = result.restarted
+            ? "；服务端已重启"
+            : (result.stoppedBecauseNoSaves ? "；已无剩余存档，服务端保持停止" : "");
           setMessage(
             savesMessage,
             "已删除存档：" + result.deleted + "；删除前备份：" + result.preDeleteBackup + restartText,
@@ -3965,17 +3940,11 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "restore-backup") {
           const archive = button.dataset.archive;
-          const confirmText = await exactConfirm({
-            title: "恢复备份",
-            message: "恢复会停止服务端，并用该备份覆盖整个 saves 卷。恢复前会自动备份当前状态。\n请输入备份文件名确认。",
-            value: archive,
-            actionText: "恢复",
-          });
-          if (confirmText !== archive) return;
+          if (!confirm("恢复会覆盖整个 saves 卷，恢复前会自动备份当前状态。继续恢复：" + archive + "？")) return;
           setMessage(savesMessage, "正在恢复备份...");
           const result = await request("/api/backups/restore", {
             method: "POST",
-            body: JSON.stringify({ archive, confirm: confirmText }),
+            body: JSON.stringify({ archive }),
           });
           hasConfig = false;
           await loadAll();
@@ -4045,13 +4014,7 @@ const PAGE = String.raw`<!doctype html>
           return;
         }
 
-        const confirmText = await exactConfirm({
-          title: "强制立即停服",
-          message: prefix + readiness.message + "\n\n如果仍要立即停服，请输入 STOP。",
-          value: "STOP",
-          actionText: "立即停服",
-        });
-        if (confirmText !== "STOP") return;
+        if (!confirm(prefix + readiness.message + "\n\n仍然立即停服？")) return;
         await request("/api/stop", { method: "POST", body: JSON.stringify({ mode: "now", force: true }) });
         setMessage(serverActionMessage, "已按确认立即停服，数据已保留。", "ok");
         setTimeout(() => loadAll().catch(() => {}), 2000);
