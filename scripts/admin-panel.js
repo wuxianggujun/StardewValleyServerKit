@@ -1057,6 +1057,24 @@ async function listSaves() {
   return { volumeExists: true, saves };
 }
 
+async function verifyPatchedSaveCabins(saveName, targetCabins) {
+  if (targetCabins <= 1) return null;
+  const { saves } = await listSaves();
+  const save = saves.find((item) => item.name === saveName);
+  if (!save) {
+    throw new Error(`Cabin patch verification failed: save not found after patching (${saveName}).`);
+  }
+  if (save.cabinCount < targetCabins || save.usableCabinCount < targetCabins) {
+    throw new Error(
+      `Cabin patch verification failed for ${saveName}: target ${targetCabins}, found ${save.cabinCount} cabin building(s), ${save.usableCabinCount} usable farmhand slot(s).`,
+    );
+  }
+  return {
+    cabinCount: save.cabinCount,
+    usableCabinCount: save.usableCabinCount,
+  };
+}
+
 async function waitForNewGameSave(farmName, sinceMs, timeoutMs = NEW_GAME_SAVE_WAIT_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   const minUpdatedMs = Math.max(0, Number(sinceMs || 0) - 10000);
@@ -1163,6 +1181,7 @@ async function patchSaveCabins(saveName, targetCabins) {
       await fsp.writeFile(saveFile, patched.xml, "utf8");
       await writeSaveFileToVolume(safeSaveName, tempDir);
     }
+    const verification = await verifyPatchedSaveCabins(safeSaveName, targetCabins);
 
     return {
       saveName: safeSaveName,
@@ -1174,6 +1193,7 @@ async function patchSaveCabins(saveName, targetCabins) {
       fixedCabinReferences: patched.fixedCabinReferences,
       addedFarmhands: patched.addedFarmhands,
       fixedFarmhandHomes: patched.fixedFarmhandHomes,
+      verification,
       patched: patched.changed,
     };
   } finally {
@@ -3598,6 +3618,13 @@ const PAGE = String.raw`<!doctype html>
         .join("\n");
     }
 
+    function patchVerificationText(patch) {
+      const verification = patch?.verification;
+      return verification
+        ? "复验：小屋 " + verification.cabinCount + " 座，可用角色 " + verification.usableCabinCount + " 个。"
+        : "";
+    }
+
     function createMapResultText(result) {
       const patch = result.cabinPatch || {};
       const lines = [
@@ -3615,12 +3642,41 @@ const PAGE = String.raw`<!doctype html>
             " 座，新增角色槽 " + (patch.addedFarmhands || 0) +
             " 个，修正引用 " + (patch.fixedCabinReferences || 0) + " 个。",
         );
+        lines.push(patchVerificationText(patch));
       }
       const state = stackStateText(result.stackState);
       if (state) lines.push("当前容器：" + state);
       const steps = operationStepsText(result.steps);
       if (steps) lines.push("执行记录：\n" + steps);
       return lines.filter(Boolean).join("\n");
+    }
+
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (_) {}
+      }
+
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      textarea.setSelectionRange(0, textarea.value.length);
+      let copied = false;
+      try {
+        copied = document.execCommand("copy");
+      } finally {
+        document.body.removeChild(textarea);
+      }
+      if (!copied) throw new Error("Clipboard copy failed.");
+      return true;
     }
 
     function shutdownLabel(readiness) {
@@ -3969,7 +4025,8 @@ const PAGE = String.raw`<!doctype html>
               " 座；新增角色槽 " + (patch.addedFarmhands || 0) +
               " 个；修正小屋引用 " + (patch.fixedCabinReferences || 0) +
               " 个；修正角色 ID " + (patch.fixedFarmhandIds || 0) +
-              " 个；执行前备份：" + result.preRepairBackup + restartText,
+              " 个；" + patchVerificationText(patch) +
+              "；执行前备份：" + result.preRepairBackup + restartText,
             "ok",
           );
           return;
@@ -4131,7 +4188,7 @@ const PAGE = String.raw`<!doctype html>
       const text = logsPanel.textContent || "";
       if (!text) return;
       try {
-        await navigator.clipboard.writeText(text);
+        await copyTextToClipboard(text);
         copyLogsBtn.textContent = "已复制";
         setTimeout(() => {
           copyLogsBtn.textContent = "复制日志";
