@@ -33,6 +33,10 @@ const MAX_AUTO_BACKUP_INTERVAL_MINUTES = 10080;
 const MIN_BACKUP_RETENTION = 1;
 const MAX_BACKUP_RETENTION = 100;
 const CABIN_BUILDING_TYPES = new Set(["Cabin", "Log Cabin", "Plank Cabin", "Stone Cabin"]);
+const CABIN_SAFE_ORIGIN_X = 8;
+const CABIN_SAFE_ORIGIN_Y = 16;
+const CABIN_SAFE_MAX_X = 72;
+const CABIN_SAFE_MAX_Y = 58;
 
 let pendingStopAfterSave = null;
 let autoBackupTimer = null;
@@ -583,31 +587,264 @@ function rectsOverlap(left, right) {
   );
 }
 
+function cabinReservedRect(rect) {
+  return {
+    x: rect.x - 1,
+    y: rect.y - 1,
+    width: rect.width + 2,
+    height: rect.height + 5,
+  };
+}
+
+function pointInRect(point, rect) {
+  return (
+    point.x >= rect.x &&
+    point.x < rect.x + rect.width &&
+    point.y >= rect.y &&
+    point.y < rect.y + rect.height
+  );
+}
+
+function pointInAnyRect(point, rects) {
+  return rects.some((rect) => pointInRect(point, rect));
+}
+
+function cabinNeedsRelocation(rect) {
+  return !rect || rect.x < CABIN_SAFE_ORIGIN_X || rect.y < CABIN_SAFE_ORIGIN_Y;
+}
+
+function safeCabinPlacementOrigin(sourceRect) {
+  return {
+    x: Math.max(sourceRect.x, CABIN_SAFE_ORIGIN_X),
+    y: sourceRect.y < CABIN_SAFE_ORIGIN_Y
+      ? Math.max(sourceRect.y + 10, CABIN_SAFE_ORIGIN_Y)
+      : sourceRect.y,
+  };
+}
+
 function findCabinPlacement(sourceBlock, occupiedRects) {
   const sourceRect = readBuildingRect(sourceBlock) || { x: 0, y: 0, width: 5, height: 3 };
   const stepX = Math.max(sourceRect.width + 1, 6);
-  const stepY = Math.max(sourceRect.height + 1, 4);
+  const stepY = Math.max(sourceRect.height + 3, 6);
+  const origin = safeCabinPlacementOrigin(sourceRect);
 
-  // 优先在原始 Cabin 右侧和下方寻找空位，避免覆盖已有建筑。
-  for (let row = 0; row < 8; row += 1) {
+  for (let row = 0; row < 10; row += 1) {
     for (let col = 0; col < 10; col += 1) {
       const candidate = {
-        x: sourceRect.x + col * stepX,
-        y: sourceRect.y + row * stepY,
+        x: origin.x + col * stepX,
+        y: origin.y + row * stepY,
         width: sourceRect.width,
         height: sourceRect.height,
       };
       if (candidate.x < 0 || candidate.y < 0) continue;
-      if (occupiedRects.some((rect) => rectsOverlap(candidate, rect))) continue;
+      if (candidate.x > CABIN_SAFE_MAX_X || candidate.y > CABIN_SAFE_MAX_Y) continue;
+      if (occupiedRects.some((rect) => rectsOverlap(cabinReservedRect(candidate), rect))) continue;
       return candidate;
     }
   }
 
   return {
-    x: sourceRect.x + stepX * (occupiedRects.length + 1),
-    y: sourceRect.y,
+    x: Math.min(origin.x + stepX * (occupiedRects.length + 1), CABIN_SAFE_MAX_X),
+    y: origin.y,
     width: sourceRect.width,
     height: sourceRect.height,
+  };
+}
+
+function buildingReservedRect(building) {
+  const rect = readBuildingRect(building.text || building);
+  if (!rect) return null;
+  return isCabinBuildingBlock(building.text || building) ? cabinReservedRect(rect) : rect;
+}
+
+function moveCabinBlock(sourceBlock, placement) {
+  let next = replaceXmlTagValue(sourceBlock, "tileX", placement.x);
+  next = replaceXmlTagValue(next, "tileY", placement.y);
+  return next;
+}
+
+function relocateUnsafeCabins(xml, buildings) {
+  const replacements = [];
+  const occupiedRects = buildings
+    .filter((building) => !isCabinBuildingBlock(building.text))
+    .map((building) => buildingReservedRect(building))
+    .filter(Boolean);
+  let movedCabins = 0;
+
+  for (const cabin of buildings.filter((building) => isCabinBuildingBlock(building.text))) {
+    const rect = readBuildingRect(cabin.text);
+    if (!cabinNeedsRelocation(rect)) {
+      occupiedRects.push(cabinReservedRect(rect));
+      continue;
+    }
+
+    const placement = findCabinPlacement(cabin.text, occupiedRects);
+    const next = moveCabinBlock(cabin.text, placement);
+    if (next !== cabin.text) {
+      replacements.push({ start: cabin.start, end: cabin.end, text: next });
+      movedCabins += 1;
+    }
+    occupiedRects.push(cabinReservedRect(placement));
+  }
+
+  return {
+    xml: replacements.length ? applyTextReplacements(xml, replacements) : xml,
+    movedCabins,
+  };
+}
+
+function findNestedXmlBlocks(xml, tagName) {
+  const blocks = [];
+  const pattern = new RegExp(`<${escapeRegExp(tagName)}\\b[^>]*>|<\\/${escapeRegExp(tagName)}>`, "g");
+  let depth = 0;
+  let start = -1;
+  let match = null;
+
+  while ((match = pattern.exec(String(xml || ""))) !== null) {
+    const token = match[0];
+    if (token.startsWith("</")) {
+      if (depth === 0) continue;
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        blocks.push({
+          text: String(xml).slice(start, match.index + token.length),
+          start,
+          end: match.index + token.length,
+        });
+        start = -1;
+      }
+      continue;
+    }
+
+    if (/\/>$/.test(token)) continue;
+    if (depth === 0) start = match.index;
+    depth += 1;
+  }
+
+  return blocks;
+}
+
+function findChildXmlBlockRanges(xml, tagName) {
+  const ranges = [];
+  const stack = [];
+  const pattern = new RegExp(`<${escapeRegExp(tagName)}\\b[^>]*>|<\\/${escapeRegExp(tagName)}>`, "g");
+  let match = null;
+
+  while ((match = pattern.exec(String(xml || ""))) !== null) {
+    const token = match[0];
+    if (token.startsWith("</")) {
+      const start = stack.pop();
+      if (start == null) continue;
+      if (stack.length > 0) {
+        ranges.push({ start, end: match.index + token.length });
+      }
+      continue;
+    }
+    if (!/\/>$/.test(token)) stack.push(match.index);
+  }
+
+  return ranges;
+}
+
+function indexInRanges(index, ranges) {
+  return ranges.some((range) => index >= range.start && index < range.end);
+}
+
+function findFarmLocationBlock(xml) {
+  return findNestedXmlBlocks(xml, "GameLocation").find((block) => {
+    const opening = block.text.match(/^<GameLocation\b[^>]*>/)?.[0] || "";
+    return /\bxsi:type=(["'])Farm\1/.test(opening) || /<name>Farm<\/name>/.test(block.text);
+  }) || null;
+}
+
+function xmlCoordinate(value) {
+  const number = Number.parseFloat(String(value ?? "").trim());
+  return Number.isFinite(number) ? Math.floor(number) : null;
+}
+
+function vector2KeyPoint(xml) {
+  const match = String(xml || "").match(
+    /<key>\s*<Vector2>\s*<X>(-?\d+(?:\.\d+)?)<\/X>\s*<Y>(-?\d+(?:\.\d+)?)<\/Y>\s*<\/Vector2>\s*<\/key>/,
+  );
+  if (!match) return null;
+  const x = xmlCoordinate(match[1]);
+  const y = xmlCoordinate(match[2]);
+  return x == null || y == null ? null : { x, y };
+}
+
+function tileRectFromBlock(xml) {
+  const match = String(xml || "").match(
+    /<(?:tile|tilePosition)>\s*<X>(-?\d+(?:\.\d+)?)<\/X>\s*<Y>(-?\d+(?:\.\d+)?)<\/Y>\s*<\/(?:tile|tilePosition)>/,
+  );
+  if (!match) return null;
+  const x = xmlCoordinate(match[1]);
+  const y = xmlCoordinate(match[2]);
+  if (x == null || y == null) return null;
+  return {
+    x,
+    y,
+    width: xmlTagNumber(xml, "width") || 1,
+    height: xmlTagNumber(xml, "height") || 1,
+  };
+}
+
+function removeVectorKeyItemsInRects(xml, rects, ignoredRanges = []) {
+  const replacements = [];
+  for (const item of findNestedXmlBlocks(xml, "item")) {
+    if (indexInRanges(item.start, ignoredRanges)) continue;
+    const point = vector2KeyPoint(item.text);
+    if (!point || !pointInAnyRect(point, rects)) continue;
+    replacements.push({ start: item.start, end: item.end, text: "" });
+  }
+  return {
+    xml: replacements.length ? applyTextReplacements(xml, replacements) : xml,
+    removed: replacements.length,
+  };
+}
+
+function removeTileBlocksInRects(xml, tagName, rects, ignoredRanges = []) {
+  const replacements = [];
+  for (const block of findNestedXmlBlocks(xml, tagName)) {
+    if (indexInRanges(block.start, ignoredRanges)) continue;
+    const rect = tileRectFromBlock(block.text);
+    if (!rect || !rects.some((clearRect) => rectsOverlap(rect, clearRect))) continue;
+    replacements.push({ start: block.start, end: block.end, text: "" });
+  }
+  return {
+    xml: replacements.length ? applyTextReplacements(xml, replacements) : xml,
+    removed: replacements.length,
+  };
+}
+
+function clearFarmObstaclesForCabins(xml) {
+  const cabinClearRects = findBuildingBlocks(xml)
+    .filter((building) => isCabinBuildingBlock(building.text))
+    .map((building) => readBuildingRect(building.text))
+    .filter(Boolean)
+    .map((rect) => cabinReservedRect(rect));
+  if (!cabinClearRects.length) return { xml, clearedFarmObstacles: 0 };
+
+  const farm = findFarmLocationBlock(xml);
+  if (!farm) return { xml, clearedFarmObstacles: 0 };
+
+  let farmXml = farm.text;
+  let clearedFarmObstacles = 0;
+  const nestedLocationRanges = findChildXmlBlockRanges(farmXml, "GameLocation");
+  const itemClear = removeVectorKeyItemsInRects(farmXml, cabinClearRects, nestedLocationRanges);
+  farmXml = itemClear.xml;
+  clearedFarmObstacles += itemClear.removed;
+
+  for (const tagName of ["ResourceClump", "LargeTerrainFeature"]) {
+    const tileIgnoredRanges = findChildXmlBlockRanges(farmXml, "GameLocation");
+    const clear = removeTileBlocksInRects(farmXml, tagName, cabinClearRects, tileIgnoredRanges);
+    farmXml = clear.xml;
+    clearedFarmObstacles += clear.removed;
+  }
+
+  if (!clearedFarmObstacles) return { xml, clearedFarmObstacles: 0 };
+  return {
+    xml: `${xml.slice(0, farm.start)}${farmXml}${xml.slice(farm.end)}`,
+    clearedFarmObstacles,
   };
 }
 
@@ -910,18 +1147,30 @@ function patchCabinsXml(xml, targetCabins) {
     cabins = buildings.filter((building) => isCabinBuildingBlock(building.text));
   }
 
+  const relocated = relocateUnsafeCabins(currentXml, buildings);
+  currentXml = relocated.xml;
+  if (relocated.movedCabins) {
+    buildings = findBuildingBlocks(currentXml);
+    cabins = buildings.filter((building) => isCabinBuildingBlock(building.text));
+  }
+
   if (cabins.length >= targetCabins) {
-    const linkRepair = repairCabinFarmhandLinks(currentXml);
+    const clear = clearFarmObstaclesForCabins(currentXml);
+    const linkRepair = repairCabinFarmhandLinks(clear.xml);
     return {
       xml: linkRepair.xml,
       changed:
         normalized.fixedFarmhandIds > 0 ||
+        relocated.movedCabins > 0 ||
+        clear.clearedFarmObstacles > 0 ||
         linkRepair.fixedCabinReferences > 0 ||
         linkRepair.addedFarmhands > 0 ||
         linkRepair.fixedFarmhandHomes > 0,
       currentCabins: cabins.length,
       cabinCount: cabins.length,
       addedCabins: 0,
+      movedCabins: relocated.movedCabins,
+      clearedFarmObstacles: clear.clearedFarmObstacles,
       fixedFarmhandIds: normalized.fixedFarmhandIds,
       fixedCabinReferences: linkRepair.fixedCabinReferences,
       addedFarmhands: linkRepair.addedFarmhands,
@@ -934,22 +1183,26 @@ function patchCabinsXml(xml, targetCabins) {
 
   const existingIds = uniqueMultiplayerIds(currentXml);
   const sourceCabin = cabins[0].text;
-  const occupiedRects = buildings.map((building) => readBuildingRect(building.text)).filter(Boolean);
+  const occupiedRects = buildings.map((building) => buildingReservedRect(building)).filter(Boolean);
   const clones = [];
   for (let count = cabins.length; count < targetCabins; count += 1) {
     const placement = findCabinPlacement(sourceCabin, occupiedRects);
     clones.push(cloneCabinBlock(sourceCabin, placement, existingIds));
-    occupiedRects.push(placement);
+    occupiedRects.push(cabinReservedRect(placement));
   }
 
   const insertAt = cabins[cabins.length - 1].end;
-  const linked = repairCabinFarmhandLinks(`${currentXml.slice(0, insertAt)}${clones.join("")}${currentXml.slice(insertAt)}`);
+  const withClones = `${currentXml.slice(0, insertAt)}${clones.join("")}${currentXml.slice(insertAt)}`;
+  const clear = clearFarmObstaclesForCabins(withClones);
+  const linked = repairCabinFarmhandLinks(clear.xml);
   return {
     xml: linked.xml,
     changed: true,
     currentCabins: cabins.length,
     cabinCount: targetCabins,
     addedCabins: clones.length,
+    movedCabins: relocated.movedCabins,
+    clearedFarmObstacles: clear.clearedFarmObstacles,
     fixedFarmhandIds: normalized.fixedFarmhandIds,
     fixedCabinReferences: linked.fixedCabinReferences,
     addedFarmhands: linked.addedFarmhands,
@@ -1189,6 +1442,8 @@ async function patchSaveCabins(saveName, targetCabins) {
       currentCabins: patched.currentCabins,
       cabinCount: patched.cabinCount,
       addedCabins: patched.addedCabins,
+      movedCabins: patched.movedCabins,
+      clearedFarmObstacles: patched.clearedFarmObstacles,
       fixedFarmhandIds: patched.fixedFarmhandIds,
       fixedCabinReferences: patched.fixedCabinReferences,
       addedFarmhands: patched.addedFarmhands,
@@ -1229,7 +1484,7 @@ async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAt
       addOperationStep(
         steps,
         "已补齐新存档小屋",
-        `目标 ${targetCabins}，补建 ${cabinPatch.addedCabins || 0}，新增角色槽 ${cabinPatch.addedFarmhands || 0}`,
+        `目标 ${targetCabins}，补建 ${cabinPatch.addedCabins || 0}，移动 ${cabinPatch.movedCabins || 0}，清理障碍 ${cabinPatch.clearedFarmObstacles || 0}，新增角色槽 ${cabinPatch.addedFarmhands || 0}`,
       );
     } else {
       addOperationStep(steps, "无需补齐小屋", `目标小屋数 ${targetCabins}`);
@@ -3214,7 +3469,7 @@ const PAGE = String.raw`<!doctype html>
           </select>
         </label>
         <label class="field-4"><strong>房间总人数</strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
-        <label class="field-4"><strong>初始小屋数量</strong><input name="startingCabins" type="number" min="0" max="9" /></label>
+        <label class="field-4"><strong>初始小屋/角色槽</strong><input name="startingCabins" type="number" min="0" max="9" /></label>
         <label class="field-4"><strong>夜间怪物</strong>
           <select name="spawnMonstersAtNight">
             <option value="auto">自动</option>
@@ -3639,7 +3894,9 @@ const PAGE = String.raw`<!doctype html>
       if (result.cabinPatch) {
         lines.push(
           "小屋补丁：补建 " + (patch.addedCabins || 0) +
-            " 座，新增角色槽 " + (patch.addedFarmhands || 0) +
+            " 座，移动 " + (patch.movedCabins || 0) +
+            " 座，清理障碍 " + (patch.clearedFarmObstacles || 0) +
+            " 处，新增角色槽 " + (patch.addedFarmhands || 0) +
             " 个，修正引用 " + (patch.fixedCabinReferences || 0) + " 个。",
         );
         lines.push(patchVerificationText(patch));
@@ -4022,7 +4279,9 @@ const PAGE = String.raw`<!doctype html>
             savesMessage,
             "小屋已修复：" + result.saveName +
               "；补建 " + (patch.addedCabins || 0) +
-              " 座；新增角色槽 " + (patch.addedFarmhands || 0) +
+              " 座；移动 " + (patch.movedCabins || 0) +
+              " 座；清理障碍 " + (patch.clearedFarmObstacles || 0) +
+              " 处；新增角色槽 " + (patch.addedFarmhands || 0) +
               " 个；修正小屋引用 " + (patch.fixedCabinReferences || 0) +
               " 个；修正角色 ID " + (patch.fixedFarmhandIds || 0) +
               " 个；" + patchVerificationText(patch) +
