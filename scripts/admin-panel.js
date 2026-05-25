@@ -23,6 +23,8 @@ const STOP_AFTER_SAVE_CHECK_MS = 30000;
 const STOP_AFTER_SAVE_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const SMAPI_COMMAND_PIPE_TIMEOUT_MS = 90000;
 const SMAPI_COMMAND_PIPE_POLL_MS = 2000;
+const NEW_GAME_SAVE_WAIT_TIMEOUT_MS = 120000;
+const NEW_GAME_SAVE_WAIT_POLL_MS = 3000;
 const DEFAULT_AUTO_BACKUP_ENABLED = false;
 const DEFAULT_AUTO_BACKUP_INTERVAL_MINUTES = 360;
 const DEFAULT_BACKUP_RETENTION = 10;
@@ -30,6 +32,7 @@ const MIN_AUTO_BACKUP_INTERVAL_MINUTES = 15;
 const MAX_AUTO_BACKUP_INTERVAL_MINUTES = 10080;
 const MIN_BACKUP_RETENTION = 1;
 const MAX_BACKUP_RETENTION = 100;
+const CABIN_BUILDING_TYPES = new Set(["Cabin", "Log Cabin", "Plank Cabin", "Stone Cabin"]);
 
 let pendingStopAfterSave = null;
 let autoBackupTimer = null;
@@ -482,6 +485,163 @@ function validateSaveName(value) {
   return saveName;
 }
 
+function decodeXmlText(value) {
+  return String(value ?? "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function escapeXmlText(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function xmlTagValue(xml, tagName) {
+  const match = String(xml || "").match(new RegExp(`<${escapeRegExp(tagName)}>([\\s\\S]*?)<\\/${escapeRegExp(tagName)}>`));
+  return match ? decodeXmlText(match[1]) : null;
+}
+
+function xmlTagNumber(xml, tagName) {
+  const value = xmlTagValue(xml, tagName);
+  if (value == null || !/^-?\d+$/.test(String(value).trim())) return null;
+  return Number.parseInt(value, 10);
+}
+
+function replaceXmlTagValue(xml, tagName, value) {
+  const pattern = new RegExp(`(<${escapeRegExp(tagName)}>)[\\s\\S]*?(<\\/${escapeRegExp(tagName)}>)`);
+  return String(xml || "").replace(pattern, (_match, open, close) => `${open}${escapeXmlText(value)}${close}`);
+}
+
+function findBuildingBlocks(xml) {
+  const blocks = [];
+  const pattern = /<Building\b[^>]*>[\s\S]*?<\/Building>/g;
+  let match = null;
+  while ((match = pattern.exec(xml)) !== null) {
+    blocks.push({
+      text: match[0],
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+  return blocks;
+}
+
+function isCabinBuildingBlock(block) {
+  const buildingType = xmlTagValue(block, "buildingType");
+  return CABIN_BUILDING_TYPES.has(buildingType) || /<indoors\b[^>]*xsi:type="Cabin"/.test(block);
+}
+
+function readBuildingRect(block) {
+  const x = xmlTagNumber(block, "tileX");
+  const y = xmlTagNumber(block, "tileY");
+  if (x == null || y == null) return null;
+  return {
+    x,
+    y,
+    width: xmlTagNumber(block, "tilesWide") || 5,
+    height: xmlTagNumber(block, "tilesHigh") || 3,
+  };
+}
+
+function rectsOverlap(left, right) {
+  return (
+    left.x < right.x + right.width &&
+    left.x + left.width > right.x &&
+    left.y < right.y + right.height &&
+    left.y + left.height > right.y
+  );
+}
+
+function findCabinPlacement(sourceBlock, occupiedRects) {
+  const sourceRect = readBuildingRect(sourceBlock) || { x: 0, y: 0, width: 5, height: 3 };
+  const stepX = Math.max(sourceRect.width + 1, 6);
+  const stepY = Math.max(sourceRect.height + 1, 4);
+
+  // 优先在原始 Cabin 右侧和下方寻找空位，避免覆盖已有建筑。
+  for (let row = 0; row < 8; row += 1) {
+    for (let col = 0; col < 10; col += 1) {
+      const candidate = {
+        x: sourceRect.x + col * stepX,
+        y: sourceRect.y + row * stepY,
+        width: sourceRect.width,
+        height: sourceRect.height,
+      };
+      if (candidate.x < 0 || candidate.y < 0) continue;
+      if (occupiedRects.some((rect) => rectsOverlap(candidate, rect))) continue;
+      return candidate;
+    }
+  }
+
+  return {
+    x: sourceRect.x + stepX * (occupiedRects.length + 1),
+    y: sourceRect.y,
+    width: sourceRect.width,
+    height: sourceRect.height,
+  };
+}
+
+function uniqueCabinIndoorName(originalName, id) {
+  const prefix = String(originalName || "FarmHouse").replace(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    "",
+  );
+  return `${prefix || "FarmHouse"}${id}`;
+}
+
+function cloneCabinBlock(sourceBlock, placement) {
+  const id = crypto.randomUUID();
+  let next = replaceXmlTagValue(sourceBlock, "tileX", placement.x);
+  next = replaceXmlTagValue(next, "tileY", placement.y);
+  next = replaceXmlTagValue(next, "id", id);
+  const originalUniqueName = xmlTagValue(next, "uniqueName");
+  if (originalUniqueName != null) {
+    next = replaceXmlTagValue(next, "uniqueName", uniqueCabinIndoorName(originalUniqueName, id));
+  }
+  return next;
+}
+
+function patchCabinsXml(xml, targetCabins) {
+  const buildings = findBuildingBlocks(xml);
+  const cabins = buildings.filter((building) => isCabinBuildingBlock(building.text));
+  if (cabins.length >= targetCabins) {
+    return {
+      xml,
+      changed: false,
+      currentCabins: cabins.length,
+      cabinCount: cabins.length,
+      addedCabins: 0,
+    };
+  }
+  if (!cabins.length) {
+    throw new Error("No generated Cabin building was found in the new save.");
+  }
+
+  const sourceCabin = cabins[0].text;
+  const occupiedRects = buildings.map((building) => readBuildingRect(building.text)).filter(Boolean);
+  const clones = [];
+  for (let count = cabins.length; count < targetCabins; count += 1) {
+    const placement = findCabinPlacement(sourceCabin, occupiedRects);
+    clones.push(cloneCabinBlock(sourceCabin, placement));
+    occupiedRects.push(placement);
+  }
+
+  const insertAt = cabins[cabins.length - 1].end;
+  return {
+    xml: `${xml.slice(0, insertAt)}${clones.join("")}${xml.slice(insertAt)}`,
+    changed: true,
+    currentCabins: cabins.length,
+    cabinCount: targetCabins,
+    addedCabins: clones.length,
+  };
+}
+
 function validateBackupArchive(value) {
   const archive = String(value || "").trim();
   if (!BACKUP_ARCHIVE_PATTERN.test(archive) || path.basename(archive) !== archive) {
@@ -539,7 +699,10 @@ async function listSaves() {
     '  mtime="$(stat -c %Y "$dir" 2>/dev/null || echo 0)"',
     '  farm="$(sed -n \'s/.*<farmName>\\([^<]*\\)<\\/farmName>.*/\\1/p\' "$info" 2>/dev/null | head -n 1)"',
     '  farm_type="$(sed -n \'s/.*<whichFarm>\\([^<]*\\)<\\/whichFarm>.*/\\1/p\' "$main" 2>/dev/null | head -n 1)"',
-    '  cabins="$(grep -c \'<buildingType>Cabin</buildingType>\' "$main" 2>/dev/null || true)"',
+    '  indoor_count="$(grep -o \'<indoors[^>]*xsi:type="Cabin"\' "$main" 2>/dev/null | wc -l | tr -d \' \')"',
+    '  type_count="$(grep -E -o \'<buildingType>(Cabin|Log Cabin|Plank Cabin|Stone Cabin)</buildingType>\' "$main" 2>/dev/null | wc -l | tr -d \' \')"',
+    '  cabins="$indoor_count"',
+    '  [ "${cabins:-0}" -gt 0 ] || cabins="$type_count"',
     '  printf \'%s\\t%s\\t%s\\t%s\\t%s\\n\' "$name" "$mtime" "$farm" "$farm_type" "$cabins"',
     "done",
   ].join("\n");
@@ -560,7 +723,7 @@ async function listSaves() {
       const parsedCabinCount = /^\d+$/.test(cabinCount || "") ? Number(cabinCount) : 0;
       return {
         name: tsv(name),
-        farmName: tsv(farmName) || "Unknown",
+        farmName: decodeXmlText(tsv(farmName)) || "Unknown",
         farmType: parsedFarmType,
         cabinCount: parsedCabinCount,
         updatedAt: updatedMs > 0 ? new Date(updatedMs).toISOString() : null,
@@ -570,6 +733,156 @@ async function listSaves() {
     .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
 
   return { volumeExists: true, saves };
+}
+
+async function waitForNewGameSave(farmName, sinceMs, timeoutMs = NEW_GAME_SAVE_WAIT_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  const minUpdatedMs = Math.max(0, Number(sinceMs || 0) - 10000);
+  let lastSeen = "";
+
+  while (Date.now() < deadline) {
+    const { saves } = await listSaves();
+    lastSeen = saves
+      .map((save) => `${save.name}:${save.farmName}:cabins=${save.cabinCount}:${save.updatedAt || "unknown"}`)
+      .join(", ");
+    const exact = saves.find((save) => {
+      const updatedMs = save.updatedAt ? Date.parse(save.updatedAt) : 0;
+      return save.cabinCount > 0 && save.farmName === farmName && (!updatedMs || updatedMs >= minUpdatedMs);
+    });
+    if (exact) return exact;
+
+    const recent = saves.find((save) => {
+      const updatedMs = save.updatedAt ? Date.parse(save.updatedAt) : 0;
+      return save.cabinCount > 0 && updatedMs >= minUpdatedMs;
+    });
+    if (recent) return recent;
+
+    await delay(NEW_GAME_SAVE_WAIT_POLL_MS);
+  }
+
+  throw new Error(`New save was not found after creating farm ${farmName}. Last seen saves: ${lastSeen || "none"}`);
+}
+
+async function copySaveFileFromVolume(saveName, tempDir) {
+  const script = `set -eu
+case "$SDV_SAVE_NAME" in ""|"."|".."|*/*|*\\\\*) echo "Unsafe save name."; exit 64;; esac
+src="/saves/Saves/$SDV_SAVE_NAME/$SDV_SAVE_NAME"
+if [ ! -f "$src" ]; then
+  echo "Save file not found: $SDV_SAVE_NAME"
+  exit 1
+fi
+cp "$src" /work/save.xml`;
+
+  const result = await docker(
+    [
+      "run",
+      "--rm",
+      "-e",
+      `SDV_SAVE_NAME=${saveName}`,
+      "-v",
+      `${SAVES_VOLUME}:/saves:ro`,
+      "-v",
+      `${tempDir}:/work`,
+      "alpine:3.20",
+      "sh",
+      "-c",
+      script,
+    ],
+    { timeoutMs: 30000 },
+  );
+  if (!result.ok) {
+    throw new Error(await sanitize(result.stderr || result.stdout || "Failed to copy save file."));
+  }
+}
+
+async function writeSaveFileToVolume(saveName, tempDir) {
+  const script = `set -eu
+case "$SDV_SAVE_NAME" in ""|"."|".."|*/*|*\\\\*) echo "Unsafe save name."; exit 64;; esac
+target="/saves/Saves/$SDV_SAVE_NAME/$SDV_SAVE_NAME"
+if [ ! -f "$target" ]; then
+  echo "Save file not found: $SDV_SAVE_NAME"
+  exit 1
+fi
+cp /work/save.xml "$target.tmp"
+mv "$target.tmp" "$target"
+chown 1000:1000 "$target" 2>/dev/null || true`;
+
+  const result = await docker(
+    [
+      "run",
+      "--rm",
+      "-e",
+      `SDV_SAVE_NAME=${saveName}`,
+      "-v",
+      `${SAVES_VOLUME}:/saves`,
+      "-v",
+      `${tempDir}:/work:ro`,
+      "alpine:3.20",
+      "sh",
+      "-c",
+      script,
+    ],
+    { timeoutMs: 30000 },
+  );
+  if (!result.ok) {
+    throw new Error(await sanitize(result.stderr || result.stdout || "Failed to write save file."));
+  }
+}
+
+async function patchSaveCabins(saveName, targetCabins) {
+  const safeSaveName = validateSaveName(saveName);
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "sdv-cabins-"));
+  try {
+    await copySaveFileFromVolume(safeSaveName, tempDir);
+    const saveFile = path.join(tempDir, "save.xml");
+    const xml = await fsp.readFile(saveFile, "utf8");
+    const patched = patchCabinsXml(xml, targetCabins);
+    if (patched.changed) {
+      await fsp.writeFile(saveFile, patched.xml, "utf8");
+      await writeSaveFileToVolume(safeSaveName, tempDir);
+    }
+
+    return {
+      saveName: safeSaveName,
+      targetCabins,
+      currentCabins: patched.currentCabins,
+      cabinCount: patched.cabinCount,
+      addedCabins: patched.addedCabins,
+      patched: patched.changed,
+    };
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs) {
+  if (targetCabins <= 1) {
+    return {
+      ...(await restartStack()),
+      cabinPatch: null,
+    };
+  }
+
+  const save = await waitForNewGameSave(farmName, newGameStartedAtMs);
+  const down = await compose(["down"], { timeoutMs: 120000 });
+  if (!down.ok) {
+    throw new Error(await sanitize(down.stderr || down.stdout || "docker compose down failed"));
+  }
+
+  try {
+    const cabinPatch = await patchSaveCabins(save.name, targetCabins);
+    const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+    if (!up.ok) {
+      throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
+    }
+    return {
+      message: "Server stack restarted.",
+      cabinPatch,
+    };
+  } catch (error) {
+    await compose(["up", "-d"], { timeoutMs: 120000 }).catch(() => {});
+    throw error;
+  }
 }
 
 async function listBackups() {
@@ -1304,6 +1617,8 @@ async function createNewGame(payload) {
   }
 
   const savedConfig = await saveNewGameConfig(payload);
+  const targetCabins = savedConfig.settings.Game.StartingCabins;
+  const newGameStartedAtMs = Date.now();
   let preNewGameBackup = null;
   if (volumeExistsBefore) {
     preNewGameBackup = await createSavesBackup(`Automatic backup before creating new farm ${farmName}.`);
@@ -1314,14 +1629,24 @@ async function createNewGame(payload) {
     if (!up.ok) {
       throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
     }
+    let cabinPatch = null;
+    let restarted = false;
+    let message = "Server stack started. A new farm will be created from the saved settings.";
+    if (targetCabins > 1) {
+      const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs);
+      cabinPatch = restart.cabinPatch;
+      restarted = true;
+      message = restart.message;
+    }
     return {
       farmName,
       settings: savedConfig.settings,
       preNewGameBackup: null,
       commandStartedServer: true,
       readiness,
-      restarted: false,
-      message: "Server stack started. A new farm will be created from the saved settings.",
+      restarted,
+      cabinPatch,
+      message,
     };
   }
 
@@ -1334,7 +1659,7 @@ async function createNewGame(payload) {
 
   const commandState = await ensureServerReadyForSmapiCommand();
   await sendSmapiCommand("settings newgame --confirm");
-  const restart = await restartStack();
+  const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs);
 
   return {
     farmName,
@@ -1343,6 +1668,7 @@ async function createNewGame(payload) {
     commandStartedServer: commandState.started,
     readiness,
     restarted: true,
+    cabinPatch: restart.cabinPatch,
     message: restart.message,
   };
 }
