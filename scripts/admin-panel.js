@@ -1325,6 +1325,13 @@ async function createNewGame(payload) {
     };
   }
 
+  if (wasRunning) {
+    const down = await compose(["down"], { timeoutMs: 120000 });
+    if (!down.ok) {
+      throw new Error(await sanitize(down.stderr || down.stdout || "docker compose down failed"));
+    }
+  }
+
   const commandState = await ensureServerReadyForSmapiCommand();
   await sendSmapiCommand("settings newgame --confirm");
   const restart = await restartStack();
@@ -3253,6 +3260,30 @@ const PAGE = String.raw`<!doctype html>
       document.querySelector("#logs").textContent = logs.logs;
     });
 
+    let backgroundPollTimer = null;
+    let backgroundPollInFlight = false;
+    function startBackgroundPolling() {
+      if (backgroundPollTimer) return;
+      backgroundPollTimer = setInterval(async () => {
+        if (document.hidden) return;
+        if (backgroundPollInFlight) return;
+        if (authPanel && !authPanel.classList.contains("hidden")) return;
+        backgroundPollInFlight = true;
+        try {
+          await loadAll();
+        } catch (_) {
+          // ignore transient polling errors so the loop keeps going
+        } finally {
+          backgroundPollInFlight = false;
+        }
+      }, 8000);
+    }
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        loadAll().catch(() => {});
+      }
+    });
+
     (async function boot() {
       const params = new URLSearchParams(location.search);
       const token = params.get("token");
@@ -3264,6 +3295,7 @@ const PAGE = String.raw`<!doctype html>
       }
       try {
         await loadAll();
+        startBackgroundPolling();
       } catch (_) {
         authPanel.classList.remove("hidden");
       }
