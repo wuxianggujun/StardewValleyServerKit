@@ -595,7 +595,77 @@ function uniqueCabinIndoorName(originalName, id) {
   return `${prefix || "FarmHouse"}${id}`;
 }
 
-function cloneCabinBlock(sourceBlock, placement) {
+function uniqueMultiplayerIds(xml) {
+  const ids = new Set();
+  const pattern = /<UniqueMultiplayerID>(-?\d+)<\/UniqueMultiplayerID>/g;
+  let match = null;
+  while ((match = pattern.exec(String(xml || ""))) !== null) {
+    ids.add(match[1]);
+  }
+  return ids;
+}
+
+function firstUniqueMultiplayerId(xml) {
+  const match = String(xml || "").match(/<UniqueMultiplayerID>(-?\d+)<\/UniqueMultiplayerID>/);
+  return match ? match[1] : null;
+}
+
+function newUniqueMultiplayerId(existingIds) {
+  const maxSignedLong = (1n << 63n) - 1n;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const value = BigInt(`0x${crypto.randomBytes(8).toString("hex")}`) & maxSignedLong;
+    const id = value === 0n ? "1" : value.toString();
+    if (!existingIds.has(id)) {
+      existingIds.add(id);
+      return id;
+    }
+  }
+  throw new Error("Failed to generate a unique farmhand ID.");
+}
+
+function replaceUniqueMultiplayerIds(xml, id) {
+  if (!/<UniqueMultiplayerID>-?\d+<\/UniqueMultiplayerID>/.test(String(xml || ""))) {
+    throw new Error("Generated Cabin does not contain farmhand multiplayer data.");
+  }
+  return String(xml || "").replace(
+    /(<UniqueMultiplayerID>)-?\d+(<\/UniqueMultiplayerID>)/g,
+    `$1${id}$2`,
+  );
+}
+
+function normalizeCabinFarmhandIds(xml, cabins) {
+  const existingIds = uniqueMultiplayerIds(xml);
+  const seenCabinIds = new Set();
+  const replacements = [];
+
+  for (const cabin of cabins) {
+    const id = firstUniqueMultiplayerId(cabin.text);
+    if (!id) continue;
+    if (!seenCabinIds.has(id)) {
+      seenCabinIds.add(id);
+      continue;
+    }
+    const replacementId = newUniqueMultiplayerId(existingIds);
+    replacements.push({
+      start: cabin.start,
+      end: cabin.end,
+      text: replaceUniqueMultiplayerIds(cabin.text, replacementId),
+    });
+    seenCabinIds.add(replacementId);
+  }
+
+  if (!replacements.length) {
+    return { xml, fixedFarmhandIds: 0 };
+  }
+
+  let nextXml = xml;
+  for (const replacement of replacements.reverse()) {
+    nextXml = `${nextXml.slice(0, replacement.start)}${replacement.text}${nextXml.slice(replacement.end)}`;
+  }
+  return { xml: nextXml, fixedFarmhandIds: replacements.length };
+}
+
+function cloneCabinBlock(sourceBlock, placement, existingIds) {
   const id = crypto.randomUUID();
   let next = replaceXmlTagValue(sourceBlock, "tileX", placement.x);
   next = replaceXmlTagValue(next, "tileY", placement.y);
@@ -604,41 +674,53 @@ function cloneCabinBlock(sourceBlock, placement) {
   if (originalUniqueName != null) {
     next = replaceXmlTagValue(next, "uniqueName", uniqueCabinIndoorName(originalUniqueName, id));
   }
+  next = replaceUniqueMultiplayerIds(next, newUniqueMultiplayerId(existingIds));
   return next;
 }
 
 function patchCabinsXml(xml, targetCabins) {
-  const buildings = findBuildingBlocks(xml);
-  const cabins = buildings.filter((building) => isCabinBuildingBlock(building.text));
+  let currentXml = xml;
+  let buildings = findBuildingBlocks(currentXml);
+  let cabins = buildings.filter((building) => isCabinBuildingBlock(building.text));
+  const normalized = normalizeCabinFarmhandIds(currentXml, cabins);
+  currentXml = normalized.xml;
+  if (normalized.fixedFarmhandIds) {
+    buildings = findBuildingBlocks(currentXml);
+    cabins = buildings.filter((building) => isCabinBuildingBlock(building.text));
+  }
+
   if (cabins.length >= targetCabins) {
     return {
-      xml,
-      changed: false,
+      xml: currentXml,
+      changed: normalized.fixedFarmhandIds > 0,
       currentCabins: cabins.length,
       cabinCount: cabins.length,
       addedCabins: 0,
+      fixedFarmhandIds: normalized.fixedFarmhandIds,
     };
   }
   if (!cabins.length) {
     throw new Error("No generated Cabin building was found in the new save.");
   }
 
+  const existingIds = uniqueMultiplayerIds(currentXml);
   const sourceCabin = cabins[0].text;
   const occupiedRects = buildings.map((building) => readBuildingRect(building.text)).filter(Boolean);
   const clones = [];
   for (let count = cabins.length; count < targetCabins; count += 1) {
     const placement = findCabinPlacement(sourceCabin, occupiedRects);
-    clones.push(cloneCabinBlock(sourceCabin, placement));
+    clones.push(cloneCabinBlock(sourceCabin, placement, existingIds));
     occupiedRects.push(placement);
   }
 
   const insertAt = cabins[cabins.length - 1].end;
   return {
-    xml: `${xml.slice(0, insertAt)}${clones.join("")}${xml.slice(insertAt)}`,
+    xml: `${currentXml.slice(0, insertAt)}${clones.join("")}${currentXml.slice(insertAt)}`,
     changed: true,
     currentCabins: cabins.length,
     cabinCount: targetCabins,
     addedCabins: clones.length,
+    fixedFarmhandIds: normalized.fixedFarmhandIds,
   };
 }
 
@@ -848,6 +930,7 @@ async function patchSaveCabins(saveName, targetCabins) {
       currentCabins: patched.currentCabins,
       cabinCount: patched.cabinCount,
       addedCabins: patched.addedCabins,
+      fixedFarmhandIds: patched.fixedFarmhandIds,
       patched: patched.changed,
     };
   } finally {
@@ -1159,7 +1242,7 @@ async function runtimeSignals() {
   const inviteMatch = sanitized.match(/^invite_code=(.*)$/m);
   const logs = sanitized
     .split(/\r?\n/)
-    .filter((line) => !/Connected to the docker container shell|Exit and run 'make cli'/.test(line))
+    .filter((line) => !/^invite_code=|Connected to the docker container shell|Exit and run 'make cli'/.test(line))
     .join("\n");
   return {
     inviteCode: inviteMatch ? inviteMatch[1].trim() : "n/a",
@@ -1244,14 +1327,7 @@ async function getStatus() {
     playerManagement,
     shutdownReadiness,
     shutdownJob: getStopAfterSaveJob(),
-    recentSignals: signals.logs
-      .split(/\r?\n/)
-      .filter((line) =>
-        /Healthcheck|SaveGame\.Save|Client connected|has joined|disconnected|NoMatch|ERROR|Exception|StartSleep|IP connections enabled/i.test(
-          line,
-        ),
-      )
-      .slice(-80),
+    recentSignals: signals.logs.split(/\r?\n/).filter(Boolean).slice(-260),
   };
 }
 
@@ -1526,7 +1602,7 @@ function isSafeForImmediateRestart(readiness) {
 }
 
 async function latestLogs() {
-  const logs = await compose(["logs", "--tail", "160", "--no-color", "server", "steam-auth"], { timeoutMs: 12000 });
+  const logs = await compose(["logs", "--tail", "1200", "--no-color", "server", "steam-auth"], { timeoutMs: 12000 });
   return { logs: await sanitize(logs.stdout || logs.stderr || "") };
 }
 
@@ -1671,6 +1747,65 @@ async function createNewGame(payload) {
     cabinPatch: restart.cabinPatch,
     message: restart.message,
   };
+}
+
+async function repairSaveCabins(payload) {
+  const saveName = validateSaveName(payload.saveName);
+  if (payload.confirm !== saveName) {
+    throw new Error("Repair confirmation did not match the save name.");
+  }
+
+  const { saves } = await listSaves();
+  if (!saves.some((save) => save.name === saveName)) {
+    throw new Error(`Save not found: ${saveName}`);
+  }
+
+  const settings = await readSettings();
+  const targetCabins = intInRange(
+    payload.targetCabins ?? settings.Game.StartingCabins,
+    "Target cabins",
+    1,
+    9,
+  );
+  const wasRunning = await isServerContainerRunning();
+  let readiness = null;
+  if (wasRunning) {
+    readiness = await collectShutdownReadiness();
+    if (!isSafeForImmediateRestart(readiness) && payload.force !== true) {
+      throw apiError(409, readiness.message);
+    }
+
+    const down = await compose(["down"], { timeoutMs: 120000 });
+    if (!down.ok) {
+      throw new Error(await sanitize(down.stderr || down.stdout || "docker compose down failed"));
+    }
+  }
+
+  try {
+    const preRepairBackup = await createSavesBackup(`Automatic backup before repairing cabins in save ${saveName}.`);
+    const cabinPatch = await patchSaveCabins(saveName, targetCabins);
+
+    if (wasRunning) {
+      const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+      if (!up.ok) {
+        throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
+      }
+    }
+
+    return {
+      saveName,
+      targetCabins,
+      preRepairBackup: preRepairBackup.archive,
+      readiness,
+      restarted: wasRunning,
+      cabinPatch,
+    };
+  } catch (error) {
+    if (wasRunning) {
+      await compose(["up", "-d"], { timeoutMs: 120000 }).catch(() => {});
+    }
+    throw error;
+  }
 }
 
 async function deleteSave(payload) {
@@ -2079,6 +2214,10 @@ async function handleApi(req, res, pathname) {
     json(res, 200, await createNewGame(await readJsonBody(req)));
     return;
   }
+  if (pathname === "/api/saves/repair-cabins" && req.method === "POST") {
+    json(res, 200, await repairSaveCabins(await readJsonBody(req)));
+    return;
+  }
   if (pathname === "/api/saves/delete" && req.method === "POST") {
     json(res, 200, await deleteSave(await readJsonBody(req)));
     return;
@@ -2369,8 +2508,8 @@ const PAGE = String.raw`<!doctype html>
     }
     pre {
       margin: 0;
-      min-height: 220px;
-      max-height: 420px;
+      min-height: 360px;
+      max-height: 65vh;
       overflow: auto;
       white-space: pre-wrap;
       background: #111827;
@@ -2378,6 +2517,7 @@ const PAGE = String.raw`<!doctype html>
       border-radius: 6px;
       padding: 12px;
       font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+      resize: vertical;
     }
     .notice {
       border-left: 3px solid var(--amber);
@@ -2638,7 +2778,10 @@ const PAGE = String.raw`<!doctype html>
       <div class="panel span-12">
         <div class="section-title">
           <h2>最近日志</h2>
-          <button id="loadLogsBtn" type="button">读取完整日志</button>
+          <div class="toolbar">
+            <button id="loadLogsBtn" type="button">刷新更多日志</button>
+            <button id="copyLogsBtn" type="button">复制日志</button>
+          </div>
         </div>
         <pre id="logs"></pre>
       </div>
@@ -2743,12 +2886,26 @@ const PAGE = String.raw`<!doctype html>
     const confirmDialogHint = document.querySelector("#confirmDialogHint");
     const confirmDialogCancelBtn = document.querySelector("#confirmDialogCancelBtn");
     const confirmDialogActionBtn = document.querySelector("#confirmDialogActionBtn");
+    const logsPanel = document.querySelector("#logs");
+    const loadLogsBtn = document.querySelector("#loadLogsBtn");
+    const copyLogsBtn = document.querySelector("#copyLogsBtn");
     let hasConfig = false;
     let shutdownPollTimer = null;
+    let logsMode = "recent";
 
     function setMessage(target, text, type) {
       target.textContent = text || "";
       target.className = "message" + (type ? " " + type : "");
+    }
+
+    function setLogsText(text, mode) {
+      const shouldStickToBottom =
+        logsPanel.scrollHeight - logsPanel.scrollTop - logsPanel.clientHeight < 48;
+      logsPanel.textContent = text || "";
+      logsMode = mode || logsMode;
+      if (shouldStickToBottom || mode === "full") {
+        logsPanel.scrollTop = logsPanel.scrollHeight;
+      }
     }
 
     function exactConfirm(options) {
@@ -2949,6 +3106,7 @@ const PAGE = String.raw`<!doctype html>
               ' · 更新：' + escapeHtml(formatDateTime(save.updatedAt)) + '</span></div>' +
             '<div class="manage-actions">' +
               '<button data-action="select-save" data-name="' + escapeHtml(save.name) + '">下次加载</button>' +
+              '<button data-action="repair-cabins" data-name="' + escapeHtml(save.name) + '">修复小屋</button>' +
               '<button class="danger" data-action="delete-save" data-name="' + escapeHtml(save.name) + '">删除</button>' +
             '</div>' +
           '</div>'
@@ -3186,7 +3344,9 @@ const PAGE = String.raw`<!doctype html>
         ? data.stats.map((item) => row(item.name, escapeHtml((item.cpu || "") + " / " + (item.memory || "")))).join("")
         : '<p class="muted">未读取到资源占用。</p>';
 
-      document.querySelector("#logs").textContent = data.recentSignals.join("\n");
+      if (logsMode === "recent") {
+        setLogsText(data.recentSignals.join("\n"), "recent");
+      }
     }
 
     async function loadAll() {
@@ -3412,6 +3572,51 @@ const PAGE = String.raw`<!doctype html>
           return;
         }
 
+        if (action === "repair-cabins") {
+          const saveName = button.dataset.name;
+          const confirmText = await exactConfirm({
+            title: "修复小屋",
+            message:
+              "这会先备份整个 saves 卷，然后停止服务端，修复该存档里重复的小屋角色 ID，并按当前配置补齐小屋。完成后会重新启动服务端。\n\n" +
+              "请输入完整存档名确认。",
+            value: saveName,
+            actionText: "修复小屋",
+          });
+          if (confirmText !== saveName) return;
+
+          async function submit(force) {
+            return request("/api/saves/repair-cabins", {
+              method: "POST",
+              body: JSON.stringify({ saveName, confirm: confirmText, force }),
+            });
+          }
+
+          setMessage(savesMessage, "正在备份并修复小屋...");
+          let result;
+          try {
+            result = await submit(false);
+          } catch (error) {
+            if (error.status !== 409) throw error;
+            if (!confirm(error.message + "\n\n仍然强制修复该存档的小屋？")) return;
+            setMessage(savesMessage, "正在强制备份并修复小屋...");
+            result = await submit(true);
+          }
+
+          hasConfig = false;
+          await loadAll();
+          const patch = result.cabinPatch || {};
+          const restartText = result.restarted ? "；服务端已重启" : "";
+          setMessage(
+            savesMessage,
+            "小屋已修复：" + result.saveName +
+              "；补建 " + (patch.addedCabins || 0) +
+              " 座；修正角色 ID " + (patch.fixedFarmhandIds || 0) +
+              " 个；执行前备份：" + result.preRepairBackup + restartText,
+            "ok",
+          );
+          return;
+        }
+
         if (action === "delete-save") {
           const saveName = button.dataset.name;
           const confirmText = await exactConfirm({
@@ -3581,9 +3786,36 @@ const PAGE = String.raw`<!doctype html>
       }
     });
 
-    document.querySelector("#loadLogsBtn").addEventListener("click", async () => {
-      const logs = await request("/api/logs");
-      document.querySelector("#logs").textContent = logs.logs;
+    loadLogsBtn.addEventListener("click", async () => {
+      loadLogsBtn.disabled = true;
+      try {
+        const logs = await request("/api/logs");
+        setLogsText(logs.logs, "full");
+      } finally {
+        loadLogsBtn.disabled = false;
+      }
+    });
+
+    copyLogsBtn.addEventListener("click", async () => {
+      const text = logsPanel.textContent || "";
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        copyLogsBtn.textContent = "已复制";
+        setTimeout(() => {
+          copyLogsBtn.textContent = "复制日志";
+        }, 1600);
+      } catch (_) {
+        const range = document.createRange();
+        range.selectNodeContents(logsPanel);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        copyLogsBtn.textContent = "已选中";
+        setTimeout(() => {
+          copyLogsBtn.textContent = "复制日志";
+        }, 1600);
+      }
     });
 
     let backgroundPollTimer = null;
