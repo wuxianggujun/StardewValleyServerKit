@@ -1189,7 +1189,11 @@ function addOperationStep(steps, label, detail = "") {
 
 async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps = []) {
   const save = await waitForNewGameSave(farmName, newGameStartedAtMs);
-  addOperationStep(steps, "已确认新存档生成", save.name);
+  const selectedSaveName = validateSaveName(save.name);
+  addOperationStep(steps, "已确认新存档生成", selectedSaveName);
+
+  await sendSmapiCommand(`saves select ${selectedSaveName} --confirm`);
+  addOperationStep(steps, "已自动设为下次加载", selectedSaveName);
 
   const down = await compose(["down"], { timeoutMs: 120000 });
   if (!down.ok) {
@@ -1198,7 +1202,7 @@ async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAt
   addOperationStep(steps, "已停止服务端", "准备写入新存档补丁并重新启动。");
 
   try {
-    const cabinPatch = targetCabins > 1 ? await patchSaveCabins(save.name, targetCabins) : null;
+    const cabinPatch = targetCabins > 1 ? await patchSaveCabins(selectedSaveName, targetCabins) : null;
     if (cabinPatch) {
       addOperationStep(
         steps,
@@ -1221,7 +1225,8 @@ async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAt
     );
     return {
       message: "Server stack restarted.",
-      newSaveName: save.name,
+      newSaveName: selectedSaveName,
+      selectedSaveName,
       cabinPatch,
       restarted: true,
       restartVerified: stackRestartVerified(stackState),
@@ -2032,6 +2037,7 @@ async function createNewGame(payload) {
       restarted: restart.restarted,
       restartVerified: restart.restartVerified,
       newSaveName: restart.newSaveName,
+      selectedSaveName: restart.selectedSaveName,
       stackState: restart.stackState,
       cabinPatch: restart.cabinPatch,
       steps,
@@ -2064,6 +2070,7 @@ async function createNewGame(payload) {
     restarted: restart.restarted,
     restartVerified: restart.restartVerified,
     newSaveName: restart.newSaveName,
+    selectedSaveName: restart.selectedSaveName,
     stackState: restart.stackState,
     cabinPatch: restart.cabinPatch,
     steps,
@@ -3063,7 +3070,7 @@ const PAGE = String.raw`<!doctype html>
           </div>
         </div>
         <div class="notice">
-          选择存档只设置下次重启要加载的存档。创建地图会打开独立表单，保存新农场配置后调用服务端官方 newgame 命令并重启。删除存档会先自动备份整个 saves 卷，再只移除选中的存档目录。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
+          选择存档只设置下次重启要加载的存档。创建地图会打开独立表单，保存新农场配置后调用服务端官方 newgame 命令，自动把新存档设为下次加载并重启。删除存档会先自动备份整个 saves 卷，再只移除选中的存档目录。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
         </div>
         <div class="backup-policy">
           <label class="field-3 checkline"><input id="autoBackupEnabled" type="checkbox" />自动备份</label>
@@ -3120,7 +3127,7 @@ const PAGE = String.raw`<!doctype html>
   <div id="createMapDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="createMapTitle">
     <form id="createMapForm" class="modal-panel">
       <h2 id="createMapTitle">创建地图</h2>
-      <p class="modal-message">填写新农场信息后，面板会保存这些新地图配置，再调用服务端官方 newgame 命令并重启。旧存档不会删除。</p>
+      <p class="modal-message">填写新农场信息后，面板会保存这些新地图配置，再调用服务端官方 newgame 命令，自动选择新存档并重启。旧存档不会删除。</p>
       <fieldset>
         <label class="field-6"><strong>农场名称</strong><input name="farmName" maxlength="48" /></label>
         <label class="field-6"><strong>地图类型</strong><select name="farmType"></select></label>
@@ -3533,6 +3540,7 @@ const PAGE = String.raw`<!doctype html>
       const lines = [
         "新地图已创建：" + result.farmName,
         result.newSaveName ? "新存档：" + result.newSaveName : "",
+        result.selectedSaveName ? "已自动设为下次加载：" + result.selectedSaveName : "",
         result.preNewGameBackup ? "执行前备份：" + result.preNewGameBackup : "",
         result.restarted
           ? (result.restartVerified ? "服务端重启已确认。" : "已执行重启命令，但未确认到 running 状态。")
@@ -3825,7 +3833,7 @@ const PAGE = String.raw`<!doctype html>
       }
 
       submitBtn.disabled = true;
-      setMessage(createMapMessage, "正在执行真实创建流程，完成前不会显示成功。\n正在保存配置、备份、发送 newgame、等待新存档并重启服务端...");
+      setMessage(createMapMessage, "正在执行真实创建流程，完成前不会显示成功。\n正在保存配置、备份、发送 newgame、等待新存档、自动选择新存档并重启服务端...");
       try {
         let result;
         try {
