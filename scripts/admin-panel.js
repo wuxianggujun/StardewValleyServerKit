@@ -2873,6 +2873,40 @@ const PAGE = String.raw`<!doctype html>
       margin: 60px auto;
     }
     .hidden { display: none !important; }
+    .tabs {
+      display: flex;
+      gap: 2px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      background: transparent;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: 10px 16px;
+      color: var(--muted);
+      font-size: 14px;
+      cursor: pointer;
+      min-height: 40px;
+      margin-bottom: -1px;
+    }
+    .tab-btn:hover {
+      color: var(--text);
+      background: #f1f3f7;
+    }
+    .tab-btn.active {
+      color: var(--blue);
+      border-bottom-color: var(--blue);
+      font-weight: 600;
+    }
+    .tab-pane {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 14px;
+    }
+    .tab-pane.hidden { display: none !important; }
     .message {
       min-height: 22px;
       color: var(--muted);
@@ -2956,170 +2990,188 @@ const PAGE = String.raw`<!doctype html>
       </form>
     </section>
 
-    <section id="appPanel" class="grid hidden">
-      <div class="panel span-4">
-        <div class="section-title">
-          <h2>运行状态</h2>
-          <span id="generatedAt" class="hint"></span>
-        </div>
-        <div id="healthList" class="status-list"></div>
+    <section id="appPanel" class="hidden">
+      <div class="tabs" role="tablist">
+        <button class="tab-btn active" type="button" data-tab="overview" role="tab">概览</button>
+        <button class="tab-btn" type="button" data-tab="players" role="tab">玩家</button>
+        <button class="tab-btn" type="button" data-tab="saves" role="tab">存档</button>
+        <button class="tab-btn" type="button" data-tab="config" role="tab">配置</button>
+        <button class="tab-btn" type="button" data-tab="logs" role="tab">日志</button>
       </div>
 
-      <div class="panel span-4">
-        <div class="section-title">
-          <h2>加入信息</h2>
+      <div class="tab-pane" data-pane="overview">
+        <div class="panel span-6">
+          <div class="section-title">
+            <h2>运行状态</h2>
+            <span id="generatedAt" class="hint"></span>
+          </div>
+          <div id="healthList" class="status-list"></div>
         </div>
-        <div id="joinInfo" class="kv-list"></div>
+
+        <div class="panel span-6">
+          <div class="section-title">
+            <h2>加入信息</h2>
+          </div>
+          <div id="joinInfo" class="kv-list"></div>
+        </div>
+
+        <div class="panel span-4">
+          <div class="section-title">
+            <h2>玩家摘要</h2>
+          </div>
+          <div id="players" class="players"></div>
+        </div>
+
+        <div class="panel span-4">
+          <div class="section-title">
+            <h2>端口映射</h2>
+          </div>
+          <div id="ports" class="kv-list"></div>
+        </div>
+
+        <div class="panel span-4">
+          <div class="section-title">
+            <h2>资源占用</h2>
+          </div>
+          <div id="stats" class="kv-list"></div>
+        </div>
       </div>
 
-      <div class="panel span-4">
-        <div class="section-title">
-          <h2>玩家摘要</h2>
-        </div>
-        <div id="players" class="players"></div>
-      </div>
-
-      <div id="playerManagerPanel" class="panel span-12">
-        <div class="section-title">
-          <h2>玩家管理</h2>
-          <div class="toolbar">
-            <button id="refreshPlayersBtn" type="button">刷新玩家</button>
-          </div>
-        </div>
-        <div class="notice">
-          玩家名称来自服务端 HTTP API；当前镜像没有开放面板直接踢出/封禁的接口，相关按钮会明确标记为不可用。
-        </div>
-        <div id="playersMessage" class="message"></div>
-        <div class="manage-grid">
-          <div class="manage-column">
-            <h3>在线玩家</h3>
-            <div id="onlinePlayersList" class="manage-list"></div>
-          </div>
-          <div class="manage-column">
-            <h3>农场角色</h3>
-            <div id="farmhandsList" class="manage-list"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel span-12">
-        <div class="section-title">
-          <h2>开服配置</h2>
-          <span class="hint">这里只保存服务端运行配置；地图创建在存档管理里单独完成。</span>
-        </div>
-        <div id="runtimeFarmNotice" class="notice hidden"></div>
-        <form id="configForm">
-          <fieldset>
-            <legend>联机</legend>
-            <label class="field-4"><strong>房间总人数</strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
-            <label class="field-4"><strong>游戏 UDP 端口</strong><input name="gamePort" type="number" min="1" max="65535" /></label>
-            <label class="field-4"><strong>查询 UDP 端口</strong><input name="queryPort" type="number" min="1" max="65535" /></label>
-            <label class="field-4"><strong>大厅模式</strong>
-              <select name="lobbyMode">
-                <option value="Shared">Shared</option>
-                <option value="Individual">Individual</option>
-              </select>
-            </label>
-            <label class="field-4 checkline"><input name="allowIpConnections" type="checkbox" />允许 IP 直连</label>
-            <label class="field-4 checkline"><input name="separateWallets" type="checkbox" />玩家钱包分开</label>
-            <label class="field-4 checkline"><input name="verboseLogging" type="checkbox" />详细日志</label>
-          </fieldset>
-
-          <fieldset>
-            <legend>用户与访问</legend>
-            <label class="field-4"><strong>小屋策略</strong>
-              <select name="cabinStrategy">
-                <option value="CabinStack">CabinStack</option>
-              </select>
-            </label>
-            <label class="field-4"><strong>已有小屋处理</strong>
-              <select name="existingCabinBehavior">
-                <option value="KeepExisting">KeepExisting</option>
-              </select>
-            </label>
-            <label class="field-4"><strong>进服密码操作</strong>
-              <select name="serverPasswordAction">
-                <option value="keep">保持不变</option>
-                <option value="set">设置新密码</option>
-                <option value="clear">清空密码</option>
-              </select>
-            </label>
-            <label class="field-4"><strong>新进服密码</strong><input name="serverPassword" type="password" autocomplete="new-password" /></label>
-            <label class="field-4"><strong>VNC 端口</strong><input name="vncPort" type="number" min="1" max="65535" /></label>
-            <label class="field-4"><strong>HTTP API 端口</strong><input name="apiPort" type="number" min="1" max="65535" /></label>
-            <label class="field-12"><strong>管理员 Steam64 ID</strong><textarea name="adminSteamIds" placeholder="每行一个 Steam64 ID"></textarea></label>
-          </fieldset>
-
-          <div class="notice">
-            保存只写运行配置。端口、人数、IP 直连、密码和管理员等设置需要重启服务端后生效；农场名称和地图类型请在“存档管理”里点击“创建地图”单独设置。
-          </div>
-          <div class="toolbar">
-            <button class="primary" type="submit">保存配置</button>
-            <span id="saveMessage" class="message"></span>
-          </div>
-        </form>
-      </div>
-
-      <div id="saveManagerPanel" class="panel span-12">
-        <div class="section-title">
-          <h2>存档管理</h2>
-          <div class="toolbar">
-            <button id="refreshSavesBtn" type="button">刷新存档</button>
-            <button id="createBackupBtn" type="button">创建备份</button>
-            <button id="createNewGameBtn" class="primary" type="button">创建地图</button>
-          </div>
-        </div>
-        <div class="notice">
-          选择存档只设置下次重启要加载的存档。创建地图会打开独立表单，保存新农场配置后调用服务端官方 newgame 命令，自动把新存档设为下次加载并重启。删除存档会先自动备份整个 saves 卷，再只移除选中的存档目录。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
-        </div>
-        <div class="backup-policy">
-          <label class="field-3 checkline"><input id="autoBackupEnabled" type="checkbox" />自动备份</label>
-          <label class="field-3"><strong>间隔分钟</strong><input id="autoBackupInterval" type="number" min="15" max="10080" /></label>
-          <label class="field-3"><strong>最多保留</strong><input id="backupRetention" type="number" min="1" max="100" /></label>
-          <div class="field-3 toolbar">
-            <button id="saveBackupPolicyBtn" type="button">保存备份策略</button>
-          </div>
-          <div id="backupPolicyStatus" class="field-12 hint"></div>
-        </div>
-        <div id="savesMessage" class="message"></div>
-        <div class="manage-grid">
-          <div class="manage-column">
-            <h3>可加载存档</h3>
-            <div id="savesList" class="manage-list"></div>
-          </div>
-          <div class="manage-column">
-            <div class="section-title">
-              <h3>备份文件</h3>
-              <button id="deleteSelectedBackupsBtn" class="danger" type="button">删除选中</button>
+      <div class="tab-pane hidden" data-pane="players">
+        <div id="playerManagerPanel" class="panel span-12">
+          <div class="section-title">
+            <h2>玩家管理</h2>
+            <div class="toolbar">
+              <button id="refreshPlayersBtn" type="button">刷新玩家</button>
             </div>
-            <div id="backupsList" class="manage-list"></div>
+          </div>
+          <div class="notice">
+            玩家名称来自服务端 HTTP API；当前镜像没有开放面板直接踢出/封禁的接口，相关按钮会明确标记为不可用。
+          </div>
+          <div id="playersMessage" class="message"></div>
+          <div class="manage-grid">
+            <div class="manage-column">
+              <h3>在线玩家</h3>
+              <div id="onlinePlayersList" class="manage-list"></div>
+            </div>
+            <div class="manage-column">
+              <h3>农场角色</h3>
+              <div id="farmhandsList" class="manage-list"></div>
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="panel span-6">
-        <div class="section-title">
-          <h2>端口映射</h2>
-        </div>
-        <div id="ports" class="kv-list"></div>
-      </div>
-
-      <div class="panel span-6">
-        <div class="section-title">
-          <h2>资源占用</h2>
-        </div>
-        <div id="stats" class="kv-list"></div>
-      </div>
-
-      <div class="panel span-12">
-        <div class="section-title">
-          <h2>最近日志</h2>
-          <div class="toolbar">
-            <button id="loadLogsBtn" type="button">刷新更多日志</button>
-            <button id="copyLogsBtn" type="button">复制日志</button>
+      <div class="tab-pane hidden" data-pane="saves">
+        <div id="saveManagerPanel" class="panel span-12">
+          <div class="section-title">
+            <h2>存档管理</h2>
+            <div class="toolbar">
+              <button id="refreshSavesBtn" type="button">刷新存档</button>
+              <button id="createBackupBtn" type="button">创建备份</button>
+              <button id="createNewGameBtn" class="primary" type="button">创建地图</button>
+            </div>
+          </div>
+          <div class="notice">
+            选择存档只设置下次重启要加载的存档。创建地图会打开独立表单，保存新农场配置后调用服务端官方 newgame 命令，自动把新存档设为下次加载并重启。删除存档会先自动备份整个 saves 卷，再只移除选中的存档目录。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
+          </div>
+          <div class="backup-policy">
+            <label class="field-3 checkline"><input id="autoBackupEnabled" type="checkbox" />自动备份</label>
+            <label class="field-3"><strong>间隔分钟</strong><input id="autoBackupInterval" type="number" min="15" max="10080" /></label>
+            <label class="field-3"><strong>最多保留</strong><input id="backupRetention" type="number" min="1" max="100" /></label>
+            <div class="field-3 toolbar">
+              <button id="saveBackupPolicyBtn" type="button">保存备份策略</button>
+            </div>
+            <div id="backupPolicyStatus" class="field-12 hint"></div>
+          </div>
+          <div id="savesMessage" class="message"></div>
+          <div class="manage-grid">
+            <div class="manage-column">
+              <h3>可加载存档</h3>
+              <div id="savesList" class="manage-list"></div>
+            </div>
+            <div class="manage-column">
+              <div class="section-title">
+                <h3>备份文件</h3>
+                <button id="deleteSelectedBackupsBtn" class="danger" type="button">删除选中</button>
+              </div>
+              <div id="backupsList" class="manage-list"></div>
+            </div>
           </div>
         </div>
-        <pre id="logs"></pre>
+      </div>
+
+      <div class="tab-pane hidden" data-pane="config">
+        <div class="panel span-12">
+          <div class="section-title">
+            <h2>开服配置</h2>
+            <span class="hint">这里只保存服务端运行配置；地图创建在存档管理里单独完成。</span>
+          </div>
+          <div id="runtimeFarmNotice" class="notice hidden"></div>
+          <form id="configForm">
+            <fieldset>
+              <legend>联机</legend>
+              <label class="field-4"><strong>房间总人数</strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
+              <label class="field-4"><strong>游戏 UDP 端口</strong><input name="gamePort" type="number" min="1" max="65535" /></label>
+              <label class="field-4"><strong>查询 UDP 端口</strong><input name="queryPort" type="number" min="1" max="65535" /></label>
+              <label class="field-4"><strong>大厅模式</strong>
+                <select name="lobbyMode">
+                  <option value="Shared">Shared</option>
+                  <option value="Individual">Individual</option>
+                </select>
+              </label>
+              <label class="field-4 checkline"><input name="allowIpConnections" type="checkbox" />允许 IP 直连</label>
+              <label class="field-4 checkline"><input name="separateWallets" type="checkbox" />玩家钱包分开</label>
+              <label class="field-4 checkline"><input name="verboseLogging" type="checkbox" />详细日志</label>
+            </fieldset>
+
+            <fieldset>
+              <legend>用户与访问</legend>
+              <label class="field-4"><strong>小屋策略</strong>
+                <select name="cabinStrategy">
+                  <option value="CabinStack">CabinStack</option>
+                </select>
+              </label>
+              <label class="field-4"><strong>已有小屋处理</strong>
+                <select name="existingCabinBehavior">
+                  <option value="KeepExisting">KeepExisting</option>
+                </select>
+              </label>
+              <label class="field-4"><strong>进服密码操作</strong>
+                <select name="serverPasswordAction">
+                  <option value="keep">保持不变</option>
+                  <option value="set">设置新密码</option>
+                  <option value="clear">清空密码</option>
+                </select>
+              </label>
+              <label class="field-4"><strong>新进服密码</strong><input name="serverPassword" type="password" autocomplete="new-password" /></label>
+              <label class="field-4"><strong>VNC 端口</strong><input name="vncPort" type="number" min="1" max="65535" /></label>
+              <label class="field-4"><strong>HTTP API 端口</strong><input name="apiPort" type="number" min="1" max="65535" /></label>
+              <label class="field-12"><strong>管理员 Steam64 ID</strong><textarea name="adminSteamIds" placeholder="每行一个 Steam64 ID"></textarea></label>
+            </fieldset>
+
+            <div class="notice">
+              保存只写运行配置。端口、人数、IP 直连、密码和管理员等设置需要重启服务端后生效；农场名称和地图类型请在“存档管理”里点击“创建地图”单独设置。
+            </div>
+            <div class="toolbar">
+              <button class="primary" type="submit">保存配置</button>
+              <span id="saveMessage" class="message"></span>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="tab-pane hidden" data-pane="logs">
+        <div class="panel span-12">
+          <div class="section-title">
+            <h2>最近日志</h2>
+            <div class="toolbar">
+              <button id="loadLogsBtn" type="button">刷新更多日志</button>
+              <button id="copyLogsBtn" type="button">复制日志</button>
+            </div>
+          </div>
+          <pre id="logs"></pre>
+        </div>
       </div>
     </section>
   </main>
@@ -3197,6 +3249,15 @@ const PAGE = String.raw`<!doctype html>
     let hasConfig = false;
     let shutdownPollTimer = null;
     let logsMode = "recent";
+
+    document.querySelector(".tabs").addEventListener("click", (e) => {
+      const btn = e.target.closest(".tab-btn");
+      if (!btn) return;
+      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.querySelectorAll(".tab-pane").forEach((p) => p.classList.add("hidden"));
+      document.querySelector('[data-pane="' + btn.dataset.tab + '"]').classList.remove("hidden");
+    });
 
     function setMessage(target, text, type) {
       target.textContent = text || "";
