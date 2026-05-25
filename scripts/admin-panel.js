@@ -476,7 +476,7 @@ async function serverApiJson(pathname) {
 
 function validateSaveName(value) {
   const saveName = String(value || "").trim();
-  if (!SAVE_NAME_PATTERN.test(saveName)) {
+  if (!SAVE_NAME_PATTERN.test(saveName) || saveName === "." || saveName === "..") {
     throw new Error("Save name is invalid.");
   }
   return saveName;
@@ -1322,6 +1322,82 @@ async function createNewGame(payload) {
   };
 }
 
+async function deleteSave(payload) {
+  const saveName = validateSaveName(payload.saveName);
+  if (payload.confirm !== saveName) {
+    throw new Error("Delete confirmation did not match the save name.");
+  }
+
+  const { saves } = await listSaves();
+  if (!saves.some((save) => save.name === saveName)) {
+    throw new Error(`Save not found: ${saveName}`);
+  }
+
+  const wasRunning = await isServerContainerRunning();
+  let readiness = null;
+  if (wasRunning) {
+    readiness = await collectShutdownReadiness();
+    if (!isSafeForImmediateRestart(readiness) && payload.force !== true) {
+      throw apiError(409, readiness.message);
+    }
+
+    const down = await compose(["down"], { timeoutMs: 120000 });
+    if (!down.ok) {
+      throw new Error(await sanitize(down.stderr || down.stdout || "docker compose down failed"));
+    }
+  }
+
+  try {
+    const preDeleteBackup = await createSavesBackup(`Automatic backup before deleting save ${saveName}.`);
+    const script = `set -eu
+case "$SDV_SAVE_NAME" in ""|"."|".."|*/*|*\\\\*) echo "Unsafe save name."; exit 64;; esac
+target="/saves/Saves/$SDV_SAVE_NAME"
+if [ ! -d "$target" ]; then
+  echo "Save not found: $SDV_SAVE_NAME"
+  exit 2
+fi
+rm -rf -- "$target"`;
+
+    const result = await docker(
+      [
+        "run",
+        "--rm",
+        "-e",
+        `SDV_SAVE_NAME=${saveName}`,
+        "-v",
+        `${SAVES_VOLUME}:/saves`,
+        "alpine:3.20",
+        "sh",
+        "-c",
+        script,
+      ],
+      { timeoutMs: 120000 },
+    );
+    if (!result.ok) {
+      throw new Error(await sanitize(result.stderr || result.stdout || "Save delete failed."));
+    }
+
+    if (wasRunning) {
+      const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+      if (!up.ok) {
+        throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
+      }
+    }
+
+    return {
+      deleted: saveName,
+      preDeleteBackup: preDeleteBackup.archive,
+      restarted: wasRunning,
+      readiness,
+    };
+  } catch (error) {
+    if (wasRunning) {
+      await compose(["up", "-d"], { timeoutMs: 120000 }).catch(() => {});
+    }
+    throw error;
+  }
+}
+
 async function createSavesBackup(note = "Created from admin panel.", options = {}) {
   if (!(await savesVolumeExists())) {
     throw new Error(`Save volume not found: ${SAVES_VOLUME}. Start the server once before backing up.`);
@@ -1650,6 +1726,10 @@ async function handleApi(req, res, pathname) {
   }
   if (pathname === "/api/saves/newgame" && req.method === "POST") {
     json(res, 200, await createNewGame(await readJsonBody(req)));
+    return;
+  }
+  if (pathname === "/api/saves/delete" && req.method === "POST") {
+    json(res, 200, await deleteSave(await readJsonBody(req)));
     return;
   }
   if (pathname === "/api/saves/backup" && req.method === "POST") {
@@ -2147,7 +2227,7 @@ const PAGE = String.raw`<!doctype html>
           </div>
         </div>
         <div class="notice">
-          选择存档只设置下次重启要加载的存档。新建地图会先保存上方配置，再调用服务端官方 newgame 命令并重启；旧存档不会删除。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
+          选择存档只设置下次重启要加载的存档。新建地图会先保存上方配置，再调用服务端官方 newgame 命令并重启。删除存档会先自动备份整个 saves 卷，再只移除选中的存档目录。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
         </div>
         <div class="backup-policy">
           <label class="field-3 checkline"><input id="autoBackupEnabled" type="checkbox" />自动备份</label>
@@ -2356,6 +2436,7 @@ const PAGE = String.raw`<!doctype html>
               ' · 更新：' + escapeHtml(formatDateTime(save.updatedAt)) + '</span></div>' +
             '<div class="manage-actions">' +
               '<button data-action="select-save" data-name="' + escapeHtml(save.name) + '">下次加载</button>' +
+              '<button class="danger" data-action="delete-save" data-name="' + escapeHtml(save.name) + '">删除</button>' +
             '</div>' +
           '</div>'
         )).join("");
@@ -2789,6 +2870,44 @@ const PAGE = String.raw`<!doctype html>
             body: JSON.stringify({ saveName }),
           });
           setMessage(savesMessage, "已设置。重启服务端后会加载：" + saveName, "ok");
+          return;
+        }
+
+        if (action === "delete-save") {
+          const saveName = button.dataset.name;
+          const confirmText = prompt(
+            "删除存档不可撤销。面板会先自动创建一份 saves 整卷备份，再删除这个存档目录。\n\n" +
+              "如果服务端正在运行，会先停止、删除后再启动，避免存档写入冲突。\n\n" +
+              "请输入完整存档名称确认：\n" + saveName,
+          );
+          if (confirmText !== saveName) return;
+
+          async function submit(force) {
+            return request("/api/saves/delete", {
+              method: "POST",
+              body: JSON.stringify({ saveName, confirm: confirmText, force }),
+            });
+          }
+
+          setMessage(savesMessage, "正在备份并删除存档...");
+          let result;
+          try {
+            result = await submit(false);
+          } catch (error) {
+            if (error.status !== 409) throw error;
+            if (!confirm(error.message + "\n\n仍然强制删除该存档？")) return;
+            setMessage(savesMessage, "正在强制备份并删除存档...");
+            result = await submit(true);
+          }
+
+          hasConfig = false;
+          await loadAll();
+          const restartText = result.restarted ? "；服务端已重启" : "";
+          setMessage(
+            savesMessage,
+            "已删除存档：" + result.deleted + "；删除前备份：" + result.preDeleteBackup + restartText,
+            "ok",
+          );
           return;
         }
 
