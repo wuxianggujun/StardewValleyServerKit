@@ -21,6 +21,8 @@ const BACKUP_ARCHIVE_PATTERN = /^saves-\d{8}-\d{6}\.tar\.gz$/;
 const SAVE_COMPLETE_PATTERN = /SaveGame\.Save\(\) completed without exceptions|SaveGame\.Save.*completed/i;
 const STOP_AFTER_SAVE_CHECK_MS = 30000;
 const STOP_AFTER_SAVE_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+const SMAPI_COMMAND_PIPE_TIMEOUT_MS = 90000;
+const SMAPI_COMMAND_PIPE_POLL_MS = 2000;
 const DEFAULT_AUTO_BACKUP_ENABLED = false;
 const DEFAULT_AUTO_BACKUP_INTERVAL_MINUTES = 360;
 const DEFAULT_BACKUP_RETENTION = 10;
@@ -208,6 +210,10 @@ function run(command, args, options = {}) {
       resolve({ ok: code === 0, code, stdout, stderr });
     });
   });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function docker(args, options = {}) {
@@ -958,9 +964,7 @@ async function getConfig() {
   };
 }
 
-async function saveConfig(payload) {
-  const previousSettings = await readSettings();
-  const settings = JSON.parse(JSON.stringify(previousSettings));
+function applyGameCreationSettings(settings, payload) {
   settings.Game.FarmName = cleanText(payload.farmName, 48, "Junimo");
   settings.Game.FarmType = intInRange(payload.farmType, "Farm type", 0, 7);
   settings.Game.ProfitMargin = numberInSet(payload.profitMargin, "Profit margin", [1, 0.75, 0.5, 0.25]);
@@ -970,6 +974,12 @@ async function saveConfig(payload) {
     "true",
     "false",
   ]);
+}
+
+async function saveConfig(payload) {
+  const previousSettings = await readSettings();
+  const settings = JSON.parse(JSON.stringify(previousSettings));
+  applyGameCreationSettings(settings, payload);
 
   settings.Server.MaxPlayers = intInRange(payload.maxPlayers, "Max players", 1, 10);
   settings.Server.CabinStrategy = stringChoice(payload.cabinStrategy, "Cabin strategy", [
@@ -1180,9 +1190,50 @@ async function requestStopStack(payload) {
   return stopStack("Stopped from admin panel.");
 }
 
+function isSafeForImmediateRestart(readiness) {
+  return ["safe-empty", "safe-saved"].includes(readiness?.mode);
+}
+
 async function latestLogs() {
   const logs = await compose(["logs", "--tail", "160", "--no-color", "server", "steam-auth"], { timeoutMs: 12000 });
   return { logs: await sanitize(logs.stdout || logs.stderr || "") };
+}
+
+async function isServerContainerRunning() {
+  const result = await docker(["inspect", "-f", "{{.State.Running}}", "sdv-server"], { timeoutMs: 8000 });
+  return result.ok && result.stdout.trim() === "true";
+}
+
+async function waitForSmapiCommandPipe(timeoutMs = SMAPI_COMMAND_PIPE_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  let lastOutput = "";
+
+  while (Date.now() < deadline) {
+    const result = await docker(["exec", "sdv-server", "sh", "-lc", "test -p /tmp/smapi-input"], {
+      timeoutMs: 6000,
+    });
+    if (result.ok) return;
+
+    lastOutput = await sanitize(result.stderr || result.stdout || "");
+    await delay(SMAPI_COMMAND_PIPE_POLL_MS);
+  }
+
+  throw new Error(
+    `SMAPI command pipe is not ready. Wait for the server to finish booting and try again.${lastOutput ? ` Last output: ${lastOutput}` : ""}`,
+  );
+}
+
+async function ensureServerReadyForSmapiCommand() {
+  const wasRunning = await isServerContainerRunning();
+  if (!wasRunning) {
+    const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+    if (!up.ok) {
+      throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
+    }
+  }
+
+  await waitForSmapiCommandPipe();
+  return { wasRunning, started: !wasRunning };
 }
 
 async function sendSmapiCommand(command) {
@@ -1216,6 +1267,59 @@ async function selectSave(payload) {
 
   await sendSmapiCommand(`saves select ${saveName} --confirm`);
   return { saveName, restartRequired: true };
+}
+
+async function createNewGame(payload) {
+  const farmName = cleanText(payload.farmName, 48, "Junimo");
+  if (String(payload.confirm || "") !== farmName) {
+    throw new Error("New farm confirmation did not match the configured farm name.");
+  }
+
+  const wasRunning = await isServerContainerRunning();
+  const volumeExistsBefore = await savesVolumeExists();
+  let readiness = null;
+  if (wasRunning) {
+    readiness = await collectShutdownReadiness();
+    if (!isSafeForImmediateRestart(readiness) && payload.force !== true) {
+      throw apiError(409, readiness.message);
+    }
+  }
+
+  const savedConfig = await saveConfig(payload);
+  let preNewGameBackup = null;
+  if (volumeExistsBefore) {
+    preNewGameBackup = await createSavesBackup(`Automatic backup before creating new farm ${farmName}.`);
+  }
+
+  if (!wasRunning && !volumeExistsBefore) {
+    const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+    if (!up.ok) {
+      throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
+    }
+    return {
+      farmName,
+      settings: savedConfig.settings,
+      preNewGameBackup: null,
+      commandStartedServer: true,
+      readiness,
+      restarted: false,
+      message: "Server stack started. A new farm will be created from the saved settings.",
+    };
+  }
+
+  const commandState = await ensureServerReadyForSmapiCommand();
+  await sendSmapiCommand("settings newgame --confirm");
+  const restart = await restartStack();
+
+  return {
+    farmName,
+    settings: savedConfig.settings,
+    preNewGameBackup: preNewGameBackup?.archive || null,
+    commandStartedServer: commandState.started,
+    readiness,
+    restarted: true,
+    message: restart.message,
+  };
 }
 
 async function createSavesBackup(note = "Created from admin panel.", options = {}) {
@@ -1542,6 +1646,10 @@ async function handleApi(req, res, pathname) {
   }
   if (pathname === "/api/saves/select" && req.method === "POST") {
     json(res, 200, await selectSave(await readJsonBody(req)));
+    return;
+  }
+  if (pathname === "/api/saves/newgame" && req.method === "POST") {
+    json(res, 200, await createNewGame(await readJsonBody(req)));
     return;
   }
   if (pathname === "/api/saves/backup" && req.method === "POST") {
@@ -2035,10 +2143,11 @@ const PAGE = String.raw`<!doctype html>
           <div class="toolbar">
             <button id="refreshSavesBtn" type="button">刷新存档</button>
             <button id="createBackupBtn" type="button">创建备份</button>
+            <button id="createNewGameBtn" class="primary" type="button">用当前配置新建地图并开服</button>
           </div>
         </div>
         <div class="notice">
-          选择存档只设置下次重启要加载的存档。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
+          选择存档只设置下次重启要加载的存档。新建地图会先保存上方配置，再调用服务端官方 newgame 命令并重启；旧存档不会删除。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
         </div>
         <div class="backup-policy">
           <label class="field-3 checkline"><input id="autoBackupEnabled" type="checkbox" />自动备份</label>
@@ -2109,6 +2218,7 @@ const PAGE = String.raw`<!doctype html>
     const backupRetention = document.querySelector("#backupRetention");
     const backupPolicyStatus = document.querySelector("#backupPolicyStatus");
     const saveBackupPolicyBtn = document.querySelector("#saveBackupPolicyBtn");
+    const createNewGameBtn = document.querySelector("#createNewGameBtn");
     const playersMessage = document.querySelector("#playersMessage");
     const onlinePlayersList = document.querySelector("#onlinePlayersList");
     const farmhandsList = document.querySelector("#farmhandsList");
@@ -2138,7 +2248,9 @@ const PAGE = String.raw`<!doctype html>
           const body = await response.json();
           message = body.error || message;
         } catch (_) {}
-        throw new Error(message);
+        const error = new Error(message);
+        error.status = response.status;
+        throw error;
       }
       if (response.status === 204) return null;
       return response.json();
@@ -2401,6 +2513,7 @@ const PAGE = String.raw`<!doctype html>
       stopBtn.disabled = !running || jobActive;
       restartBtn.disabled = jobActive;
       cancelAutoStopBtn.disabled = !jobActive;
+      createNewGameBtn.disabled = jobActive;
 
       if (jobActive) {
         setMessage(serverActionMessage, job.message || "正在等待自动停服...", "warn");
@@ -2615,6 +2728,47 @@ const PAGE = String.raw`<!doctype html>
         const result = await request("/api/saves/backup", { method: "POST", body: "{}" });
         await reloadSaveManagement();
         setMessage(savesMessage, "备份已创建：" + result.archive, "ok");
+      } catch (error) {
+        setMessage(savesMessage, error.message, "bad");
+      }
+    });
+
+    createNewGameBtn.addEventListener("click", async () => {
+      const payload = formPayload();
+      const farmName = (String(payload.farmName || "").trim() || "Junimo").slice(0, 48);
+      const farmTypeSelect = configForm.elements.farmType;
+      const farmTypeLabel = farmTypeSelect.options[farmTypeSelect.selectedIndex]?.textContent || payload.farmType;
+      const confirmText = prompt(
+        "这会保存当前表单配置，并按这些配置新建地图后重启服务端。旧存档不会删除；如果已有 saves volume，会先自动创建一份备份。\\n\\n" +
+          "新农场：" + farmName + "\\n" +
+          "地图：" + farmTypeLabel + "\\n\\n" +
+          "请输入新农场名称确认：\\n" + farmName,
+      );
+      if (confirmText !== farmName) return;
+
+      async function submit(force) {
+        return request("/api/saves/newgame", {
+          method: "POST",
+          body: JSON.stringify({ ...payload, confirm: confirmText, force }),
+        });
+      }
+
+      setMessage(savesMessage, "正在保存配置、设置新地图并重启服务端...");
+      try {
+        let result;
+        try {
+          result = await submit(false);
+        } catch (error) {
+          if (error.status !== 409) throw error;
+          if (!confirm(error.message + "\\n\\n仍然强制新建地图并重启？")) return;
+          setMessage(savesMessage, "正在强制新建地图并重启服务端...");
+          result = await submit(true);
+        }
+
+        hasConfig = false;
+        await loadAll();
+        const backupText = result.preNewGameBackup ? "；执行前备份：" + result.preNewGameBackup : "";
+        setMessage(savesMessage, "新地图已设置并重启：" + result.farmName + backupText, "ok");
       } catch (error) {
         setMessage(savesMessage, error.message, "bad");
       }
