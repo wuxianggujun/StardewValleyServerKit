@@ -519,6 +519,30 @@ function replaceXmlTagValue(xml, tagName, value) {
   return String(xml || "").replace(pattern, (_match, open, close) => `${open}${escapeXmlText(value)}${close}`);
 }
 
+function replaceOrInsertXmlTagValue(xml, tagName, value, insertAfterTagName) {
+  const source = String(xml || "");
+  const replacement = `<${tagName}>${escapeXmlText(value)}</${tagName}>`;
+  const existing = new RegExp(`<${escapeRegExp(tagName)}\\s*/>|<${escapeRegExp(tagName)}>[^]*?<\\/${escapeRegExp(tagName)}>`);
+  if (existing.test(source)) return source.replace(existing, replacement);
+  if (insertAfterTagName) {
+    const anchor = new RegExp(`(<${escapeRegExp(insertAfterTagName)}\\s*/>|<${escapeRegExp(insertAfterTagName)}>[^]*?<\\/${escapeRegExp(insertAfterTagName)}>)`);
+    if (anchor.test(source)) return source.replace(anchor, `$1${replacement}`);
+  }
+  return `${source}${replacement}`;
+}
+
+function replaceOrInsertRawXmlTagValue(xml, tagName, rawValue, insertAfterTagName) {
+  const source = String(xml || "");
+  const replacement = `<${tagName}>${rawValue}</${tagName}>`;
+  const existing = new RegExp(`<${escapeRegExp(tagName)}\\s*/>|<${escapeRegExp(tagName)}>[^]*?<\\/${escapeRegExp(tagName)}>`);
+  if (existing.test(source)) return source.replace(existing, replacement);
+  if (insertAfterTagName) {
+    const anchor = new RegExp(`(<${escapeRegExp(insertAfterTagName)}\\s*/>|<${escapeRegExp(insertAfterTagName)}>[^]*?<\\/${escapeRegExp(insertAfterTagName)}>)`);
+    if (anchor.test(source)) return source.replace(anchor, `$1${replacement}`);
+  }
+  return `${source}${replacement}`;
+}
+
 function findBuildingBlocks(xml) {
   const blocks = [];
   const pattern = /<Building\b[^>]*>[\s\S]*?<\/Building>/g;
@@ -633,6 +657,25 @@ function replaceUniqueMultiplayerIds(xml, id) {
   );
 }
 
+function replaceFirstUniqueMultiplayerId(xml, id) {
+  if (!/<UniqueMultiplayerID>-?\d+<\/UniqueMultiplayerID>/.test(String(xml || ""))) {
+    throw new Error("Farmhand data does not contain a multiplayer ID.");
+  }
+  return String(xml || "").replace(
+    /(<UniqueMultiplayerID>)-?\d+(<\/UniqueMultiplayerID>)/,
+    `$1${id}$2`,
+  );
+}
+
+function clearFarmhandUserId(xml) {
+  const source = String(xml || "");
+  if (/<userID\b/.test(source)) {
+    return source.replace(/<userID\s*\/>|<userID>[\s\S]*?<\/userID>/, "<userID />");
+  }
+  const anchor = /(<UniqueMultiplayerID>-?\d+<\/UniqueMultiplayerID>)/;
+  return anchor.test(source) ? source.replace(anchor, "$1<userID />") : source;
+}
+
 function normalizeCabinFarmhandIds(xml, cabins) {
   const existingIds = uniqueMultiplayerIds(xml);
   const seenCabinIds = new Set();
@@ -665,16 +708,192 @@ function normalizeCabinFarmhandIds(xml, cabins) {
   return { xml: nextXml, fixedFarmhandIds: replacements.length };
 }
 
+function findTopLevelFarmhandsSection(xml) {
+  const pattern = /<farmhands\s*\/>|<farmhands\b[^>]*>[\s\S]*?<\/farmhands>/;
+  const match = String(xml || "").match(pattern);
+  if (!match) return null;
+  return {
+    text: match[0],
+    start: match.index,
+    end: match.index + match[0].length,
+    selfClosing: /\/>$/.test(match[0]),
+  };
+}
+
+function findFarmerBlocks(xml) {
+  const blocks = [];
+  const pattern = /<Farmer\b[^>]*>[\s\S]*?<\/Farmer>/g;
+  let match = null;
+  while ((match = pattern.exec(String(xml || ""))) !== null) {
+    blocks.push({
+      text: match[0],
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+  return blocks;
+}
+
+function cabinEmbeddedFarmerBlock(cabinBlock) {
+  const match = String(cabinBlock || "").match(/<farmhand\b[^>]*>\s*(<Farmer\b[^>]*>[\s\S]*?<\/Farmer>)\s*<\/farmhand>/);
+  return match ? match[1] : null;
+}
+
+function setFarmhandHomeLocation(farmerXml, homeLocation) {
+  return replaceOrInsertXmlTagValue(farmerXml, "homeLocation", homeLocation, "UniqueMultiplayerID");
+}
+
+function makeEmptyFarmhandForCabin(sourceFarmer, farmhandId, homeLocation) {
+  let next = replaceFirstUniqueMultiplayerId(sourceFarmer, farmhandId);
+  next = setFarmhandHomeLocation(next, homeLocation);
+  next = clearFarmhandUserId(next);
+  if (/<isCustomized\b/.test(next)) {
+    next = replaceOrInsertRawXmlTagValue(next, "isCustomized", "false", "userID");
+  }
+  if (/<name\b/.test(next)) {
+    next = replaceOrInsertXmlTagValue(next, "name", "Unnamed Farmhand", "UniqueMultiplayerID");
+  }
+  return next;
+}
+
+function applyTextReplacements(xml, replacements) {
+  let next = xml;
+  for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
+    next = `${next.slice(0, replacement.start)}${replacement.text}${next.slice(replacement.end)}`;
+  }
+  return next;
+}
+
+function updateCabinFarmhandReferences(xml) {
+  const existingIds = uniqueMultiplayerIds(xml);
+  const buildings = findBuildingBlocks(xml);
+  const cabinRefs = [];
+  const replacements = [];
+  let fixedCabinReferences = 0;
+
+  for (const building of buildings) {
+    if (!isCabinBuildingBlock(building.text)) continue;
+    const uniqueName = xmlTagValue(building.text, "uniqueName") || uniqueCabinIndoorName("FarmHouse", crypto.randomUUID());
+    const farmhandReference = xmlTagValue(building.text, "farmhandReference");
+    const farmhandId = firstUniqueMultiplayerId(building.text) || farmhandReference || newUniqueMultiplayerId(existingIds);
+    let next = building.text;
+    if (/<UniqueMultiplayerID>-?\d+<\/UniqueMultiplayerID>/.test(next)) {
+      next = replaceUniqueMultiplayerIds(next, farmhandId);
+    }
+    next = replaceOrInsertRawXmlTagValue(next, "farmhandReference", farmhandId, "uniqueName");
+    if (/<owner\b/.test(next)) {
+      next = replaceOrInsertRawXmlTagValue(next, "owner", farmhandId, "farmhandReference");
+    }
+    if (/<homeLocation\b/.test(next)) {
+      next = setFarmhandHomeLocation(next, uniqueName);
+    }
+    if (next !== building.text) {
+      replacements.push({ start: building.start, end: building.end, text: next });
+      fixedCabinReferences += 1;
+    }
+    cabinRefs.push({ id: farmhandId, homeLocation: uniqueName });
+  }
+
+  return {
+    xml: replacements.length ? applyTextReplacements(xml, replacements) : xml,
+    cabinRefs,
+    fixedCabinReferences,
+  };
+}
+
+function ensureTopLevelFarmhands(xml, cabinRefs) {
+  if (!cabinRefs.length) return { xml, addedFarmhands: 0, fixedFarmhandHomes: 0 };
+
+  const section = findTopLevelFarmhandsSection(xml);
+  const sectionText = section?.text || "<farmhands />";
+  const farmers = section && !section.selfClosing ? findFarmerBlocks(section.text) : [];
+  const existing = new Map();
+  for (const farmer of farmers) {
+    const id = firstUniqueMultiplayerId(farmer.text);
+    if (id) existing.set(id, farmer);
+  }
+
+  let sourceFarmer = farmers[0]?.text || null;
+  if (!sourceFarmer) {
+    const sourceCabin = findBuildingBlocks(xml).find((building) => isCabinBuildingBlock(building.text));
+    sourceFarmer = sourceCabin ? cabinEmbeddedFarmerBlock(sourceCabin.text) : null;
+  }
+  if (!sourceFarmer) {
+    throw new Error("No farmhand template was found in the save.");
+  }
+
+  const replacements = [];
+  const additions = [];
+  let fixedFarmhandHomes = 0;
+
+  for (const cabin of cabinRefs) {
+    const farmer = existing.get(cabin.id);
+    if (farmer) {
+      const next = setFarmhandHomeLocation(farmer.text, cabin.homeLocation);
+      if (next !== farmer.text) {
+        replacements.push({ start: farmer.start, end: farmer.end, text: next });
+        fixedFarmhandHomes += 1;
+      }
+      continue;
+    }
+    additions.push(makeEmptyFarmhandForCabin(sourceFarmer, cabin.id, cabin.homeLocation));
+  }
+
+  let nextSection = sectionText;
+  if (replacements.length) {
+    nextSection = applyTextReplacements(nextSection, replacements);
+  }
+  if (additions.length) {
+    nextSection = section?.selfClosing
+      ? `<farmhands>${additions.join("")}</farmhands>`
+      : nextSection.replace(/<\/farmhands>$/, `${additions.join("")}</farmhands>`);
+  }
+
+  if (section) {
+    return {
+      xml: `${xml.slice(0, section.start)}${nextSection}${xml.slice(section.end)}`,
+      addedFarmhands: additions.length,
+      fixedFarmhandHomes,
+    };
+  }
+
+  return {
+    xml: xml.replace(/<\/SaveGame>\s*$/, `${nextSection}</SaveGame>`),
+    addedFarmhands: additions.length,
+    fixedFarmhandHomes,
+  };
+}
+
+function repairCabinFarmhandLinks(xml) {
+  const cabinUpdate = updateCabinFarmhandReferences(xml);
+  const farmhandsUpdate = ensureTopLevelFarmhands(cabinUpdate.xml, cabinUpdate.cabinRefs);
+  return {
+    xml: farmhandsUpdate.xml,
+    fixedCabinReferences: cabinUpdate.fixedCabinReferences,
+    addedFarmhands: farmhandsUpdate.addedFarmhands,
+    fixedFarmhandHomes: farmhandsUpdate.fixedFarmhandHomes,
+  };
+}
+
 function cloneCabinBlock(sourceBlock, placement, existingIds) {
   const id = crypto.randomUUID();
+  const farmhandId = newUniqueMultiplayerId(existingIds);
   let next = replaceXmlTagValue(sourceBlock, "tileX", placement.x);
   next = replaceXmlTagValue(next, "tileY", placement.y);
   next = replaceXmlTagValue(next, "id", id);
   const originalUniqueName = xmlTagValue(next, "uniqueName");
+  const uniqueName = originalUniqueName == null ? uniqueCabinIndoorName("FarmHouse", id) : uniqueCabinIndoorName(originalUniqueName, id);
   if (originalUniqueName != null) {
-    next = replaceXmlTagValue(next, "uniqueName", uniqueCabinIndoorName(originalUniqueName, id));
+    next = replaceXmlTagValue(next, "uniqueName", uniqueName);
   }
-  next = replaceUniqueMultiplayerIds(next, newUniqueMultiplayerId(existingIds));
+  next = replaceUniqueMultiplayerIds(next, farmhandId);
+  next = replaceOrInsertRawXmlTagValue(next, "farmhandReference", farmhandId, "uniqueName");
+  if (/<owner\b/.test(next)) {
+    next = replaceOrInsertRawXmlTagValue(next, "owner", farmhandId, "farmhandReference");
+  }
+  if (/<homeLocation\b/.test(next)) {
+    next = setFarmhandHomeLocation(next, uniqueName);
+  }
   return next;
 }
 
@@ -690,13 +909,21 @@ function patchCabinsXml(xml, targetCabins) {
   }
 
   if (cabins.length >= targetCabins) {
+    const linkRepair = repairCabinFarmhandLinks(currentXml);
     return {
-      xml: currentXml,
-      changed: normalized.fixedFarmhandIds > 0,
+      xml: linkRepair.xml,
+      changed:
+        normalized.fixedFarmhandIds > 0 ||
+        linkRepair.fixedCabinReferences > 0 ||
+        linkRepair.addedFarmhands > 0 ||
+        linkRepair.fixedFarmhandHomes > 0,
       currentCabins: cabins.length,
       cabinCount: cabins.length,
       addedCabins: 0,
       fixedFarmhandIds: normalized.fixedFarmhandIds,
+      fixedCabinReferences: linkRepair.fixedCabinReferences,
+      addedFarmhands: linkRepair.addedFarmhands,
+      fixedFarmhandHomes: linkRepair.fixedFarmhandHomes,
     };
   }
   if (!cabins.length) {
@@ -714,13 +941,17 @@ function patchCabinsXml(xml, targetCabins) {
   }
 
   const insertAt = cabins[cabins.length - 1].end;
+  const linked = repairCabinFarmhandLinks(`${currentXml.slice(0, insertAt)}${clones.join("")}${currentXml.slice(insertAt)}`);
   return {
-    xml: `${currentXml.slice(0, insertAt)}${clones.join("")}${currentXml.slice(insertAt)}`,
+    xml: linked.xml,
     changed: true,
     currentCabins: cabins.length,
     cabinCount: targetCabins,
     addedCabins: clones.length,
     fixedFarmhandIds: normalized.fixedFarmhandIds,
+    fixedCabinReferences: linked.fixedCabinReferences,
+    addedFarmhands: linked.addedFarmhands,
+    fixedFarmhandHomes: linked.fixedFarmhandHomes,
   };
 }
 
@@ -785,9 +1016,10 @@ async function listSaves() {
     '  type_count="$(grep -E -o \'<buildingType>(Cabin|Log Cabin|Plank Cabin|Stone Cabin)</buildingType>\' "$main" 2>/dev/null | wc -l | tr -d \' \')"',
     '  cabins="$indoor_count"',
     '  [ "${cabins:-0}" -gt 0 ] || cabins="$type_count"',
+    '  ref_count="$(grep -o \'<farmhandReference>-*[0-9]*</farmhandReference>\' "$main" 2>/dev/null | sed \'s/<\\/?farmhandReference>//g\' | sort -u | wc -l | tr -d \' \')"',
     '  unique_ids="$(grep -o \'<UniqueMultiplayerID>-*[0-9]*</UniqueMultiplayerID>\' "$main" 2>/dev/null | sed \'s/<\\/?UniqueMultiplayerID>//g\' | sort -u | wc -l | tr -d \' \')"',
     '  usable_cabins=0',
-    '  if [ "${unique_ids:-0}" -gt 1 ]; then usable_cabins=$((unique_ids - 1)); fi',
+    '  if [ "${ref_count:-0}" -gt 0 ]; then usable_cabins="$ref_count"; elif [ "${unique_ids:-0}" -gt 1 ]; then usable_cabins=$((unique_ids - 1)); fi',
     '  if [ "${usable_cabins:-0}" -gt "${cabins:-0}" ]; then usable_cabins="$cabins"; fi',
     '  printf \'%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n\' "$name" "$mtime" "$farm" "$farm_type" "$cabins" "$usable_cabins"',
     "done",
@@ -937,6 +1169,9 @@ async function patchSaveCabins(saveName, targetCabins) {
       cabinCount: patched.cabinCount,
       addedCabins: patched.addedCabins,
       fixedFarmhandIds: patched.fixedFarmhandIds,
+      fixedCabinReferences: patched.fixedCabinReferences,
+      addedFarmhands: patched.addedFarmhands,
+      fixedFarmhandHomes: patched.fixedFarmhandHomes,
       patched: patched.changed,
     };
   } finally {
@@ -1985,21 +2220,30 @@ chown -R 1000:1000 /saves 2>/dev/null || true`;
 }
 
 async function deleteBackup(payload) {
-  const archive = validateBackupArchive(payload.archive);
-  if (payload.confirm !== archive) {
-    throw new Error("Delete confirmation did not match the backup archive name.");
+  return deleteBackups({ archives: [payload.archive] });
+}
+
+async function deleteBackups(payload) {
+  const rawArchives = Array.isArray(payload.archives) ? payload.archives : [payload.archive];
+  const archives = [...new Set(rawArchives.map((archive) => validateBackupArchive(archive)))];
+  if (!archives.length) {
+    throw new Error("No backup archive was selected.");
   }
 
-  const archivePath = path.join(BACKUP_DIR, archive);
-  const metadataPath = path.join(BACKUP_DIR, archive.replace(/\.tar\.gz$/, ".meta.txt"));
-  await fsp.unlink(archivePath);
-  try {
-    await fsp.unlink(metadataPath);
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
+  const deleted = [];
+  for (const archive of archives) {
+    const archivePath = path.join(BACKUP_DIR, archive);
+    const metadataPath = path.join(BACKUP_DIR, archive.replace(/\.tar\.gz$/, ".meta.txt"));
+    await fsp.unlink(archivePath);
+    try {
+      await fsp.unlink(metadataPath);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    deleted.push(archive);
   }
 
-  return { deleted: archive };
+  return { deleted };
 }
 
 async function configureAutoBackupSchedule() {
@@ -2241,7 +2485,7 @@ async function handleApi(req, res, pathname) {
     return;
   }
   if (pathname === "/api/backups/delete" && req.method === "POST") {
-    json(res, 200, await deleteBackup(await readJsonBody(req)));
+    json(res, 200, await deleteBackups(await readJsonBody(req)));
     return;
   }
   if (pathname === "/api/logs" && req.method === "GET") {
@@ -2500,6 +2744,18 @@ const PAGE = String.raw`<!doctype html>
     .manage-item .hint {
       display: block;
       margin-top: 3px;
+    }
+    .backup-select-line {
+      display: flex;
+      grid-template-columns: none;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-size: 13px;
+    }
+    .backup-select-line input {
+      width: auto;
+      flex: 0 0 auto;
     }
     .manage-actions {
       display: flex;
@@ -2761,7 +3017,10 @@ const PAGE = String.raw`<!doctype html>
             <div id="savesList" class="manage-list"></div>
           </div>
           <div class="manage-column">
-            <h3>备份文件</h3>
+            <div class="section-title">
+              <h3>备份文件</h3>
+              <button id="deleteSelectedBackupsBtn" class="danger" type="button">删除选中</button>
+            </div>
             <div id="backupsList" class="manage-list"></div>
           </div>
         </div>
@@ -2874,6 +3133,7 @@ const PAGE = String.raw`<!doctype html>
     const backupRetention = document.querySelector("#backupRetention");
     const backupPolicyStatus = document.querySelector("#backupPolicyStatus");
     const saveBackupPolicyBtn = document.querySelector("#saveBackupPolicyBtn");
+    const deleteSelectedBackupsBtn = document.querySelector("#deleteSelectedBackupsBtn");
     const createNewGameBtn = document.querySelector("#createNewGameBtn");
     const createMapDialog = document.querySelector("#createMapDialog");
     const createMapForm = document.querySelector("#createMapForm");
@@ -3130,7 +3390,10 @@ const PAGE = String.raw`<!doctype html>
 
       backupsList.innerHTML = data.backups.length ? data.backups.map((backup) => (
         '<div class="manage-item">' +
-          '<div><strong>' + escapeHtml(backup.archive) + '</strong>' +
+          '<div><label class="backup-select-line">' +
+            '<input class="backup-select" type="checkbox" value="' + escapeHtml(backup.archive) + '" />' +
+            '<strong>' + escapeHtml(backup.archive) + '</strong>' +
+          '</label>' +
             '<span class="hint">' + escapeHtml(formatBytes(backup.sizeBytes)) +
             ' · 创建：' + escapeHtml(formatDateTime(backup.createdAt)) + '</span></div>' +
           '<div class="manage-actions">' +
@@ -3139,6 +3402,7 @@ const PAGE = String.raw`<!doctype html>
           '</div>' +
         '</div>'
       )).join("") : '<p class="muted">还没有备份文件。</p>';
+      deleteSelectedBackupsBtn.disabled = !data.backups.length;
     }
 
     function renderPlayerManagement(data) {
@@ -3269,6 +3533,12 @@ const PAGE = String.raw`<!doctype html>
         spawnMonstersAtNight: form.spawnMonstersAtNight.value,
         separateWallets: form.separateWallets.checked,
       };
+    }
+
+    function selectedBackupArchives() {
+      return Array.from(backupsList.querySelectorAll(".backup-select:checked"))
+        .map((input) => input.value)
+        .filter(Boolean);
     }
 
     function shutdownLabel(readiness) {
@@ -3512,6 +3782,25 @@ const PAGE = String.raw`<!doctype html>
       }
     });
 
+    deleteSelectedBackupsBtn.addEventListener("click", async () => {
+      const archives = selectedBackupArchives();
+      if (!archives.length) {
+        setMessage(savesMessage, "请选择要删除的备份。", "bad");
+        return;
+      }
+      setMessage(savesMessage, "正在删除选中的备份...");
+      try {
+        const result = await request("/api/backups/delete", {
+          method: "POST",
+          body: JSON.stringify({ archives }),
+        });
+        await reloadSaveManagement();
+        setMessage(savesMessage, "已删除备份：" + (result.deleted || []).join("，"), "ok");
+      } catch (error) {
+        setMessage(savesMessage, error.message, "bad");
+      }
+    });
+
     createNewGameBtn.addEventListener("click", openCreateMapDialog);
     cancelCreateMapBtn.addEventListener("click", closeCreateMapDialog);
     createMapDialog.addEventListener("click", (event) => {
@@ -3623,7 +3912,9 @@ const PAGE = String.raw`<!doctype html>
             savesMessage,
             "小屋已修复：" + result.saveName +
               "；补建 " + (patch.addedCabins || 0) +
-              " 座；修正角色 ID " + (patch.fixedFarmhandIds || 0) +
+              " 座；新增角色槽 " + (patch.addedFarmhands || 0) +
+              " 个；修正小屋引用 " + (patch.fixedCabinReferences || 0) +
+              " 个；修正角色 ID " + (patch.fixedFarmhandIds || 0) +
               " 个；执行前备份：" + result.preRepairBackup + restartText,
             "ok",
           );
@@ -3694,20 +3985,13 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "delete-backup") {
           const archive = button.dataset.archive;
-          const confirmText = await exactConfirm({
-            title: "删除备份",
-            message: "删除不可撤销。请输入备份文件名确认删除。",
-            value: archive,
-            actionText: "删除",
-          });
-          if (confirmText !== archive) return;
           setMessage(savesMessage, "正在删除备份...");
-          await request("/api/backups/delete", {
+          const result = await request("/api/backups/delete", {
             method: "POST",
-            body: JSON.stringify({ archive, confirm: confirmText }),
+            body: JSON.stringify({ archives: [archive] }),
           });
           await reloadSaveManagement();
-          setMessage(savesMessage, "已删除：" + archive, "ok");
+          setMessage(savesMessage, "已删除：" + (result.deleted || [archive]).join("，"), "ok");
         }
       } catch (error) {
         setMessage(savesMessage, error.message, "bad");
