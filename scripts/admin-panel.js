@@ -2046,6 +2046,46 @@ const PAGE = String.raw`<!doctype html>
     }
     .message.bad { color: var(--red); }
     .message.ok { color: var(--green); }
+    .modal {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(15, 23, 42, 0.42);
+    }
+    .modal-panel {
+      width: min(620px, 100%);
+      display: grid;
+      gap: 14px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.24);
+      padding: 18px;
+    }
+    .modal-panel h2 {
+      margin: 0;
+      font-size: 17px;
+    }
+    .modal-message {
+      margin: 0;
+      white-space: pre-line;
+      color: var(--text);
+    }
+    .copy-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+    }
+    .copy-row input {
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      user-select: all;
+    }
+    .modal-actions {
+      justify-content: flex-end;
+    }
     @media (max-width: 860px) {
       .span-4, .span-6, .span-8 { grid-column: span 12; }
       .field-3, .field-4, .field-6 { grid-column: span 12; }
@@ -2053,6 +2093,7 @@ const PAGE = String.raw`<!doctype html>
       .manage-grid { grid-template-columns: 1fr; }
       .manage-item { grid-template-columns: 1fr; }
       .manage-actions { justify-content: flex-start; }
+      .copy-row { grid-template-columns: 1fr; }
       .topbar { align-items: flex-start; flex-direction: column; }
     }
   </style>
@@ -2275,6 +2316,29 @@ const PAGE = String.raw`<!doctype html>
     </section>
   </main>
 
+  <div id="confirmDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmDialogTitle">
+    <div class="modal-panel">
+      <h2 id="confirmDialogTitle">确认操作</h2>
+      <p id="confirmDialogMessage" class="modal-message"></p>
+      <label>
+        <strong>需要输入的完整内容</strong>
+        <div class="copy-row">
+          <input id="confirmDialogTarget" type="text" readonly />
+          <button id="confirmDialogCopyBtn" type="button">复制</button>
+        </div>
+      </label>
+      <label>
+        <strong>输入确认内容</strong>
+        <input id="confirmDialogInput" type="text" autocomplete="off" />
+      </label>
+      <div id="confirmDialogHint" class="hint"></div>
+      <div class="toolbar modal-actions">
+        <button id="confirmDialogCancelBtn" type="button">取消</button>
+        <button id="confirmDialogActionBtn" class="danger" type="button" disabled>确认</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const authPanel = document.querySelector("#authPanel");
     const appPanel = document.querySelector("#appPanel");
@@ -2303,12 +2367,83 @@ const PAGE = String.raw`<!doctype html>
     const onlinePlayersList = document.querySelector("#onlinePlayersList");
     const farmhandsList = document.querySelector("#farmhandsList");
     const playerManagerPanel = document.querySelector("#playerManagerPanel");
+    const confirmDialog = document.querySelector("#confirmDialog");
+    const confirmDialogTitle = document.querySelector("#confirmDialogTitle");
+    const confirmDialogMessage = document.querySelector("#confirmDialogMessage");
+    const confirmDialogTarget = document.querySelector("#confirmDialogTarget");
+    const confirmDialogCopyBtn = document.querySelector("#confirmDialogCopyBtn");
+    const confirmDialogInput = document.querySelector("#confirmDialogInput");
+    const confirmDialogHint = document.querySelector("#confirmDialogHint");
+    const confirmDialogCancelBtn = document.querySelector("#confirmDialogCancelBtn");
+    const confirmDialogActionBtn = document.querySelector("#confirmDialogActionBtn");
     let hasConfig = false;
     let shutdownPollTimer = null;
 
     function setMessage(target, text, type) {
       target.textContent = text || "";
       target.className = "message" + (type ? " " + type : "");
+    }
+
+    function exactConfirm(options) {
+      const value = String(options.value ?? "");
+      confirmDialogTitle.textContent = options.title || "确认操作";
+      confirmDialogMessage.textContent = options.message || "";
+      confirmDialogTarget.value = value;
+      confirmDialogInput.value = "";
+      confirmDialogHint.textContent = "可以点“复制”，也可以手动选中上面的内容复制。";
+      confirmDialogActionBtn.textContent = options.actionText || "确认";
+      confirmDialogActionBtn.className = options.danger === false ? "primary" : "danger";
+      confirmDialogActionBtn.disabled = true;
+      confirmDialog.classList.remove("hidden");
+
+      return new Promise((resolve) => {
+        const cleanup = (result) => {
+          confirmDialog.classList.add("hidden");
+          confirmDialogInput.removeEventListener("input", update);
+          confirmDialogCopyBtn.removeEventListener("click", copyTarget);
+          confirmDialogCancelBtn.removeEventListener("click", cancel);
+          confirmDialogActionBtn.removeEventListener("click", submit);
+          confirmDialog.removeEventListener("click", clickBackdrop);
+          document.removeEventListener("keydown", handleKeydown);
+          resolve(result);
+        };
+        const update = () => {
+          confirmDialogActionBtn.disabled = confirmDialogInput.value !== value;
+        };
+        const copyTarget = async () => {
+          confirmDialogTarget.focus();
+          confirmDialogTarget.select();
+          try {
+            await navigator.clipboard.writeText(value);
+            confirmDialogHint.textContent = "已复制。";
+          } catch (_) {
+            try {
+              document.execCommand("copy");
+              confirmDialogHint.textContent = "已复制。";
+            } catch (error) {
+              confirmDialogHint.textContent = "已选中，请按 Ctrl+C 复制。";
+            }
+          }
+        };
+        const cancel = () => cleanup(null);
+        const submit = () => {
+          if (confirmDialogInput.value === value) cleanup(value);
+        };
+        const clickBackdrop = (event) => {
+          if (event.target === confirmDialog) cancel();
+        };
+        const handleKeydown = (event) => {
+          if (event.key === "Escape") cancel();
+        };
+
+        confirmDialogInput.addEventListener("input", update);
+        confirmDialogCopyBtn.addEventListener("click", copyTarget);
+        confirmDialogCancelBtn.addEventListener("click", cancel);
+        confirmDialogActionBtn.addEventListener("click", submit);
+        confirmDialog.addEventListener("click", clickBackdrop);
+        document.addEventListener("keydown", handleKeydown);
+        setTimeout(() => confirmDialogInput.focus(), 0);
+      });
     }
 
     async function request(path, options = {}) {
@@ -2754,7 +2889,12 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "delete-farmhand") {
           const name = button.dataset.name;
-          const confirmText = prompt("删除离线角色会移除该角色和对应小屋。请输入完整角色名称确认：\n" + name);
+          const confirmText = await exactConfirm({
+            title: "删除离线角色",
+            message: "删除离线角色会移除该角色和对应小屋。请输入完整角色名称确认。",
+            value: name,
+            actionText: "删除",
+          });
           if (confirmText !== name) return;
           setMessage(playersMessage, "正在删除离线角色...");
           const result = await request("/api/farmhands", {
@@ -2819,12 +2959,17 @@ const PAGE = String.raw`<!doctype html>
       const farmName = (String(payload.farmName || "").trim() || "Junimo").slice(0, 48);
       const farmTypeSelect = configForm.elements.farmType;
       const farmTypeLabel = farmTypeSelect.options[farmTypeSelect.selectedIndex]?.textContent || payload.farmType;
-      const confirmText = prompt(
-        "这会保存当前表单配置，并按这些配置新建地图后重启服务端。旧存档不会删除；如果已有 saves volume，会先自动创建一份备份。\n\n" +
+      const confirmText = await exactConfirm({
+        title: "新建地图并开服",
+        message:
+          "这会保存当前表单配置，并按这些配置新建地图后重启服务端。旧存档不会删除；如果已有 saves volume，会先自动创建一份备份。\n\n" +
           "新农场：" + farmName + "\n" +
           "地图：" + farmTypeLabel + "\n\n" +
-          "请输入新农场名称确认：\n" + farmName,
-      );
+          "请输入新农场名称确认。",
+        value: farmName,
+        actionText: "新建地图",
+        danger: false,
+      });
       if (confirmText !== farmName) return;
 
       async function submit(force) {
@@ -2875,11 +3020,15 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "delete-save") {
           const saveName = button.dataset.name;
-          const confirmText = prompt(
-            "删除存档不可撤销。面板会先自动创建一份 saves 整卷备份，再删除这个存档目录。\n\n" +
+          const confirmText = await exactConfirm({
+            title: "删除存档",
+            message:
+              "删除存档不可撤销。面板会先自动创建一份 saves 整卷备份，再删除这个存档目录。\n\n" +
               "如果服务端正在运行，会先停止、删除后再启动，避免存档写入冲突。\n\n" +
-              "请输入完整存档名称确认：\n" + saveName,
-          );
+              "请输入完整存档名称确认。",
+            value: saveName,
+            actionText: "删除",
+          });
           if (confirmText !== saveName) return;
 
           async function submit(force) {
@@ -2913,9 +3062,12 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "restore-backup") {
           const archive = button.dataset.archive;
-          const confirmText = prompt(
-            "恢复会停止服务端，并用该备份覆盖整个 saves 卷。恢复前会自动备份当前状态。\n请输入备份文件名确认：\n" + archive,
-          );
+          const confirmText = await exactConfirm({
+            title: "恢复备份",
+            message: "恢复会停止服务端，并用该备份覆盖整个 saves 卷。恢复前会自动备份当前状态。\n请输入备份文件名确认。",
+            value: archive,
+            actionText: "恢复",
+          });
           if (confirmText !== archive) return;
           setMessage(savesMessage, "正在恢复备份...");
           const result = await request("/api/backups/restore", {
@@ -2930,7 +3082,12 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "delete-backup") {
           const archive = button.dataset.archive;
-          const confirmText = prompt("删除不可撤销。请输入备份文件名确认删除：\n" + archive);
+          const confirmText = await exactConfirm({
+            title: "删除备份",
+            message: "删除不可撤销。请输入备份文件名确认删除。",
+            value: archive,
+            actionText: "删除",
+          });
           if (confirmText !== archive) return;
           setMessage(savesMessage, "正在删除备份...");
           await request("/api/backups/delete", {
@@ -2992,7 +3149,12 @@ const PAGE = String.raw`<!doctype html>
           return;
         }
 
-        const confirmText = prompt(prefix + readiness.message + "\n\n如果仍要立即停服，请输入 STOP：");
+        const confirmText = await exactConfirm({
+          title: "强制立即停服",
+          message: prefix + readiness.message + "\n\n如果仍要立即停服，请输入 STOP。",
+          value: "STOP",
+          actionText: "立即停服",
+        });
         if (confirmText !== "STOP") return;
         await request("/api/stop", { method: "POST", body: JSON.stringify({ mode: "now", force: true }) });
         setMessage(serverActionMessage, "已按确认立即停服，数据已保留。", "ok");
