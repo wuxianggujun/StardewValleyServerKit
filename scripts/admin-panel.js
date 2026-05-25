@@ -785,7 +785,11 @@ async function listSaves() {
     '  type_count="$(grep -E -o \'<buildingType>(Cabin|Log Cabin|Plank Cabin|Stone Cabin)</buildingType>\' "$main" 2>/dev/null | wc -l | tr -d \' \')"',
     '  cabins="$indoor_count"',
     '  [ "${cabins:-0}" -gt 0 ] || cabins="$type_count"',
-    '  printf \'%s\\t%s\\t%s\\t%s\\t%s\\n\' "$name" "$mtime" "$farm" "$farm_type" "$cabins"',
+    '  unique_ids="$(grep -o \'<UniqueMultiplayerID>-*[0-9]*</UniqueMultiplayerID>\' "$main" 2>/dev/null | sed \'s/<\\/?UniqueMultiplayerID>//g\' | sort -u | wc -l | tr -d \' \')"',
+    '  usable_cabins=0',
+    '  if [ "${unique_ids:-0}" -gt 1 ]; then usable_cabins=$((unique_ids - 1)); fi',
+    '  if [ "${usable_cabins:-0}" -gt "${cabins:-0}" ]; then usable_cabins="$cabins"; fi',
+    '  printf \'%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n\' "$name" "$mtime" "$farm" "$farm_type" "$cabins" "$usable_cabins"',
     "done",
   ].join("\n");
 
@@ -799,15 +803,17 @@ async function listSaves() {
 
   const saves = parseTableLines(result.stdout)
     .map((line) => {
-      const [name, mtime, farmName, farmType, cabinCount] = line.split("\t");
+      const [name, mtime, farmName, farmType, cabinCount, usableCabinCount] = line.split("\t");
       const updatedMs = Number(mtime) * 1000;
       const parsedFarmType = /^\d+$/.test(farmType || "") ? Number(farmType) : null;
       const parsedCabinCount = /^\d+$/.test(cabinCount || "") ? Number(cabinCount) : 0;
+      const parsedUsableCabinCount = /^\d+$/.test(usableCabinCount || "") ? Number(usableCabinCount) : parsedCabinCount;
       return {
         name: tsv(name),
         farmName: decodeXmlText(tsv(farmName)) || "Unknown",
         farmType: parsedFarmType,
         cabinCount: parsedCabinCount,
+        usableCabinCount: parsedUsableCabinCount,
         updatedAt: updatedMs > 0 ? new Date(updatedMs).toISOString() : null,
       };
     })
@@ -3098,11 +3104,16 @@ const PAGE = String.raw`<!doctype html>
         savesList.innerHTML = '<p class="muted">还没有 saves Docker volume。先启动服务端一次。</p>';
       } else if (data.saves.length) {
         savesList.innerHTML = data.saves.map((save) => (
+          (() => {
+            const cabinText = save.usableCabinCount === save.cabinCount
+              ? ' · 小屋：' + escapeHtml(save.cabinCount ?? 0)
+              : ' · 小屋：' + escapeHtml(save.cabinCount ?? 0) + ' · 可用角色：' + escapeHtml(save.usableCabinCount ?? 0);
+            return (
           '<div class="manage-item">' +
             '<div><strong>' + escapeHtml(save.name) + '</strong>' +
               '<span class="hint">农场：' + escapeHtml(save.farmName || "Unknown") +
               ' · 地图：' + escapeHtml(save.farmType ?? "n/a") +
-              ' · 小屋：' + escapeHtml(save.cabinCount ?? 0) +
+              cabinText +
               ' · 更新：' + escapeHtml(formatDateTime(save.updatedAt)) + '</span></div>' +
             '<div class="manage-actions">' +
               '<button data-action="select-save" data-name="' + escapeHtml(save.name) + '">下次加载</button>' +
@@ -3110,6 +3121,8 @@ const PAGE = String.raw`<!doctype html>
               '<button class="danger" data-action="delete-save" data-name="' + escapeHtml(save.name) + '">删除</button>' +
             '</div>' +
           '</div>'
+            );
+          })()
         )).join("");
       } else {
         savesList.innerHTML = '<p class="muted">未发现可加载存档。</p>';
