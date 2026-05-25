@@ -2465,7 +2465,7 @@ const PAGE = String.raw`<!doctype html>
       configForm.elements.verboseLogging.checked = Boolean(settings.Server.VerboseLogging);
       configForm.elements.cabinStrategy.value = settings.Server.CabinStrategy || "CabinStack";
       configForm.elements.existingCabinBehavior.value = settings.Server.ExistingCabinBehavior || "KeepExisting";
-      configForm.elements.adminSteamIds.value = (settings.Server.AdminSteamIds || []).join("\\n");
+      configForm.elements.adminSteamIds.value = (settings.Server.AdminSteamIds || []).join("\n");
       configForm.elements.serverPasswordAction.value = "keep";
       configForm.elements.serverPassword.value = "";
       hasConfig = true;
@@ -2582,7 +2582,7 @@ const PAGE = String.raw`<!doctype html>
         ? data.stats.map((item) => row(item.name, escapeHtml((item.cpu || "") + " / " + (item.memory || "")))).join("")
         : '<p class="muted">未读取到资源占用。</p>';
 
-      document.querySelector("#logs").textContent = data.recentSignals.join("\\n");
+      document.querySelector("#logs").textContent = data.recentSignals.join("\n");
     }
 
     async function loadAll() {
@@ -2673,7 +2673,7 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "delete-farmhand") {
           const name = button.dataset.name;
-          const confirmText = prompt("删除离线角色会移除该角色和对应小屋。请输入完整角色名称确认：\\n" + name);
+          const confirmText = prompt("删除离线角色会移除该角色和对应小屋。请输入完整角色名称确认：\n" + name);
           if (confirmText !== name) return;
           setMessage(playersMessage, "正在删除离线角色...");
           const result = await request("/api/farmhands", {
@@ -2739,10 +2739,10 @@ const PAGE = String.raw`<!doctype html>
       const farmTypeSelect = configForm.elements.farmType;
       const farmTypeLabel = farmTypeSelect.options[farmTypeSelect.selectedIndex]?.textContent || payload.farmType;
       const confirmText = prompt(
-        "这会保存当前表单配置，并按这些配置新建地图后重启服务端。旧存档不会删除；如果已有 saves volume，会先自动创建一份备份。\\n\\n" +
-          "新农场：" + farmName + "\\n" +
-          "地图：" + farmTypeLabel + "\\n\\n" +
-          "请输入新农场名称确认：\\n" + farmName,
+        "这会保存当前表单配置，并按这些配置新建地图后重启服务端。旧存档不会删除；如果已有 saves volume，会先自动创建一份备份。\n\n" +
+          "新农场：" + farmName + "\n" +
+          "地图：" + farmTypeLabel + "\n\n" +
+          "请输入新农场名称确认：\n" + farmName,
       );
       if (confirmText !== farmName) return;
 
@@ -2760,7 +2760,7 @@ const PAGE = String.raw`<!doctype html>
           result = await submit(false);
         } catch (error) {
           if (error.status !== 409) throw error;
-          if (!confirm(error.message + "\\n\\n仍然强制新建地图并重启？")) return;
+          if (!confirm(error.message + "\n\n仍然强制新建地图并重启？")) return;
           setMessage(savesMessage, "正在强制新建地图并重启服务端...");
           result = await submit(true);
         }
@@ -2795,7 +2795,7 @@ const PAGE = String.raw`<!doctype html>
         if (action === "restore-backup") {
           const archive = button.dataset.archive;
           const confirmText = prompt(
-            "恢复会停止服务端，并用该备份覆盖整个 saves 卷。恢复前会自动备份当前状态。\\n请输入备份文件名确认：\\n" + archive,
+            "恢复会停止服务端，并用该备份覆盖整个 saves 卷。恢复前会自动备份当前状态。\n请输入备份文件名确认：\n" + archive,
           );
           if (confirmText !== archive) return;
           setMessage(savesMessage, "正在恢复备份...");
@@ -2811,7 +2811,7 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "delete-backup") {
           const archive = button.dataset.archive;
-          const confirmText = prompt("删除不可撤销。请输入备份文件名确认删除：\\n" + archive);
+          const confirmText = prompt("删除不可撤销。请输入备份文件名确认删除：\n" + archive);
           if (confirmText !== archive) return;
           setMessage(savesMessage, "正在删除备份...");
           await request("/api/backups/delete", {
@@ -2847,7 +2847,7 @@ const PAGE = String.raw`<!doctype html>
         const status = await request("/api/status");
         renderStatus(status);
         const readiness = status.shutdownReadiness || {};
-        const prefix = "停服会执行 docker compose down，停止游戏相关容器以释放 CPU/内存；Docker volume、存档、配置和备份都会保留，Web 管理面板会继续运行。\\n\\n";
+        const prefix = "停服会执行 docker compose down，停止游戏相关容器以释放 CPU/内存；Docker volume、存档、配置和备份都会保留，Web 管理面板会继续运行。\n\n";
 
         if (readiness.mode === "safe-empty") {
           if (!confirm(prefix + "在线人数为 0，可以直接停服。")) return;
@@ -2858,7 +2858,7 @@ const PAGE = String.raw`<!doctype html>
         }
 
         if (readiness.mode === "safe-saved") {
-          if (!confirm(prefix + "存档已完成，可以安全停止。\\n\\n" + (readiness.lastSaveLine || readiness.message))) return;
+          if (!confirm(prefix + "存档已完成，可以安全停止。\n\n" + (readiness.lastSaveLine || readiness.message))) return;
           await request("/api/stop", { method: "POST", body: JSON.stringify({ mode: "now" }) });
           setMessage(serverActionMessage, "已停服，Docker 资源已释放，数据已保留。", "ok");
           setTimeout(() => loadAll().catch(() => {}), 2000);
@@ -2866,14 +2866,14 @@ const PAGE = String.raw`<!doctype html>
         }
 
         if (readiness.mode === "warn-unsaved") {
-          if (!confirm(prefix + readiness.message + "\\n\\n点“确定”后，面板会等待下一次 SaveGame.Save 完成，再自动停服。")) return;
+          if (!confirm(prefix + readiness.message + "\n\n点“确定”后，面板会等待下一次 SaveGame.Save 完成，再自动停服。")) return;
           const result = await request("/api/stop", { method: "POST", body: JSON.stringify({ mode: "after-save" }) });
           setMessage(serverActionMessage, result.job?.message || "已开始等待下一次存档后自动停服。", "warn");
           setTimeout(() => loadAll().catch(() => {}), 2000);
           return;
         }
 
-        const confirmText = prompt(prefix + readiness.message + "\\n\\n如果仍要立即停服，请输入 STOP：");
+        const confirmText = prompt(prefix + readiness.message + "\n\n如果仍要立即停服，请输入 STOP：");
         if (confirmText !== "STOP") return;
         await request("/api/stop", { method: "POST", body: JSON.stringify({ mode: "now", force: true }) });
         setMessage(serverActionMessage, "已按确认立即停服，数据已保留。", "ok");
