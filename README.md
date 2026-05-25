@@ -193,6 +193,10 @@ sudo ./scripts/sdv-server.sh admin-service-restart
 
 保存配置不会热更新游戏进程。端口、人数、IP 直连等配置需要重启服务端后生效；农场地图、农场名、初始小屋数量、利润比例只对新建农场生效。要切换已有存档，请在管理面板的“存档管理”里选择下次加载的存档，然后重启服务端。恢复备份会覆盖整个 saves volume，面板会在恢复前自动创建一份当前状态备份。公网服务器优先只开放 80/443 给 1Panel；除非你明确需要直连管理端口，否则不要把 `ADMIN_PORT` 暴露到公网。
 
+游戏本身会自动保存到 Docker saves volume；Web 管理面板的“备份”是额外导出的
+`backups/saves-*.tar.gz` 压缩包。可以在“存档管理”里开启自动备份，配置备份间隔
+和最多保留数量。每次自动或手动创建备份后，面板会按保留数量删除最旧的备份包。
+
 面板里的“停服释放资源”会执行 `docker compose down`，停止游戏、Steam
 授权和可选 Discord 容器以释放 CPU/内存，但不会删除 Docker volumes、存档、
 配置或备份。Web 管理面板本身仍然运行，后续可以直接点“启动服务端”恢复。
@@ -278,6 +282,9 @@ Web 管理面板建议通过 1Panel 站点反向代理访问，不直接开放 `
 - `ADMIN_HOST` / `ADMIN_PORT`：Web 管理面板监听地址和端口。
 - `SERVER_PASSWORD`：玩家进服后的登录密码，留空表示关闭。
 - `GAME_PORT` / `QUERY_PORT`：游戏连接和查询端口。
+- `AUTO_BACKUP_ENABLED`：是否由 Web 管理面板定时导出 saves volume 备份。
+- `SAVE_BACKUP_INTERVAL_MINUTES`：自动备份间隔，范围 15 到 10080 分钟。
+- `SAVE_BACKUP_RETENTION`：最多保留多少份 `backups/saves-*.tar.gz` 备份，超出后删除最旧备份。
 
 ## Mod 管理
 

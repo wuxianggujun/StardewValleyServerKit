@@ -21,8 +21,25 @@ const BACKUP_ARCHIVE_PATTERN = /^saves-\d{8}-\d{6}\.tar\.gz$/;
 const SAVE_COMPLETE_PATTERN = /SaveGame\.Save\(\) completed without exceptions|SaveGame\.Save.*completed/i;
 const STOP_AFTER_SAVE_CHECK_MS = 30000;
 const STOP_AFTER_SAVE_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_AUTO_BACKUP_ENABLED = false;
+const DEFAULT_AUTO_BACKUP_INTERVAL_MINUTES = 360;
+const DEFAULT_BACKUP_RETENTION = 10;
+const MIN_AUTO_BACKUP_INTERVAL_MINUTES = 15;
+const MAX_AUTO_BACKUP_INTERVAL_MINUTES = 10080;
+const MIN_BACKUP_RETENTION = 1;
+const MAX_BACKUP_RETENTION = 100;
 
 let pendingStopAfterSave = null;
+let autoBackupTimer = null;
+let autoBackupState = {
+  enabled: DEFAULT_AUTO_BACKUP_ENABLED,
+  intervalMinutes: DEFAULT_AUTO_BACKUP_INTERVAL_MINUTES,
+  retention: DEFAULT_BACKUP_RETENTION,
+  running: false,
+  nextRunAt: null,
+  lastRunAt: null,
+  lastResult: null,
+};
 
 const FARM_TYPES = [
   { value: 0, label: "标准农场" },
@@ -296,6 +313,11 @@ function numberInSet(value, name, allowed) {
 
 function bool(value) {
   return value === true || value === "true" || value === "on" || value === 1;
+}
+
+function boolWithDefault(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  return bool(value);
 }
 
 function stringChoice(value, name, allowed) {
@@ -574,9 +596,75 @@ async function listBackups() {
   return backups;
 }
 
+async function readBackupPolicy() {
+  const env = await readEnv();
+  const interval = Number.parseInt(env.SAVE_BACKUP_INTERVAL_MINUTES || "", 10);
+  const retention = Number.parseInt(env.SAVE_BACKUP_RETENTION || "", 10);
+  return {
+    enabled: boolWithDefault(env.AUTO_BACKUP_ENABLED, DEFAULT_AUTO_BACKUP_ENABLED),
+    intervalMinutes:
+      Number.isInteger(interval) &&
+      interval >= MIN_AUTO_BACKUP_INTERVAL_MINUTES &&
+      interval <= MAX_AUTO_BACKUP_INTERVAL_MINUTES
+        ? interval
+        : DEFAULT_AUTO_BACKUP_INTERVAL_MINUTES,
+    retention:
+      Number.isInteger(retention) && retention >= MIN_BACKUP_RETENTION && retention <= MAX_BACKUP_RETENTION
+        ? retention
+        : DEFAULT_BACKUP_RETENTION,
+  };
+}
+
+function getAutoBackupState() {
+  return {
+    enabled: autoBackupState.enabled,
+    intervalMinutes: autoBackupState.intervalMinutes,
+    retention: autoBackupState.retention,
+    running: autoBackupState.running,
+    nextRunAt: autoBackupState.nextRunAt,
+    lastRunAt: autoBackupState.lastRunAt,
+    lastResult: autoBackupState.lastResult,
+  };
+}
+
+async function pruneBackups(retention, options = {}) {
+  const keepCount = intInRange(retention, "Backup retention", MIN_BACKUP_RETENTION, MAX_BACKUP_RETENTION);
+  const preserve = new Set(options.preserveArchives || []);
+  const backups = await listBackups();
+  const deleted = [];
+  let kept = 0;
+
+  for (const backup of backups) {
+    if (preserve.has(backup.archive)) {
+      kept += 1;
+      continue;
+    }
+    if (kept < keepCount) {
+      kept += 1;
+      continue;
+    }
+
+    const archivePath = path.join(BACKUP_DIR, backup.archive);
+    const metadataPath = path.join(BACKUP_DIR, backup.archive.replace(/\.tar\.gz$/, ".meta.txt"));
+    await fsp.unlink(archivePath);
+    try {
+      await fsp.unlink(metadataPath);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    deleted.push(backup.archive);
+  }
+
+  return deleted;
+}
+
 async function getSaveManagement() {
-  const [{ volumeExists, saves }, backups] = await Promise.all([listSaves(), listBackups()]);
-  return { volumeExists, saves, backups };
+  const [{ volumeExists, saves }, backups, backupPolicy] = await Promise.all([
+    listSaves(),
+    listBackups(),
+    readBackupPolicy(),
+  ]);
+  return { volumeExists, saves, backups, backupPolicy, autoBackup: getAutoBackupState() };
 }
 
 function validatePlayerName(value) {
@@ -1130,7 +1218,7 @@ async function selectSave(payload) {
   return { saveName, restartRequired: true };
 }
 
-async function createSavesBackup(note = "Created from admin panel.") {
+async function createSavesBackup(note = "Created from admin panel.", options = {}) {
   if (!(await savesVolumeExists())) {
     throw new Error(`Save volume not found: ${SAVES_VOLUME}. Start the server once before backing up.`);
   }
@@ -1159,9 +1247,16 @@ async function createSavesBackup(note = "Created from admin panel.") {
   ].join(os.EOL);
 
   await fsp.writeFile(metadataPath, `${metadata}${os.EOL}`, "utf8");
+  const policy = await readBackupPolicy();
+  const pruned = options.skipPrune
+    ? []
+    : await pruneBackups(options.retention || policy.retention, {
+        preserveArchives: [archiveName, ...(options.preserveArchives || [])],
+      });
   return {
     archive: archiveName,
     metadata: metadataName,
+    pruned,
   };
 }
 
@@ -1174,7 +1269,9 @@ async function restoreBackup(payload) {
   const archivePath = path.join(BACKUP_DIR, archive);
   await fsp.access(archivePath, fs.constants.R_OK);
 
-  const preRestoreBackup = await createSavesBackup(`Automatic backup before restoring ${archive}.`);
+  const preRestoreBackup = await createSavesBackup(`Automatic backup before restoring ${archive}.`, {
+    preserveArchives: [archive],
+  });
   const down = await compose(["down"], { timeoutMs: 120000 });
   if (!down.ok) {
     throw new Error(await sanitize(down.stderr || down.stdout || "docker compose down failed"));
@@ -1231,6 +1328,95 @@ async function deleteBackup(payload) {
   }
 
   return { deleted: archive };
+}
+
+async function configureAutoBackupSchedule() {
+  const policy = await readBackupPolicy();
+  if (autoBackupTimer) {
+    clearTimeout(autoBackupTimer);
+    autoBackupTimer = null;
+  }
+
+  autoBackupState = {
+    ...autoBackupState,
+    enabled: policy.enabled,
+    intervalMinutes: policy.intervalMinutes,
+    retention: policy.retention,
+    nextRunAt: null,
+  };
+
+  if (!policy.enabled) return getAutoBackupState();
+
+  const nextRunMs = Date.now() + policy.intervalMinutes * 60 * 1000;
+  autoBackupState.nextRunAt = new Date(nextRunMs).toISOString();
+  autoBackupTimer = setTimeout(() => {
+    runAutoBackup().catch(() => {});
+  }, policy.intervalMinutes * 60 * 1000);
+  if (typeof autoBackupTimer.unref === "function") {
+    autoBackupTimer.unref();
+  }
+  return getAutoBackupState();
+}
+
+async function runAutoBackup() {
+  if (autoBackupState.running) return getAutoBackupState();
+
+  autoBackupState = {
+    ...autoBackupState,
+    running: true,
+    nextRunAt: null,
+  };
+
+  try {
+    const result = await createSavesBackup("Automatic scheduled backup from admin panel.");
+    autoBackupState = {
+      ...autoBackupState,
+      running: false,
+      lastRunAt: new Date().toISOString(),
+      lastResult: {
+        ok: true,
+        archive: result.archive,
+        pruned: result.pruned || [],
+      },
+    };
+  } catch (error) {
+    autoBackupState = {
+      ...autoBackupState,
+      running: false,
+      lastRunAt: new Date().toISOString(),
+      lastResult: {
+        ok: false,
+        error: error.message || String(error),
+      },
+    };
+  } finally {
+    await configureAutoBackupSchedule();
+  }
+
+  return getAutoBackupState();
+}
+
+async function updateBackupPolicy(payload) {
+  const enabled = bool(payload.enabled);
+  const intervalMinutes = intInRange(
+    payload.intervalMinutes,
+    "Auto backup interval",
+    MIN_AUTO_BACKUP_INTERVAL_MINUTES,
+    MAX_AUTO_BACKUP_INTERVAL_MINUTES,
+  );
+  const retention = intInRange(payload.retention, "Backup retention", MIN_BACKUP_RETENTION, MAX_BACKUP_RETENTION);
+
+  await setEnvValue("AUTO_BACKUP_ENABLED", enabled ? "true" : "false");
+  await setEnvValue("SAVE_BACKUP_INTERVAL_MINUTES", intervalMinutes);
+  await setEnvValue("SAVE_BACKUP_RETENTION", retention);
+  const autoBackup = await configureAutoBackupSchedule();
+  const pruned = await pruneBackups(retention);
+
+  return {
+    backupPolicy: { enabled, intervalMinutes, retention },
+    autoBackup,
+    pruned,
+  };
 }
 
 function ensureApiSuccess(response, actionLabel) {
@@ -1360,6 +1546,10 @@ async function handleApi(req, res, pathname) {
   }
   if (pathname === "/api/saves/backup" && req.method === "POST") {
     json(res, 200, await createSavesBackup("Created from admin panel."));
+    return;
+  }
+  if (pathname === "/api/backups/policy" && req.method === "POST") {
+    json(res, 200, await updateBackupPolicy(await readJsonBody(req)));
     return;
   }
   if (pathname === "/api/backups/restore" && req.method === "POST") {
@@ -1586,6 +1776,17 @@ const PAGE = String.raw`<!doctype html>
     .checkline input {
       width: auto;
     }
+    .backup-policy {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+      align-items: end;
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid #eef1f5;
+      border-radius: 6px;
+      background: #fbfcfe;
+    }
     .manage-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -1660,6 +1861,7 @@ const PAGE = String.raw`<!doctype html>
     @media (max-width: 860px) {
       .span-4, .span-6, .span-8 { grid-column: span 12; }
       .field-3, .field-4, .field-6 { grid-column: span 12; }
+      .backup-policy { grid-template-columns: 1fr; }
       .manage-grid { grid-template-columns: 1fr; }
       .manage-item { grid-template-columns: 1fr; }
       .manage-actions { justify-content: flex-start; }
@@ -1838,6 +2040,15 @@ const PAGE = String.raw`<!doctype html>
         <div class="notice">
           选择存档只设置下次重启要加载的存档。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
         </div>
+        <div class="backup-policy">
+          <label class="field-3 checkline"><input id="autoBackupEnabled" type="checkbox" />自动备份</label>
+          <label class="field-3"><strong>间隔分钟</strong><input id="autoBackupInterval" type="number" min="15" max="10080" /></label>
+          <label class="field-3"><strong>最多保留</strong><input id="backupRetention" type="number" min="1" max="100" /></label>
+          <div class="field-3 toolbar">
+            <button id="saveBackupPolicyBtn" type="button">保存备份策略</button>
+          </div>
+          <div id="backupPolicyStatus" class="field-12 hint"></div>
+        </div>
         <div id="savesMessage" class="message"></div>
         <div class="manage-grid">
           <div class="manage-column">
@@ -1893,6 +2104,11 @@ const PAGE = String.raw`<!doctype html>
     const savesList = document.querySelector("#savesList");
     const backupsList = document.querySelector("#backupsList");
     const saveManagerPanel = document.querySelector("#saveManagerPanel");
+    const autoBackupEnabled = document.querySelector("#autoBackupEnabled");
+    const autoBackupInterval = document.querySelector("#autoBackupInterval");
+    const backupRetention = document.querySelector("#backupRetention");
+    const backupPolicyStatus = document.querySelector("#backupPolicyStatus");
+    const saveBackupPolicyBtn = document.querySelector("#saveBackupPolicyBtn");
     const playersMessage = document.querySelector("#playersMessage");
     const onlinePlayersList = document.querySelector("#onlinePlayersList");
     const farmhandsList = document.querySelector("#farmhandsList");
@@ -1993,7 +2209,29 @@ const PAGE = String.raw`<!doctype html>
       runtimeFarmNotice.classList.remove("hidden");
     }
 
+    function renderBackupPolicy(data) {
+      const policy = data.backupPolicy || {};
+      const state = data.autoBackup || {};
+      autoBackupEnabled.checked = Boolean(policy.enabled);
+      autoBackupInterval.value = policy.intervalMinutes || 360;
+      backupRetention.value = policy.retention || 10;
+
+      const parts = [];
+      parts.push(policy.enabled ? "自动备份已开启" : "自动备份已关闭");
+      parts.push("最多保留 " + (policy.retention || 10) + " 份");
+      if (policy.enabled && state.nextRunAt) parts.push("下次：" + formatDateTime(state.nextRunAt));
+      if (state.running) parts.push("正在备份");
+      if (state.lastResult?.ok) {
+        parts.push("上次：" + formatDateTime(state.lastRunAt) + "，" + state.lastResult.archive);
+        if (state.lastResult.pruned?.length) parts.push("已清理旧备份 " + state.lastResult.pruned.length + " 份");
+      } else if (state.lastResult?.error) {
+        parts.push("上次失败：" + state.lastResult.error);
+      }
+      backupPolicyStatus.textContent = parts.join(" · ");
+    }
+
     function renderSaveManagement(data) {
+      renderBackupPolicy(data);
       if (!data.volumeExists) {
         savesList.innerHTML = '<p class="muted">还没有 saves Docker volume。先启动服务端一次。</p>';
       } else if (data.saves.length) {
@@ -2337,6 +2575,30 @@ const PAGE = String.raw`<!doctype html>
       }
     });
 
+    saveBackupPolicyBtn.addEventListener("click", async () => {
+      setMessage(savesMessage, "正在保存备份策略...");
+      try {
+        const result = await request("/api/backups/policy", {
+          method: "POST",
+          body: JSON.stringify({
+            enabled: autoBackupEnabled.checked,
+            intervalMinutes: autoBackupInterval.value,
+            retention: backupRetention.value,
+          }),
+        });
+        const data = await reloadSaveManagement();
+        const prunedCount = result.pruned?.length || 0;
+        setMessage(
+          savesMessage,
+          prunedCount ? "备份策略已保存，并清理旧备份 " + prunedCount + " 份。" : "备份策略已保存。",
+          "ok",
+        );
+        renderBackupPolicy(data);
+      } catch (error) {
+        setMessage(savesMessage, error.message, "bad");
+      }
+    });
+
     document.querySelector("#refreshSavesBtn").addEventListener("click", async () => {
       setMessage(savesMessage, "刷新中...");
       try {
@@ -2516,6 +2778,7 @@ const PAGE = String.raw`<!doctype html>
 
 async function main() {
   await ensureAdminFiles();
+  await configureAutoBackupSchedule();
   const env = await readEnv();
   const host = env.ADMIN_HOST || process.env.ADMIN_HOST || "127.0.0.1";
   const port = Number.parseInt(env.ADMIN_PORT || process.env.ADMIN_PORT || "8088", 10);
