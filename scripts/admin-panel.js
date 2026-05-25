@@ -33,10 +33,13 @@ const MAX_AUTO_BACKUP_INTERVAL_MINUTES = 10080;
 const MIN_BACKUP_RETENTION = 1;
 const MAX_BACKUP_RETENTION = 100;
 const CABIN_BUILDING_TYPES = new Set(["Cabin", "Log Cabin", "Plank Cabin", "Stone Cabin"]);
-const CABIN_SAFE_ORIGIN_X = 8;
-const CABIN_SAFE_ORIGIN_Y = 16;
-const CABIN_SAFE_MAX_X = 72;
-const CABIN_SAFE_MAX_Y = 58;
+const STANDARD_FARM_TYPE = 0;
+const STANDARD_FARM_CABIN_AREA = {
+  minX: 8,
+  minY: 16,
+  maxX: 72,
+  maxY: 58,
+};
 
 let pendingStopAfterSave = null;
 let autoBackupTimer = null;
@@ -609,24 +612,49 @@ function pointInAnyRect(point, rects) {
   return rects.some((rect) => pointInRect(point, rect));
 }
 
-function cabinNeedsRelocation(rect) {
-  return !rect || rect.x < CABIN_SAFE_ORIGIN_X || rect.y < CABIN_SAFE_ORIGIN_Y;
+function readSaveFarmType(xml) {
+  return xmlTagNumber(xml, "whichFarm");
 }
 
-function safeCabinPlacementOrigin(sourceRect) {
+function cabinPlacementPolicy(farmType) {
+  if (farmType === STANDARD_FARM_TYPE) {
+    return {
+      relocateEdgeCabins: true,
+      area: STANDARD_FARM_CABIN_AREA,
+    };
+  }
   return {
-    x: Math.max(sourceRect.x, CABIN_SAFE_ORIGIN_X),
-    y: sourceRect.y < CABIN_SAFE_ORIGIN_Y
-      ? Math.max(sourceRect.y + 10, CABIN_SAFE_ORIGIN_Y)
+    relocateEdgeCabins: false,
+    area: null,
+  };
+}
+
+function cabinNeedsRelocation(rect, policy) {
+  if (!policy.relocateEdgeCabins) return false;
+  const area = policy.area;
+  return !rect || rect.x < area.minX || rect.y < area.minY;
+}
+
+function safeCabinPlacementOrigin(sourceRect, policy) {
+  if (!policy.relocateEdgeCabins) {
+    return { x: sourceRect.x, y: sourceRect.y };
+  }
+  const area = policy.area;
+  return {
+    x: Math.max(sourceRect.x, area.minX),
+    y: sourceRect.y < area.minY
+      ? Math.max(sourceRect.y + 10, area.minY)
       : sourceRect.y,
   };
 }
 
-function findCabinPlacement(sourceBlock, occupiedRects) {
+function findCabinPlacement(sourceBlock, occupiedRects, policy) {
   const sourceRect = readBuildingRect(sourceBlock) || { x: 0, y: 0, width: 5, height: 3 };
   const stepX = Math.max(sourceRect.width + 1, 6);
   const stepY = Math.max(sourceRect.height + 3, 6);
-  const origin = safeCabinPlacementOrigin(sourceRect);
+  const origin = safeCabinPlacementOrigin(sourceRect, policy);
+  const maxX = policy.area?.maxX;
+  const maxY = policy.area?.maxY;
 
   for (let row = 0; row < 10; row += 1) {
     for (let col = 0; col < 10; col += 1) {
@@ -637,14 +665,15 @@ function findCabinPlacement(sourceBlock, occupiedRects) {
         height: sourceRect.height,
       };
       if (candidate.x < 0 || candidate.y < 0) continue;
-      if (candidate.x > CABIN_SAFE_MAX_X || candidate.y > CABIN_SAFE_MAX_Y) continue;
+      if (maxX != null && candidate.x > maxX) continue;
+      if (maxY != null && candidate.y > maxY) continue;
       if (occupiedRects.some((rect) => rectsOverlap(cabinReservedRect(candidate), rect))) continue;
       return candidate;
     }
   }
 
   return {
-    x: Math.min(origin.x + stepX * (occupiedRects.length + 1), CABIN_SAFE_MAX_X),
+    x: maxX == null ? origin.x + stepX * (occupiedRects.length + 1) : Math.min(origin.x + stepX * (occupiedRects.length + 1), maxX),
     y: origin.y,
     width: sourceRect.width,
     height: sourceRect.height,
@@ -663,7 +692,7 @@ function moveCabinBlock(sourceBlock, placement) {
   return next;
 }
 
-function relocateUnsafeCabins(xml, buildings) {
+function relocateUnsafeCabins(xml, buildings, policy) {
   const replacements = [];
   const occupiedRects = buildings
     .filter((building) => !isCabinBuildingBlock(building.text))
@@ -673,12 +702,12 @@ function relocateUnsafeCabins(xml, buildings) {
 
   for (const cabin of buildings.filter((building) => isCabinBuildingBlock(building.text))) {
     const rect = readBuildingRect(cabin.text);
-    if (!cabinNeedsRelocation(rect)) {
+    if (!cabinNeedsRelocation(rect, policy)) {
       occupiedRects.push(cabinReservedRect(rect));
       continue;
     }
 
-    const placement = findCabinPlacement(cabin.text, occupiedRects);
+    const placement = findCabinPlacement(cabin.text, occupiedRects, policy);
     const next = moveCabinBlock(cabin.text, placement);
     if (next !== cabin.text) {
       replacements.push({ start: cabin.start, end: cabin.end, text: next });
@@ -1147,7 +1176,9 @@ function patchCabinsXml(xml, targetCabins) {
     cabins = buildings.filter((building) => isCabinBuildingBlock(building.text));
   }
 
-  const relocated = relocateUnsafeCabins(currentXml, buildings);
+  const farmType = readSaveFarmType(currentXml);
+  const placementPolicy = cabinPlacementPolicy(farmType);
+  const relocated = relocateUnsafeCabins(currentXml, buildings, placementPolicy);
   currentXml = relocated.xml;
   if (relocated.movedCabins) {
     buildings = findBuildingBlocks(currentXml);
@@ -1186,7 +1217,7 @@ function patchCabinsXml(xml, targetCabins) {
   const occupiedRects = buildings.map((building) => buildingReservedRect(building)).filter(Boolean);
   const clones = [];
   for (let count = cabins.length; count < targetCabins; count += 1) {
-    const placement = findCabinPlacement(sourceCabin, occupiedRects);
+    const placement = findCabinPlacement(sourceCabin, occupiedRects, placementPolicy);
     clones.push(cloneCabinBlock(sourceCabin, placement, existingIds));
     occupiedRects.push(cabinReservedRect(placement));
   }
