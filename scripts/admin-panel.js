@@ -886,7 +886,9 @@ function cloneCabinBlock(sourceBlock, placement, existingIds) {
   if (originalUniqueName != null) {
     next = replaceXmlTagValue(next, "uniqueName", uniqueName);
   }
-  next = replaceUniqueMultiplayerIds(next, farmhandId);
+  if (/<UniqueMultiplayerID>-?\d+<\/UniqueMultiplayerID>/.test(next)) {
+    next = replaceUniqueMultiplayerIds(next, farmhandId);
+  }
   next = replaceOrInsertRawXmlTagValue(next, "farmhandReference", farmhandId, "uniqueName");
   if (/<owner\b/.test(next)) {
     next = replaceOrInsertRawXmlTagValue(next, "owner", farmhandId, "farmhandReference");
