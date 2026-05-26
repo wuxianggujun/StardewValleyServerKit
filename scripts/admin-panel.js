@@ -2770,9 +2770,10 @@ async function handleApi(req, res, pathname) {
   if (pathname === "/api/auth" && req.method === "POST") {
     const body = await readJsonBody(req);
     const env = await readEnv();
-    if (body.token && body.token === env.ADMIN_TOKEN) {
+    const token = typeof body.token === "string" ? body.token.trim() : "";
+    if (token && token === env.ADMIN_TOKEN) {
       res.writeHead(204, {
-        "Set-Cookie": `${ADMIN_COOKIE}=${encodeURIComponent(body.token)}; Path=/; SameSite=Strict; HttpOnly`,
+        "Set-Cookie": `${ADMIN_COOKIE}=${encodeURIComponent(token)}; Path=/; SameSite=Strict; HttpOnly`,
         "Cache-Control": "no-store",
       });
       res.end();
@@ -3599,8 +3600,17 @@ const PAGE = String.raw`<!doctype html>
       setMessage(createMapMessage, "");
     }
 
+    function appPath(path) {
+      const raw = String(path || "");
+      if (!raw) return location.href;
+      if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+      const basePath = location.pathname.replace(/\/index\.html$/i, "/");
+      const base = new URL(basePath.endsWith("/") ? basePath : basePath + "/", location.origin);
+      return new URL(raw.startsWith("/") ? raw.slice(1) : raw, base).toString();
+    }
+
     async function request(path, options = {}) {
-      const response = await fetch(path, {
+      const response = await fetch(appPath(path), {
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", ...(options.headers || {}) },
         ...options,
@@ -4084,7 +4094,7 @@ const PAGE = String.raw`<!doctype html>
       try {
         await request("/api/auth", {
           method: "POST",
-          body: JSON.stringify({ token: tokenInput.value }),
+          body: JSON.stringify({ token: tokenInput.value.trim() }),
         });
         tokenInput.value = "";
         setMessage(authMessage, "");
@@ -4532,7 +4542,7 @@ const PAGE = String.raw`<!doctype html>
       if (token) {
         history.replaceState(null, "", location.pathname);
         try {
-          await request("/api/auth", { method: "POST", body: JSON.stringify({ token }) });
+          await request("/api/auth", { method: "POST", body: JSON.stringify({ token: token.trim() }) });
         } catch (_) {}
       }
       try {
@@ -4559,11 +4569,20 @@ async function main() {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
-      if (url.pathname.startsWith("/api/")) {
-        await handleApi(req, res, url.pathname);
+      const apiPrefixIndex = url.pathname.indexOf("/api/");
+      if (apiPrefixIndex !== -1) {
+        await handleApi(req, res, url.pathname.slice(apiPrefixIndex));
         return;
       }
-      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+      if (
+        req.method === "GET" &&
+        (
+          url.pathname === "/" ||
+          url.pathname === "/index.html" ||
+          url.pathname.endsWith("/") ||
+          url.pathname.endsWith("/index.html")
+        )
+      ) {
         html(res, PAGE);
         return;
       }
