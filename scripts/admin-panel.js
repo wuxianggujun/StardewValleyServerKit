@@ -1294,15 +1294,21 @@ async function listSaves() {
 
 async function verifyPatchedSaveCabins(saveName, targetCabins) {
   if (targetCabins <= 1) return null;
-  const { saves } = await listSaves();
-  const save = saves.find((item) => item.name === saveName);
-  if (!save) {
-    throw new Error(`Cabin patch verification failed: save not found after patching (${saveName}).`);
-  }
-  if (save.cabinCount < targetCabins || save.usableCabinCount < targetCabins) {
+  const verification = await readSaveCabinVerification(saveName, "Cabin patch verification failed");
+  if (verification.cabinCount < targetCabins || verification.usableCabinCount < targetCabins) {
     throw new Error(
-      `Cabin patch verification failed for ${saveName}: target ${targetCabins}, found ${save.cabinCount} cabin building(s), ${save.usableCabinCount} usable farmhand slot(s).`,
+      `Cabin patch verification failed for ${saveName}: target ${targetCabins}, found ${verification.cabinCount} cabin building(s), ${verification.usableCabinCount} usable farmhand slot(s).`,
     );
+  }
+  return verification;
+}
+
+async function readSaveCabinVerification(saveName, failureLabel = "Cabin verification failed") {
+  const safeSaveName = validateSaveName(saveName);
+  const { saves } = await listSaves();
+  const save = saves.find((item) => item.name === safeSaveName);
+  if (!save) {
+    throw new Error(`${failureLabel}: save not found (${safeSaveName}).`);
   }
   return {
     cabinCount: save.cabinCount,
@@ -1454,6 +1460,17 @@ async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAt
   await sendSmapiCommand(`saves select ${selectedSaveName} --confirm`);
   addOperationStep(steps, "已自动设为下次加载", selectedSaveName);
 
+  const nativeCabinVerification =
+    targetCabins > 1
+      ? await readSaveCabinVerification(selectedSaveName, "New save cabin verification failed")
+      : null;
+  const needsCabinPatch =
+    targetCabins > 1 &&
+    (
+      nativeCabinVerification.cabinCount < targetCabins ||
+      nativeCabinVerification.usableCabinCount < targetCabins
+    );
+
   const down = await compose(["down"], { timeoutMs: 120000 });
   if (!down.ok) {
     throw new Error(await sanitize(down.stderr || down.stdout || "docker compose down failed"));
@@ -1461,7 +1478,7 @@ async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAt
   addOperationStep(steps, "已停止服务端", "准备写入新存档补丁并重新启动。");
 
   try {
-    const cabinPatch = targetCabins > 1 ? await patchSaveCabins(selectedSaveName, targetCabins) : null;
+    const cabinPatch = needsCabinPatch ? await patchSaveCabins(selectedSaveName, targetCabins) : null;
     if (cabinPatch) {
       addOperationStep(
         steps,
@@ -1469,7 +1486,13 @@ async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAt
         `目标 ${targetCabins}，补建 ${cabinPatch.addedCabins || 0}，移动 ${cabinPatch.movedCabins || 0}，清理障碍 ${cabinPatch.clearedFarmObstacles || 0}，新增角色槽 ${cabinPatch.addedFarmhands || 0}`,
       );
     } else {
-      addOperationStep(steps, "无需补齐小屋", `目标小屋数 ${targetCabins}`);
+      addOperationStep(
+        steps,
+        "无需补齐小屋",
+        nativeCabinVerification
+          ? `目标 ${targetCabins}，新存档已有 ${nativeCabinVerification.cabinCount} 座小屋，可用角色槽 ${nativeCabinVerification.usableCabinCount} 个`
+          : `目标小屋数 ${targetCabins}`,
+      );
     }
 
     const up = await compose(["up", "-d"], { timeoutMs: 120000 });
@@ -1899,6 +1922,7 @@ function applyRuntimeSettings(settings, payload) {
   settings.Server.MaxPlayers = intInRange(payload.maxPlayers, "Max players", 1, 10);
   settings.Server.CabinStrategy = stringChoice(payload.cabinStrategy, "Cabin strategy", [
     "CabinStack",
+    "None",
   ]);
   settings.Server.ExistingCabinBehavior = stringChoice(payload.existingCabinBehavior, "Existing cabin behavior", [
     "KeepExisting",
@@ -1910,12 +1934,20 @@ function applyRuntimeSettings(settings, payload) {
   settings.Server.AdminSteamIds = parseSteamIds(payload.adminSteamIds);
 }
 
-async function saveNewGameConfig(payload) {
+async function saveNewGameConfig(payload, options = {}) {
   const previousSettings = await readSettings();
   const settings = JSON.parse(JSON.stringify(previousSettings));
   applyGameCreationSettings(settings, payload);
   settings.Server.MaxPlayers = intInRange(payload.maxPlayers, "Max players", 1, 10);
   settings.Server.SeparateWallets = bool(payload.separateWallets);
+
+  if (options.forceCabinStrategy) {
+    settings.Server.CabinStrategy = stringChoice(
+      options.forceCabinStrategy,
+      "Cabin strategy",
+      ["CabinStack", "None"],
+    );
+  }
 
   await writeSettings(settings);
 
@@ -2259,9 +2291,11 @@ async function selectSave(payload) {
 async function createNewGame(payload) {
   const farmName = cleanText(payload.farmName, 48, "Junimo");
   const steps = [];
+  const requestedTargetCabins = intInRange(payload.startingCabins, "Starting cabins", 0, 9);
 
   const wasRunning = await isServerContainerRunning();
-  const volumeExistsBefore = await savesVolumeExists();
+  const { saves: savesBefore } = await listSaves();
+  const hasExistingSaves = savesBefore.length > 0;
   let readiness = null;
   if (wasRunning) {
     readiness = await collectShutdownReadiness();
@@ -2270,17 +2304,26 @@ async function createNewGame(payload) {
     }
   }
 
-  const savedConfig = await saveNewGameConfig(payload);
+  const savedConfig = await saveNewGameConfig(payload, {
+    forceCabinStrategy: requestedTargetCabins > 1 ? "None" : undefined,
+  });
   const targetCabins = savedConfig.settings.Game.StartingCabins;
-  const newGameStartedAtMs = Date.now();
+  if (requestedTargetCabins > 1 && savedConfig.settings.Server.CabinStrategy === "None") {
+    addOperationStep(
+      steps,
+      "已启用官方小屋生成",
+      `当前 CabinStrategy=None，StartingCabins=${targetCabins} 会优先走上游原生创建；只有不足时才回退 XML 补丁。`,
+    );
+  }
   addOperationStep(steps, "已保存新地图配置", `农场 ${farmName}，初始小屋 ${targetCabins}`);
   let preNewGameBackup = null;
-  if (volumeExistsBefore) {
+  if (hasExistingSaves) {
     preNewGameBackup = await createSavesBackup(`Automatic backup before creating new farm ${farmName}.`);
     addOperationStep(steps, "已创建执行前备份", preNewGameBackup.archive);
   }
 
-  if (!wasRunning && !volumeExistsBefore) {
+  if (!wasRunning && !hasExistingSaves) {
+    const newGameStartedAtMs = Date.now();
     const up = await compose(["up", "-d"], { timeoutMs: 120000 });
     if (!up.ok) {
       throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
@@ -2318,6 +2361,17 @@ async function createNewGame(payload) {
   }
   await sendSmapiCommand("settings newgame --confirm");
   addOperationStep(steps, "已发送官方 newgame 命令", "等待新存档落盘。");
+  const downForCreate = await compose(["down"], { timeoutMs: 120000 });
+  if (!downForCreate.ok) {
+    throw new Error(await sanitize(downForCreate.stderr || downForCreate.stdout || "docker compose down failed"));
+  }
+  addOperationStep(steps, "已停止服务端", "准备重启并执行官方新建流程。");
+  const newGameStartedAtMs = Date.now();
+  const upForCreate = await compose(["up", "-d"], { timeoutMs: 120000 });
+  if (!upForCreate.ok) {
+    throw new Error(await sanitize(upForCreate.stderr || upForCreate.stdout || "docker compose up failed"));
+  }
+  addOperationStep(steps, "已重启服务端", "正在等待官方流程生成新存档。");
   const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps);
 
   return {
@@ -3389,6 +3443,7 @@ const PAGE = String.raw`<!doctype html>
               <label class="field-4"><strong>小屋策略</strong>
                 <select name="cabinStrategy">
                   <option value="CabinStack">CabinStack</option>
+                  <option value="None">None</option>
                 </select>
               </label>
               <label class="field-4"><strong>已有小屋处理</strong>
