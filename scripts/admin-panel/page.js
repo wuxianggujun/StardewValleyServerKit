@@ -225,18 +225,74 @@ const PAGE = String.raw`<!doctype html>
       grid-template-columns: 1fr 1fr;
       gap: 18px;
       margin-top: 14px;
+      min-height: 0;
+    }
+    .management-panel {
+      display: flex;
+      flex-direction: column;
+      max-height: calc(100vh - 152px);
+      overflow: hidden;
+    }
+    .management-panel > .section-title,
+    .management-panel > .notice,
+    .management-panel > .backup-policy,
+    .management-panel > .message {
+      flex: 0 0 auto;
+    }
+    .management-panel > .manage-grid {
+      flex: 1 1 auto;
+    }
+    .manage-column {
+      min-width: 0;
+      min-height: 0;
     }
     #modSearchPanel {
+      display: flex;
+      flex: 0 1 auto;
+      flex-direction: column;
       margin-top: 14px;
+      max-height: min(34vh, 360px);
+      overflow: hidden;
+    }
+    .management-panel .manage-column {
+      display: flex;
+      flex-direction: column;
     }
     .manage-column h3 {
+      flex: 0 0 auto;
       margin: 0 0 8px;
       font-size: 13px;
+    }
+    .manage-column > .section-title {
+      flex: 0 0 auto;
     }
     .manage-list {
       display: grid;
       gap: 0;
       border-top: 1px solid #eef1f5;
+      min-width: 0;
+    }
+    .scroll-list {
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+      padding-right: 4px;
+    }
+    .management-panel .scroll-list {
+      max-height: min(46vh, 520px);
+    }
+    .management-panel .manage-column > .scroll-list {
+      flex: 1 1 auto;
+      min-height: 96px;
+    }
+    #modSearchResults {
+      max-height: min(28vh, 300px);
+    }
+    #modGuidanceList {
+      max-height: min(32vh, 340px);
+    }
+    #nexusFilesList {
+      max-height: min(42vh, 420px);
     }
     .manage-item {
       display: grid;
@@ -382,8 +438,11 @@ const PAGE = String.raw`<!doctype html>
     }
     .modal-panel {
       width: min(620px, 100%);
+      max-height: calc(100vh - 40px);
       display: grid;
       gap: 14px;
+      overflow: auto;
+      overscroll-behavior: contain;
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -407,6 +466,9 @@ const PAGE = String.raw`<!doctype html>
       .field-3, .field-4, .field-6, .field-8 { grid-column: span 12; }
       .backup-policy { grid-template-columns: 1fr; }
       .manage-grid { grid-template-columns: 1fr; }
+      .management-panel { max-height: none; overflow: visible; }
+      .management-panel .scroll-list { max-height: min(48vh, 460px); }
+      #modSearchPanel { max-height: min(40vh, 360px); }
       .manage-item { grid-template-columns: 1fr; }
       .manage-actions { justify-content: flex-start; }
       .topbar { align-items: flex-start; flex-direction: column; }
@@ -496,7 +558,7 @@ const PAGE = String.raw`<!doctype html>
       </div>
 
       <div class="tab-pane hidden" data-pane="players">
-        <div id="playerManagerPanel" class="panel span-12">
+        <div id="playerManagerPanel" class="panel span-12 management-panel">
           <div class="section-title">
             <h2>玩家管理</h2>
             <div class="toolbar">
@@ -510,18 +572,18 @@ const PAGE = String.raw`<!doctype html>
           <div class="manage-grid">
             <div class="manage-column">
               <h3>在线玩家</h3>
-              <div id="onlinePlayersList" class="manage-list"></div>
+              <div id="onlinePlayersList" class="manage-list scroll-list"></div>
             </div>
             <div class="manage-column">
               <h3>农场角色</h3>
-              <div id="farmhandsList" class="manage-list"></div>
+              <div id="farmhandsList" class="manage-list scroll-list"></div>
             </div>
           </div>
         </div>
       </div>
 
       <div class="tab-pane hidden" data-pane="saves">
-        <div id="saveManagerPanel" class="panel span-12">
+        <div id="saveManagerPanel" class="panel span-12 management-panel">
           <div class="section-title">
             <h2>存档管理</h2>
             <div class="toolbar">
@@ -546,21 +608,21 @@ const PAGE = String.raw`<!doctype html>
           <div class="manage-grid">
             <div class="manage-column">
               <h3>可加载存档</h3>
-              <div id="savesList" class="manage-list"></div>
+              <div id="savesList" class="manage-list scroll-list"></div>
             </div>
             <div class="manage-column">
               <div class="section-title">
                 <h3>备份文件</h3>
                 <button id="deleteSelectedBackupsBtn" class="danger" type="button">删除选中</button>
               </div>
-              <div id="backupsList" class="manage-list"></div>
+              <div id="backupsList" class="manage-list scroll-list"></div>
             </div>
           </div>
         </div>
       </div>
 
       <div class="tab-pane hidden" data-pane="mods">
-        <div id="modManagerPanel" class="panel span-12">
+        <div id="modManagerPanel" class="panel span-12 management-panel">
           <div class="section-title">
             <h2>模组管理</h2>
             <div class="toolbar">
@@ -585,16 +647,16 @@ const PAGE = String.raw`<!doctype html>
               <h3>搜索结果</h3>
               <span id="modSearchSummary" class="hint"></span>
             </div>
-            <div id="modSearchResults" class="manage-list"></div>
+            <div id="modSearchResults" class="manage-list scroll-list"></div>
           </div>
           <div class="manage-grid">
             <div class="manage-column">
               <h3>已安装 Mod</h3>
-              <div id="installedModsList" class="manage-list"></div>
+              <div id="installedModsList" class="manage-list scroll-list"></div>
             </div>
             <div class="manage-column">
               <h3>安装说明</h3>
-              <div id="modGuidanceList" class="manage-list"></div>
+              <div id="modGuidanceList" class="manage-list scroll-list"></div>
             </div>
           </div>
         </div>
@@ -770,7 +832,7 @@ const PAGE = String.raw`<!doctype html>
           <h3>Nexus 文件</h3>
           <span id="nexusFilesSummary" class="hint"></span>
         </div>
-        <div id="nexusFilesList" class="manage-list"></div>
+        <div id="nexusFilesList" class="manage-list scroll-list"></div>
       </div>
       <input type="hidden" name="displayName" />
       <input type="hidden" name="sourceUrl" />

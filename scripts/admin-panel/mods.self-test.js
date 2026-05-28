@@ -41,6 +41,20 @@ async function main() {
   assert.match(PAGE, /id="installModLocalForm"/);
   assert.match(PAGE, /name="localZip" type="file"/);
   assert.match(PAGE, /\/api\/mods\/upload/);
+  assert.match(PAGE, /\.management-panel \{/);
+  assert.match(PAGE, /\.scroll-list \{/);
+  assert.match(PAGE, /overscroll-behavior: contain;/);
+  assert.match(PAGE, /id="playerManagerPanel" class="panel span-12 management-panel"/);
+  assert.match(PAGE, /id="saveManagerPanel" class="panel span-12 management-panel"/);
+  assert.match(PAGE, /id="modManagerPanel" class="panel span-12 management-panel"/);
+  assert.match(PAGE, /id="onlinePlayersList" class="manage-list scroll-list"/);
+  assert.match(PAGE, /id="farmhandsList" class="manage-list scroll-list"/);
+  assert.match(PAGE, /id="savesList" class="manage-list scroll-list"/);
+  assert.match(PAGE, /id="backupsList" class="manage-list scroll-list"/);
+  assert.match(PAGE, /id="modSearchResults" class="manage-list scroll-list"/);
+  assert.match(PAGE, /id="installedModsList" class="manage-list scroll-list"/);
+  assert.match(PAGE, /id="modGuidanceList" class="manage-list scroll-list"/);
+  assert.match(PAGE, /id="nexusFilesList" class="manage-list scroll-list"/);
   assertThrowsMessage(
     () => __test.uploadedArchiveFromPayload({ fileName: "mod.txt", buffer: Buffer.from("PK\u0003\u0004") }),
     /\.zip 格式/,
