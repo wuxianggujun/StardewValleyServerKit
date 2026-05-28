@@ -52,6 +52,8 @@ const SMAPI_COMMAND_PIPE_TIMEOUT_MS = 90000;
 const SMAPI_COMMAND_PIPE_POLL_MS = 2000;
 const NEW_GAME_SAVE_WAIT_TIMEOUT_MS = 120000;
 const NEW_GAME_SAVE_WAIT_POLL_MS = 3000;
+const JSON_BODY_MAX_BYTES = 1024 * 1024;
+const MOD_UPLOAD_JSON_MAX_BYTES = 140 * 1024 * 1024;
 const DEFAULT_AUTO_BACKUP_ENABLED = false;
 const DEFAULT_AUTO_BACKUP_INTERVAL_MINUTES = 360;
 const DEFAULT_BACKUP_RETENTION = 10;
@@ -136,27 +138,61 @@ async function readEnv() {
 }
 
 async function setEnvValue(key, value) {
+  await setEnvValues({ [key]: value });
+}
+
+function envLine(key, value) {
+  const escaped = String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `${key}="${escaped}"`;
+}
+
+function patchEnvText(text, values) {
+  const patches = Object.entries(values).map(([key, value]) => ({
+    key,
+    line: envLine(key, value),
+    activePattern: new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`),
+    commentedPattern: new RegExp(`^\\s*#\\s*${escapeRegExp(key)}\\s*=`),
+  }));
+  const eol = text.includes("\r\n") ? "\r\n" : os.EOL;
+  const lines = text ? text.split(/\r?\n/) : [];
+
+  for (const patch of patches) {
+    const activeIndexes = [];
+    let firstCommentedIndex = -1;
+    for (let index = 0; index < lines.length; index += 1) {
+      if (patch.activePattern.test(lines[index])) {
+        activeIndexes.push(index);
+      } else if (firstCommentedIndex === -1 && patch.commentedPattern.test(lines[index])) {
+        firstCommentedIndex = index;
+      }
+    }
+
+    if (activeIndexes.length) {
+      for (const index of activeIndexes) lines[index] = patch.line;
+      continue;
+    }
+    if (firstCommentedIndex !== -1) {
+      lines[firstCommentedIndex] = patch.line;
+    }
+  }
+
+  const missing = patches.filter((patch) => (
+    !lines.some((line) => patch.activePattern.test(line))
+  ));
+  if (missing.length) {
+    if (lines.length && lines[lines.length - 1] !== "") lines.push("");
+    lines.push(...missing.map((patch) => patch.line));
+  }
+
+  return lines.join(eol);
+}
+
+async function setEnvValues(values) {
   let text = "";
   if (fs.existsSync(ENV_FILE)) {
     text = await fsp.readFile(ENV_FILE, "utf8");
   }
-  const escaped = String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const nextLine = `${key}="${escaped}"`;
-  const lines = text ? text.split(/\r?\n/) : [];
-  const pattern = new RegExp(`^\\s*#?\\s*${escapeRegExp(key)}\\s*=`);
-  let replaced = false;
-  const next = lines.map((line) => {
-    if (!replaced && pattern.test(line)) {
-      replaced = true;
-      return nextLine;
-    }
-    return line;
-  });
-  if (!replaced) {
-    if (next.length && next[next.length - 1] !== "") next.push("");
-    next.push(nextLine);
-  }
-  await fsp.writeFile(ENV_FILE, next.join(os.EOL), "utf8");
+  await writeTextAtomic(ENV_FILE, patchEnvText(text, values));
 }
 
 async function ensureAdminFiles() {
@@ -168,9 +204,11 @@ async function ensureAdminFiles() {
   }
 
   const env = await readEnv();
-  if (!env.VNC_PASSWORD) await setEnvValue("VNC_PASSWORD", newSecret(18));
-  if (!env.API_KEY) await setEnvValue("API_KEY", newSecret(32));
-  if (!env.ADMIN_TOKEN) await setEnvValue("ADMIN_TOKEN", newSecret(32));
+  const missingSecrets = {};
+  if (!env.VNC_PASSWORD) missingSecrets.VNC_PASSWORD = newSecret(18);
+  if (!env.API_KEY) missingSecrets.API_KEY = newSecret(32);
+  if (!env.ADMIN_TOKEN) missingSecrets.ADMIN_TOKEN = newSecret(32);
+  if (Object.keys(missingSecrets).length) await setEnvValues(missingSecrets);
 
   if (!fs.existsSync(SETTINGS_FILE)) {
     await writeSettings(cloneDefaultSettings());
@@ -196,11 +234,68 @@ async function readSettings() {
   };
 }
 
+function settingsFileText(settings) {
+  return `${JSON.stringify(settings, null, 2)}\n`;
+}
+
+function tempFileFor(filePath) {
+  const suffix = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  return path.join(path.dirname(filePath), `.${path.basename(filePath)}.${suffix}.tmp`);
+}
+
+async function writeTextAtomic(filePath, text) {
+  await fsp.mkdir(path.dirname(filePath), { recursive: true });
+  const tempFile = tempFileFor(filePath);
+  try {
+    await fsp.writeFile(tempFile, text, "utf8");
+    await fsp.rename(tempFile, filePath);
+  } finally {
+    await fsp.rm(tempFile, { force: true }).catch(() => {});
+  }
+}
+
+async function readOptionalText(filePath) {
+  if (!fs.existsSync(filePath)) return { exists: false, text: "" };
+  return { exists: true, text: await fsp.readFile(filePath, "utf8") };
+}
+
+async function restoreOptionalText(filePath, snapshot) {
+  if (snapshot.exists) {
+    await writeTextAtomic(filePath, snapshot.text);
+    return;
+  }
+  await fsp.rm(filePath, { force: true });
+}
+
+async function writeRuntimeConfigFiles(settings, envValues) {
+  const previousEnv = await readOptionalText(ENV_FILE);
+  const envTemp = tempFileFor(ENV_FILE);
+  const settingsTemp = tempFileFor(SETTINGS_FILE);
+  let envCommitted = false;
+
+  try {
+    await fsp.mkdir(path.dirname(ENV_FILE), { recursive: true });
+    await fsp.mkdir(path.dirname(SETTINGS_FILE), { recursive: true });
+    await fsp.writeFile(envTemp, patchEnvText(previousEnv.text, envValues), "utf8");
+    await fsp.writeFile(settingsTemp, settingsFileText(settings), "utf8");
+    await fsp.rename(envTemp, ENV_FILE);
+    envCommitted = true;
+    await fsp.rename(settingsTemp, SETTINGS_FILE);
+  } catch (error) {
+    if (envCommitted) {
+      await restoreOptionalText(ENV_FILE, previousEnv).catch((rollbackError) => {
+        error.message = `${error.message}; rollback failed: ${rollbackError.message || rollbackError}`;
+      });
+    }
+    throw error;
+  } finally {
+    await fsp.rm(envTemp, { force: true }).catch(() => {});
+    await fsp.rm(settingsTemp, { force: true }).catch(() => {});
+  }
+}
+
 async function writeSettings(settings) {
-  await fsp.mkdir(path.dirname(SETTINGS_FILE), { recursive: true });
-  const tempFile = `${SETTINGS_FILE}.tmp`;
-  await fsp.writeFile(tempFile, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-  await fsp.rename(tempFile, SETTINGS_FILE);
+  await writeTextAtomic(SETTINGS_FILE, settingsFileText(settings));
 }
 
 function commandExists(command) {
@@ -319,9 +414,19 @@ async function isAuthorized(req) {
   return crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
 }
 
-async function readJsonBody(req) {
+async function readJsonBody(req, options = {}) {
+  const maxBytes = options.maxBytes || JSON_BODY_MAX_BYTES;
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let totalBytes = 0;
+  for await (const chunk of req) {
+    totalBytes += chunk.length;
+    if (totalBytes > maxBytes) {
+      const error = apiError(413, "请求体过大。");
+      req.destroy(error);
+      throw error;
+    }
+    chunks.push(chunk);
+  }
   if (!chunks.length) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
@@ -1100,6 +1205,40 @@ function applyRuntimeSettings(settings, payload) {
   settings.Server.AdminSteamIds = parseSteamIds(payload.adminSteamIds);
 }
 
+function runtimeEnvValues(payload, settings) {
+  const values = {
+    GAME_PORT: intInRange(payload.gamePort, "Game port", 1, 65535),
+    QUERY_PORT: intInRange(payload.queryPort, "Query port", 1, 65535),
+    VNC_PORT: intInRange(payload.vncPort, "VNC port", 1, 65535),
+    API_PORT: intInRange(payload.apiPort, "API port", 1, 65535),
+    VERBOSE_LOGGING: settings.Server.VerboseLogging ? "true" : "false",
+  };
+
+  const passwordAction = payload.serverPasswordAction || "keep";
+  if (passwordAction === "clear") {
+    values.SERVER_PASSWORD = "";
+  } else if (passwordAction === "set") {
+    values.SERVER_PASSWORD = cleanText(payload.serverPassword, 80, "");
+  } else if (passwordAction !== "keep") {
+    throw new Error("Server password action is invalid.");
+  }
+
+  const nexusApiKeyAction = payload.nexusApiKeyAction || "keep";
+  if (nexusApiKeyAction === "clear") {
+    values.NEXUS_API_KEY = "";
+  } else if (nexusApiKeyAction === "set") {
+    const nexusApiKey = cleanText(payload.nexusApiKey, 256, "");
+    if (!nexusApiKey) {
+      throw new Error("Nexus API Key cannot be empty when setting a new key.");
+    }
+    values.NEXUS_API_KEY = nexusApiKey;
+  } else if (nexusApiKeyAction !== "keep") {
+    throw new Error("Nexus API key action is invalid.");
+  }
+
+  return values;
+}
+
 async function saveNewGameConfig(payload, options = {}) {
   const previousSettings = await readSettings();
   const settings = JSON.parse(JSON.stringify(previousSettings));
@@ -1128,36 +1267,9 @@ async function saveConfig(payload) {
   const previousSettings = await readSettings();
   const settings = JSON.parse(JSON.stringify(previousSettings));
   applyRuntimeSettings(settings, payload);
+  const envValues = runtimeEnvValues(payload, settings);
 
-  await writeSettings(settings);
-
-  await setEnvValue("GAME_PORT", intInRange(payload.gamePort, "Game port", 1, 65535));
-  await setEnvValue("QUERY_PORT", intInRange(payload.queryPort, "Query port", 1, 65535));
-  await setEnvValue("VNC_PORT", intInRange(payload.vncPort, "VNC port", 1, 65535));
-  await setEnvValue("API_PORT", intInRange(payload.apiPort, "API port", 1, 65535));
-  await setEnvValue("VERBOSE_LOGGING", settings.Server.VerboseLogging ? "true" : "false");
-
-  const passwordAction = payload.serverPasswordAction || "keep";
-  if (passwordAction === "clear") {
-    await setEnvValue("SERVER_PASSWORD", "");
-  } else if (passwordAction === "set") {
-    await setEnvValue("SERVER_PASSWORD", cleanText(payload.serverPassword, 80, ""));
-  } else if (passwordAction !== "keep") {
-    throw new Error("Server password action is invalid.");
-  }
-
-  const nexusApiKeyAction = payload.nexusApiKeyAction || "keep";
-  if (nexusApiKeyAction === "clear") {
-    await setEnvValue("NEXUS_API_KEY", "");
-  } else if (nexusApiKeyAction === "set") {
-    const nexusApiKey = cleanText(payload.nexusApiKey, 256, "");
-    if (!nexusApiKey) {
-      throw new Error("Nexus API Key cannot be empty when setting a new key.");
-    }
-    await setEnvValue("NEXUS_API_KEY", nexusApiKey);
-  } else if (nexusApiKeyAction !== "keep") {
-    throw new Error("Nexus API key action is invalid.");
-  }
+  await writeRuntimeConfigFiles(settings, envValues);
 
   return {
     settings,
@@ -1913,6 +2025,7 @@ async function updateBackupPolicy(payload) {
 const handleApi = createApiHandler({
   ADMIN_COOKIE,
   readJsonBody,
+  MOD_UPLOAD_JSON_MAX_BYTES,
   readEnv,
   isAuthorized,
   json,
@@ -1933,6 +2046,7 @@ const handleApi = createApiHandler({
   searchMods: modService.searchMods,
   getNexusModFiles: modService.getNexusModFiles,
   installModFromUrl: modService.installModFromUrl,
+  installModFromUpload: modService.installModFromUpload,
   installModFromNexusFile: modService.installModFromNexusFile,
   deleteInstalledMod: modService.deleteInstalledMod,
   selectSave,
@@ -2002,7 +2116,21 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  console.error(error.message || error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message || error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  __test: {
+    parseEnv,
+    patchEnvText,
+    runtimeEnvValues,
+    saveConfig,
+    getConfig,
+    readEnv,
+    readSettings,
+  },
+};

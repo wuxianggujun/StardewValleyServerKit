@@ -4,6 +4,7 @@ function createApiHandler(deps) {
   const {
     ADMIN_COOKIE,
     readJsonBody,
+    MOD_UPLOAD_JSON_MAX_BYTES,
     readEnv,
     isAuthorized,
     json,
@@ -24,6 +25,7 @@ function createApiHandler(deps) {
     searchMods,
     getNexusModFiles,
     installModFromUrl,
+    installModFromUpload,
     installModFromNexusFile,
     deleteInstalledMod,
     selectSave,
@@ -133,6 +135,10 @@ function createApiHandler(deps) {
   }
   if (pathname === "/api/mods/install" && req.method === "POST") {
     json(res, 200, await installModFromUrl(await readJsonBody(req)));
+    return;
+  }
+  if (pathname === "/api/mods/upload" && req.method === "POST") {
+    json(res, 200, await installModFromUpload(await readJsonBody(req, { maxBytes: MOD_UPLOAD_JSON_MAX_BYTES })));
     return;
   }
   if (pathname === "/api/mods/nexus/files" && req.method === "POST") {

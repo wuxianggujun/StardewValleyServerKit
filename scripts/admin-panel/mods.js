@@ -830,20 +830,53 @@ function uniqueDirectoryName(baseName, usedNames) {
   return name;
 }
 
-async function installModFromUrl(state, payload) {
-  const downloadUrl = assertHttpsUrl(payload?.url, { checkDownloadHost: true }).toString();
-  const displayName = cleanText(payload?.displayName, 120, "");
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "sdv-mod-"));
-  const zipPath = path.join(tempDir, "archive.zip");
+function uploadedArchiveFromPayload(payload) {
+  const fileName = cleanText(payload?.fileName, 180, "");
+  if (!fileName || !/\.zip$/i.test(fileName)) {
+    throw new Error("请选择 .zip 格式的本地模组压缩包。");
+  }
+
+  const rawContent = typeof payload?.contentBase64 === "string" ? payload.contentBase64.trim() : "";
+  if (!rawContent) {
+    throw new Error("上传文件内容为空。");
+  }
+
+  const commaIndex = rawContent.indexOf(",");
+  const base64 = (commaIndex >= 0 ? rawContent.slice(commaIndex + 1) : rawContent).replace(/\s+/g, "");
+  if (!base64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
+    throw new Error("上传文件内容不是有效的 Base64。");
+  }
+
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  const estimatedBytes = Math.floor((base64.length * 3) / 4) - padding;
+  if (estimatedBytes <= 0) {
+    throw new Error("上传文件内容为空。");
+  }
+  if (estimatedBytes > MOD_DOWNLOAD_MAX_BYTES) {
+    throw new Error("上传文件超过 100 MB 限制。");
+  }
+
+  const buffer = Buffer.from(base64, "base64");
+  if (!buffer.length) {
+    throw new Error("上传文件内容为空。");
+  }
+  if (buffer.length > MOD_DOWNLOAD_MAX_BYTES) {
+    throw new Error("上传文件超过 100 MB 限制。");
+  }
+
+  return { fileName, buffer };
+}
+
+async function installModArchive(state, options) {
+  const tempDir = options.tempDir;
+  const zipPath = options.zipPath;
+  const displayName = cleanText(options.displayName, 120, "");
+  const bytes = Number.isFinite(options.bytes) ? options.bytes : 0;
   const extractDir = path.join(tempDir, "extract");
   let stagingRoot = "";
 
   try {
     await ensureModsDir(state);
-    const download = await downloadFile(downloadUrl, zipPath, {
-      maxBytes: MOD_DOWNLOAD_MAX_BYTES,
-      timeoutMs: MOD_DOWNLOAD_TIMEOUT_MS,
-    });
     await assertZipMagic(zipPath);
     await unzipArchive(state, tempDir);
 
@@ -898,7 +931,7 @@ async function installModFromUrl(state, payload) {
     return {
       installed,
       installedCount: installed.length,
-      bytes: download.bytes,
+      bytes,
       restartRequired: true,
       message: `已安装 ${installed.length} 个模组，重启服务端后生效。`,
       allInstalled: await listInstalledMods(state),
@@ -907,6 +940,46 @@ async function installModFromUrl(state, payload) {
     if (stagingRoot) {
       await fsp.rm(stagingRoot, { recursive: true, force: true }).catch(() => {});
     }
+  }
+}
+
+async function installModFromUrl(state, payload) {
+  const downloadUrl = assertHttpsUrl(payload?.url, { checkDownloadHost: true }).toString();
+  const displayName = cleanText(payload?.displayName, 120, "");
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "sdv-mod-"));
+  const zipPath = path.join(tempDir, "archive.zip");
+
+  try {
+    const download = await downloadFile(downloadUrl, zipPath, {
+      maxBytes: MOD_DOWNLOAD_MAX_BYTES,
+      timeoutMs: MOD_DOWNLOAD_TIMEOUT_MS,
+    });
+    return await installModArchive(state, {
+      tempDir,
+      zipPath,
+      displayName,
+      bytes: download.bytes,
+    });
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function installModFromUpload(state, payload) {
+  const { fileName, buffer } = uploadedArchiveFromPayload(payload);
+  const displayName = cleanText(payload?.displayName, 120, "") || safeDirectoryName(fileName.replace(/\.zip$/i, ""), "mod");
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "sdv-mod-upload-"));
+  const zipPath = path.join(tempDir, "archive.zip");
+
+  try {
+    await fsp.writeFile(zipPath, buffer);
+    return await installModArchive(state, {
+      tempDir,
+      zipPath,
+      displayName,
+      bytes: buffer.length,
+    });
+  } finally {
     await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
 }
@@ -982,6 +1055,7 @@ function createModService(options) {
     searchMods: (payload) => searchMods(state, payload),
     getNexusModFiles: (payload) => getNexusModFiles(state, payload),
     installModFromUrl: (payload) => installModFromUrl(state, payload),
+    installModFromUpload: (payload) => installModFromUpload(state, payload),
     installModFromNexusFile: (payload) => installModFromNexusFile(state, payload),
     deleteInstalledMod: (payload) => deleteInstalledMod(state, payload),
   };
@@ -997,6 +1071,7 @@ module.exports = {
     isAllowedDownloadHost,
     shouldSkipModDirectory,
     assertInsideRoot,
+    uploadedArchiveFromPayload,
     nexusFileGroup,
     nexusRetryDelayMs,
     normalizeNexusFile,

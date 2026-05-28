@@ -36,6 +36,20 @@ async function main() {
   assert.match(PAGE, /使用缓存/);
   assert.match(PAGE, /未再次请求 Nexus API/);
   assert.match(PAGE, /\.field-8 \{ grid-column: span 8; \}/);
+  assert.match(PAGE, /name="localZip" type="file"/);
+  assert.match(PAGE, /\/api\/mods\/upload/);
+  assertThrowsMessage(
+    () => __test.uploadedArchiveFromPayload({ fileName: "mod.txt", contentBase64: "UEsDBA==" }),
+    /\.zip 格式/,
+  );
+  assertThrowsMessage(
+    () => __test.uploadedArchiveFromPayload({ fileName: "mod.zip", contentBase64: "" }),
+    /内容为空/,
+  );
+  assert.equal(
+    __test.uploadedArchiveFromPayload({ fileName: "mod.zip", contentBase64: "data:application/zip;base64,UEsDBA==" }).buffer.length,
+    4,
+  );
   assertThrowsMessage(
     () => __test.normalizeNexusApiError({ statusCode: 429, retryAfterMs: 90000, message: "HTTP 429" }),
     /建议等待 90 秒后再试/,
@@ -151,6 +165,35 @@ async function main() {
     assert.match(deleteResult.backupName, /^VisibleMod\.bak-\d{8}T\d{6}Z/);
     assert.equal(await pathExists(path.join(modsDir, "VisibleMod")), false);
     assert.equal(await pathExists(path.join(rootDir, "backups", "mods", deleteResult.backupName, "manifest.json")), true);
+
+    const uploadService = createModService({
+      rootDir,
+      docker: async (args) => {
+        const volumeArg = args[args.lastIndexOf("-v") + 1];
+        const mountSuffix = ":/work";
+        const tempDir = volumeArg.endsWith(mountSuffix)
+          ? volumeArg.slice(0, -mountSuffix.length)
+          : volumeArg;
+        const modDir = path.join(tempDir, "extract", "UploadedMod");
+        await fsp.mkdir(modDir, { recursive: true });
+        await fsp.writeFile(path.join(modDir, "manifest.json"), JSON.stringify({
+          Name: "Uploaded Mod",
+          UniqueID: "Example.Uploaded",
+          Version: "1.2.3",
+          Author: "Local",
+        }));
+        return { ok: true, stdout: "", stderr: "" };
+      },
+      readEnv: async () => ({}),
+    });
+    const uploadResult = await uploadService.installModFromUpload({
+      fileName: "uploaded.zip",
+      contentBase64: "UEsDBA==",
+    });
+    assert.equal(uploadResult.installedCount, 1);
+    assert.equal(uploadResult.bytes, 4);
+    assert.equal(uploadResult.installed[0].directoryName, "Uploaded Mod");
+    assert.equal(await pathExists(path.join(modsDir, "Uploaded Mod", "manifest.json")), true);
 
     let retryCalls = 0;
     const retrySleeps = [];

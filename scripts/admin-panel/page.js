@@ -610,8 +610,6 @@ const PAGE = String.raw`<!doctype html>
             <fieldset>
               <legend>联机</legend>
               <label class="field-4"><strong>房间总人数</strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
-              <label class="field-4"><strong>游戏 UDP 端口</strong><input name="gamePort" type="number" min="1" max="65535" /></label>
-              <label class="field-4"><strong>查询 UDP 端口</strong><input name="queryPort" type="number" min="1" max="65535" /></label>
               <label class="field-4"><strong>大厅模式</strong>
                 <select name="lobbyMode">
                   <option value="Shared">Shared</option>
@@ -621,6 +619,14 @@ const PAGE = String.raw`<!doctype html>
               <label class="field-4 checkline"><input name="allowIpConnections" type="checkbox" />允许 IP 直连</label>
               <label class="field-4 checkline"><input name="separateWallets" type="checkbox" />玩家钱包分开</label>
               <label class="field-4 checkline"><input name="verboseLogging" type="checkbox" />详细日志</label>
+            </fieldset>
+
+            <fieldset>
+              <legend>端口</legend>
+              <label class="field-3"><strong>游戏 UDP 端口</strong><input name="gamePort" type="number" min="1" max="65535" /></label>
+              <label class="field-3"><strong>查询 UDP 端口</strong><input name="queryPort" type="number" min="1" max="65535" /></label>
+              <label class="field-3"><strong>VNC 端口</strong><input name="vncPort" type="number" min="1" max="65535" /></label>
+              <label class="field-3"><strong>HTTP API 端口</strong><input name="apiPort" type="number" min="1" max="65535" /></label>
             </fieldset>
 
             <fieldset>
@@ -644,8 +650,6 @@ const PAGE = String.raw`<!doctype html>
                 </select>
               </label>
               <label class="field-4"><strong>新进服密码</strong><input name="serverPassword" type="password" autocomplete="new-password" /></label>
-              <label class="field-4"><strong>VNC 端口</strong><input name="vncPort" type="number" min="1" max="65535" /></label>
-              <label class="field-4"><strong>HTTP API 端口</strong><input name="apiPort" type="number" min="1" max="65535" /></label>
               <label class="field-12"><strong>管理员 Steam64 ID</strong><textarea name="adminSteamIds" placeholder="每行一个 Steam64 ID"></textarea></label>
             </fieldset>
 
@@ -759,6 +763,10 @@ const PAGE = String.raw`<!doctype html>
       <label>
         <strong>下载 URL</strong>
         <input name="url" type="url" placeholder="https://..." autocomplete="off" />
+      </label>
+      <label>
+        <strong>本地 zip 文件</strong>
+        <input name="localZip" type="file" accept=".zip,application/zip,application/x-zip-compressed" />
       </label>
       <div id="nexusFilesPanel" class="hidden">
         <div class="section-title">
@@ -921,13 +929,14 @@ const PAGE = String.raw`<!doctype html>
     function openInstallModDialog(options = {}) {
       const form = installModForm.elements;
       form.url.value = "";
+      form.localZip.value = "";
       form.displayName.value = options.displayName || "";
       form.sourceUrl.value = options.sourceUrl || "";
       form.nexusId.value = options.nexusId || "";
       installModTitle.textContent = options.displayName ? "安装模组：" + options.displayName : "安装模组";
       installModHelp.textContent = options.sourceUrl
-        ? "先打开来源页复制 zip 下载 URL，再粘贴到这里。面板会在后端下载、校验并安装到 data/mods。"
-        : "粘贴 zip 下载 URL。面板会在后端下载、校验并安装到 data/mods。";
+        ? "先打开来源页复制 zip 下载 URL，或直接选择本地 zip 文件。面板会在后端校验并安装到 data/mods。"
+        : "粘贴 zip 下载 URL，或选择本地 zip 文件。面板会在后端校验并安装到 data/mods。";
       openInstallSourceBtn.disabled = !options.sourceUrl;
       nexusFilesPanel.classList.add("hidden");
       nexusFilesSummary.textContent = "";
@@ -954,6 +963,7 @@ const PAGE = String.raw`<!doctype html>
     }
 
     const nexusFileGroupOrder = ["main", "patch", "optional", "old", "other"];
+    const modUploadMaxBytes = 100 * 1024 * 1024;
     const nexusFileGroupMeta = {
       main: { title: "主文件", hint: "通常优先安装这一组。" },
       patch: { title: "补丁 / 更新", hint: "通常需要先安装主文件或匹配指定版本。" },
@@ -1099,6 +1109,20 @@ const PAGE = String.raw`<!doctype html>
       }
       if (response.status === 204) return null;
       return response.json();
+    }
+
+    function readFileAsBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result || "");
+          const marker = "base64,";
+          const markerIndex = result.indexOf(marker);
+          resolve(markerIndex >= 0 ? result.slice(markerIndex + marker.length) : result);
+        };
+        reader.onerror = () => reject(reader.error || new Error("读取本地文件失败。"));
+        reader.readAsDataURL(file);
+      });
     }
 
     function pill(text, kind) {
@@ -1862,22 +1886,40 @@ const PAGE = String.raw`<!doctype html>
       event.preventDefault();
       const form = installModForm.elements;
       const url = form.url.value.trim();
-      if (!url) {
-        setMessage(installModMessage, "请粘贴 zip 下载 URL。", "bad");
+      const localZip = form.localZip.files && form.localZip.files[0];
+      if (!url && !localZip) {
+        setMessage(installModMessage, "请粘贴 zip 下载 URL，或选择本地 zip 文件。", "bad");
+        return;
+      }
+      if (localZip && !/\.zip$/i.test(localZip.name)) {
+        setMessage(installModMessage, "请选择 .zip 格式的本地模组压缩包。", "bad");
+        return;
+      }
+      if (localZip && localZip.size > modUploadMaxBytes) {
+        setMessage(installModMessage, "本地 zip 文件超过 100 MB 限制。", "bad");
         return;
       }
 
       const submitBtn = installModForm.querySelector('button[type="submit"]');
       submitBtn.disabled = true;
-      setMessage(installModMessage, "正在下载并安装模组，完成前请不要关闭面板...");
+      setMessage(installModMessage, localZip ? "正在上传并安装模组，完成前请不要关闭面板..." : "正在下载并安装模组，完成前请不要关闭面板...");
       try {
-        const result = await request("/api/mods/install", {
-          method: "POST",
-          body: JSON.stringify({
-            url,
-            displayName: form.displayName.value,
-          }),
-        });
+        const result = localZip
+          ? await request("/api/mods/upload", {
+              method: "POST",
+              body: JSON.stringify({
+                fileName: localZip.name,
+                displayName: form.displayName.value || localZip.name.replace(/\.zip$/i, ""),
+                contentBase64: await readFileAsBase64(localZip),
+              }),
+            })
+          : await request("/api/mods/install", {
+              method: "POST",
+              body: JSON.stringify({
+                url,
+                displayName: form.displayName.value,
+              }),
+            });
         latestModSearchQuery = "";
         latestModSearchResults = [];
         await reloadModManagement();
