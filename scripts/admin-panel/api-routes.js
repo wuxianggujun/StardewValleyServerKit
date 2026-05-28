@@ -21,10 +21,17 @@ function createApiHandler(deps) {
     cancelStopAfterSaveJob,
     getSaveManagement,
     getModManagement,
+    searchMods,
+    getNexusModFiles,
+    installModFromUrl,
+    installModFromNexusFile,
+    deleteInstalledMod,
     selectSave,
     createNewGame,
     repairSaveCabins,
     deleteSave,
+    readSaveConfigFromVolume,
+    writeSaveConfigToVolume,
     createSavesBackup,
     updateBackupPolicy,
     restoreBackup,
@@ -120,6 +127,26 @@ function createApiHandler(deps) {
     json(res, 200, await getModManagement());
     return;
   }
+  if (pathname === "/api/mods/search" && req.method === "POST") {
+    json(res, 200, await searchMods(await readJsonBody(req)));
+    return;
+  }
+  if (pathname === "/api/mods/install" && req.method === "POST") {
+    json(res, 200, await installModFromUrl(await readJsonBody(req)));
+    return;
+  }
+  if (pathname === "/api/mods/nexus/files" && req.method === "POST") {
+    json(res, 200, await getNexusModFiles(await readJsonBody(req)));
+    return;
+  }
+  if (pathname === "/api/mods/nexus/install" && req.method === "POST") {
+    json(res, 200, await installModFromNexusFile(await readJsonBody(req)));
+    return;
+  }
+  if (pathname === "/api/mods/delete" && req.method === "POST") {
+    json(res, 200, await deleteInstalledMod(await readJsonBody(req)));
+    return;
+  }
   if (pathname === "/api/saves/select" && req.method === "POST") {
     json(res, 200, await selectSave(await readJsonBody(req)));
     return;
@@ -130,6 +157,16 @@ function createApiHandler(deps) {
   }
   if (pathname === "/api/saves/repair-cabins" && req.method === "POST") {
     json(res, 200, await repairSaveCabins(await readJsonBody(req)));
+    return;
+  }
+  if (pathname === "/api/saves/config" && req.method === "GET") {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const saveName = url.searchParams.get("saveName") || "";
+    json(res, 200, await readSaveConfigFromVolume({ saveName }));
+    return;
+  }
+  if (pathname === "/api/saves/config" && req.method === "POST") {
+    json(res, 200, await writeSaveConfigToVolume(await readJsonBody(req)));
     return;
   }
   if (pathname === "/api/saves/delete" && req.method === "POST") {

@@ -9,7 +9,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { createModService } = require("./admin-panel/mods");
-const { decodeXmlText, patchCabinsXml } = require("./admin-panel/save-repair");
+const { decodeXmlText, patchCabinsXml, extractSaveConfig, applySaveConfigEdits } = require("./admin-panel/save-repair");
 const { PAGE } = require("./admin-panel/page");
 const { createApiHandler } = require("./admin-panel/api-routes");
 const { createPlayerService, buildPlayerManagement } = require("./admin-panel/players");
@@ -38,7 +38,7 @@ const {
 } = require("./admin-panel/utils");
 
 const ROOT_DIR = path.resolve(process.env.SDV_ADMIN_ROOT || path.join(__dirname, ".."));
-const modService = createModService({ rootDir: ROOT_DIR });
+const modService = createModService({ rootDir: ROOT_DIR, docker, readEnv });
 const ENV_FILE = path.join(ROOT_DIR, ".env");
 const ENV_EXAMPLE_FILE = path.join(ROOT_DIR, ".env.example");
 const SETTINGS_FILE = path.join(ROOT_DIR, "data", "settings", "server-settings.json");
@@ -266,6 +266,7 @@ async function sanitize(text) {
     "API_KEY",
     "ADMIN_TOKEN",
     "SERVER_PASSWORD",
+    "NEXUS_API_KEY",
     "DISCORD_BOT_TOKEN",
   ]) {
     const value = env[key];
@@ -791,6 +792,70 @@ async function pruneBackups(retention, options = {}) {
   return deleted;
 }
 
+async function readSaveConfigFromVolume(payload) {
+  const saveName = validateSaveName(payload.saveName);
+  const { saves } = await listSaves();
+  if (!saves.some((save) => save.name === saveName)) {
+    throw new Error(`Save not found: ${saveName}`);
+  }
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "sdv-config-"));
+  try {
+    await copySaveFileFromVolume(saveName, tempDir);
+    const xml = await fsp.readFile(path.join(tempDir, "save.xml"), "utf8");
+    return { saveName, config: extractSaveConfig(xml) };
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function writeSaveConfigToVolume(payload) {
+  const saveName = validateSaveName(payload.saveName);
+  const { saves } = await listSaves();
+  if (!saves.some((save) => save.name === saveName)) {
+    throw new Error(`Save not found: ${saveName}`);
+  }
+
+  const edits = {};
+  if (payload.farmName != null) {
+    edits.farmName = cleanText(payload.farmName, 48, "Farm");
+  }
+  if (payload.money != null) {
+    edits.money = intInRange(payload.money, "Money", 0, 999999999);
+  }
+  if (payload.year != null) {
+    edits.year = intInRange(payload.year, "Year", 1, 9999);
+  }
+  if (payload.currentSeason != null) {
+    edits.currentSeason = stringChoice(payload.currentSeason, "Season", ["spring", "summer", "fall", "winter"]);
+  }
+  if (payload.dayOfMonth != null) {
+    edits.dayOfMonth = intInRange(payload.dayOfMonth, "Day", 1, 28);
+  }
+
+  if (!Object.keys(edits).length) {
+    throw new Error("No editable fields provided.");
+  }
+
+  const preEditBackup = await createSavesBackup(`Automatic backup before editing config of save ${saveName}.`);
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "sdv-config-"));
+  try {
+    await copySaveFileFromVolume(saveName, tempDir);
+    const saveFile = path.join(tempDir, "save.xml");
+    const xml = await fsp.readFile(saveFile, "utf8");
+    const patched = applySaveConfigEdits(xml, edits);
+    await fsp.writeFile(saveFile, patched, "utf8");
+    await writeSaveFileToVolume(saveName, tempDir);
+    return {
+      saveName,
+      edits,
+      preEditBackup: preEditBackup.archive,
+      config: extractSaveConfig(patched),
+    };
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function getSaveManagement() {
   const [{ volumeExists, saves }, backups, backupPolicy] = await Promise.all([
     listSaves(),
@@ -1001,6 +1066,7 @@ async function getConfig() {
       steamUsernameSet: Boolean(env.STEAM_USERNAME),
       steamPasswordSet: Boolean(env.STEAM_PASSWORD || env.STEAM_REFRESH_TOKEN),
       serverPasswordSet: Boolean(env.SERVER_PASSWORD),
+      nexusApiKeySet: Boolean(env.NEXUS_API_KEY),
       apiEnabled: env.API_ENABLED !== "false",
     },
   };
@@ -1078,6 +1144,19 @@ async function saveConfig(payload) {
     await setEnvValue("SERVER_PASSWORD", cleanText(payload.serverPassword, 80, ""));
   } else if (passwordAction !== "keep") {
     throw new Error("Server password action is invalid.");
+  }
+
+  const nexusApiKeyAction = payload.nexusApiKeyAction || "keep";
+  if (nexusApiKeyAction === "clear") {
+    await setEnvValue("NEXUS_API_KEY", "");
+  } else if (nexusApiKeyAction === "set") {
+    const nexusApiKey = cleanText(payload.nexusApiKey, 256, "");
+    if (!nexusApiKey) {
+      throw new Error("Nexus API Key cannot be empty when setting a new key.");
+    }
+    await setEnvValue("NEXUS_API_KEY", nexusApiKey);
+  } else if (nexusApiKeyAction !== "keep") {
+    throw new Error("Nexus API key action is invalid.");
   }
 
   return {
@@ -1851,10 +1930,17 @@ const handleApi = createApiHandler({
   cancelStopAfterSaveJob,
   getSaveManagement,
   getModManagement: modService.getModManagement,
+  searchMods: modService.searchMods,
+  getNexusModFiles: modService.getNexusModFiles,
+  installModFromUrl: modService.installModFromUrl,
+  installModFromNexusFile: modService.installModFromNexusFile,
+  deleteInstalledMod: modService.deleteInstalledMod,
   selectSave,
   createNewGame,
   repairSaveCabins,
   deleteSave,
+  readSaveConfigFromVolume,
+  writeSaveConfigToVolume,
   createSavesBackup,
   updateBackupPolicy,
   restoreBackup,

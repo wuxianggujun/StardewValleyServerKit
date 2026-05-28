@@ -225,6 +225,9 @@ const PAGE = String.raw`<!doctype html>
       gap: 18px;
       margin-top: 14px;
     }
+    #modSearchPanel {
+      margin-top: 14px;
+    }
     .manage-column h3 {
       margin: 0 0 8px;
       font-size: 13px;
@@ -271,6 +274,35 @@ const PAGE = String.raw`<!doctype html>
     .manage-actions button {
       min-height: 30px;
       padding: 5px 9px;
+    }
+    .nexus-file-group {
+      border-top: 1px solid #eef1f5;
+      padding-top: 10px;
+    }
+    .nexus-file-group:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+    .nexus-file-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+    .nexus-file-heading h4 {
+      margin: 0;
+      font-size: 13px;
+    }
+    .nexus-file-group .manage-list {
+      border-top: 0;
+    }
+    .manage-item.recommended {
+      background: #f8fff9;
+      border-color: #c7ebd2;
+      border-radius: 8px;
+      margin: 0 -8px 6px;
+      padding: 10px 8px;
     }
     pre {
       margin: 0;
@@ -541,11 +573,18 @@ const PAGE = String.raw`<!doctype html>
           <div class="backup-policy">
             <label class="field-6"><strong>按名称、UniqueID 或 Nexus ID 搜索</strong><input id="modSearchInput" placeholder="例如 Content Patcher、Pathoschild.ContentPatcher、Nexus:1915" /></label>
             <div class="field-6 toolbar">
-              <button id="searchSmapiModsBtn" type="button">查 SMAPI 兼容列表</button>
-              <button id="searchNexusModsBtn" type="button">查 Nexus Mods</button>
+              <button id="searchModsBtn" class="primary" type="button">搜索</button>
+              <button id="installModUrlBtn" type="button">从 URL 安装</button>
             </div>
           </div>
           <div id="modsMessage" class="message"></div>
+          <div id="modSearchPanel" class="manage-column hidden">
+            <div class="section-title">
+              <h3>搜索结果</h3>
+              <span id="modSearchSummary" class="hint"></span>
+            </div>
+            <div id="modSearchResults" class="manage-list"></div>
+          </div>
           <div class="manage-grid">
             <div class="manage-column">
               <h3>已安装 Mod</h3>
@@ -609,8 +648,21 @@ const PAGE = String.raw`<!doctype html>
               <label class="field-12"><strong>管理员 Steam64 ID</strong><textarea name="adminSteamIds" placeholder="每行一个 Steam64 ID"></textarea></label>
             </fieldset>
 
+            <fieldset>
+              <legend>Nexus Mods</legend>
+              <label class="field-4"><strong>API Key 操作</strong>
+                <select name="nexusApiKeyAction">
+                  <option value="keep">保持不变</option>
+                  <option value="set">设置新 Key</option>
+                  <option value="clear">清空 Key</option>
+                </select>
+              </label>
+              <label class="field-8"><strong>新 Nexus API Key</strong><input name="nexusApiKey" type="password" autocomplete="new-password" /></label>
+              <div id="nexusApiKeyStatus" class="field-12 hint"></div>
+            </fieldset>
+
             <div class="notice">
-              保存只写运行配置。端口、人数、IP 直连、密码和管理员等设置需要重启服务端后生效；农场名称和地图类型请在“存档管理”里点击“创建地图”单独设置。
+              保存只写运行配置。端口、人数、IP 直连、密码、管理员和 Nexus API Key 等设置会写入 .env；需要服务端读取的配置重启后生效。农场名称和地图类型请在“存档管理”里点击“创建地图”单独设置。
             </div>
             <div class="toolbar">
               <button class="primary" type="submit">保存配置</button>
@@ -669,6 +721,63 @@ const PAGE = String.raw`<!doctype html>
     </form>
   </div>
 
+  <div id="editConfigDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editConfigTitle">
+    <form id="editConfigForm" class="modal-panel">
+      <h2 id="editConfigTitle">存档配置</h2>
+      <p class="modal-message">编辑基础字段后保存，系统会自动备份再写入。地图类型和时间为只读。</p>
+      <fieldset>
+        <label class="field-6"><strong>农场名称</strong><input name="farmName" maxlength="48" /></label>
+        <label class="field-6"><strong>地图类型</strong><input name="whichFarm" disabled /></label>
+        <label class="field-4"><strong>金钱</strong><input name="money" type="number" min="0" max="999999999" /></label>
+        <label class="field-4"><strong>年份</strong><input name="year" type="number" min="1" max="9999" /></label>
+        <label class="field-4"><strong>季节</strong>
+          <select name="currentSeason">
+            <option value="spring">春</option>
+            <option value="summer">夏</option>
+            <option value="fall">秋</option>
+            <option value="winter">冬</option>
+          </select>
+        </label>
+        <label class="field-4"><strong>日期</strong><input name="dayOfMonth" type="number" min="1" max="28" /></label>
+        <label class="field-4"><strong>当前时间</strong><input name="timeOfDay" disabled /></label>
+        <label class="field-4"><strong>累计收入</strong><input name="totalMoneyEarned" disabled /></label>
+      </fieldset>
+      <input type="hidden" name="saveName" />
+      <div id="editConfigMessage" class="message"></div>
+      <div class="toolbar modal-actions">
+        <button id="cancelEditConfigBtn" type="button">取消</button>
+        <button class="primary" type="submit">保存配置</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="installModDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="installModTitle">
+    <form id="installModForm" class="modal-panel">
+      <h2 id="installModTitle">安装模组</h2>
+      <p id="installModHelp" class="modal-message">粘贴 zip 下载 URL。面板会在后端下载、校验并安装到 data/mods。</p>
+      <label>
+        <strong>下载 URL</strong>
+        <input name="url" type="url" placeholder="https://..." autocomplete="off" />
+      </label>
+      <div id="nexusFilesPanel" class="hidden">
+        <div class="section-title">
+          <h3>Nexus 文件</h3>
+          <span id="nexusFilesSummary" class="hint"></span>
+        </div>
+        <div id="nexusFilesList" class="manage-list"></div>
+      </div>
+      <input type="hidden" name="displayName" />
+      <input type="hidden" name="sourceUrl" />
+      <input type="hidden" name="nexusId" />
+      <div id="installModMessage" class="message"></div>
+      <div class="toolbar modal-actions">
+        <button id="openInstallSourceBtn" type="button">打开来源页</button>
+        <button id="cancelInstallModBtn" type="button">取消</button>
+        <button class="primary" type="submit">安装</button>
+      </div>
+    </form>
+  </div>
+
   <script>
     const authPanel = document.querySelector("#authPanel");
     const appPanel = document.querySelector("#appPanel");
@@ -687,12 +796,16 @@ const PAGE = String.raw`<!doctype html>
     const savesList = document.querySelector("#savesList");
     const backupsList = document.querySelector("#backupsList");
     const saveManagerPanel = document.querySelector("#saveManagerPanel");
+    const modManagerPanel = document.querySelector("#modManagerPanel");
     const modsMessage = document.querySelector("#modsMessage");
     const refreshModsBtn = document.querySelector("#refreshModsBtn");
     const backupBeforeModsBtn = document.querySelector("#backupBeforeModsBtn");
     const modSearchInput = document.querySelector("#modSearchInput");
-    const searchSmapiModsBtn = document.querySelector("#searchSmapiModsBtn");
-    const searchNexusModsBtn = document.querySelector("#searchNexusModsBtn");
+    const searchModsBtn = document.querySelector("#searchModsBtn");
+    const installModUrlBtn = document.querySelector("#installModUrlBtn");
+    const modSearchPanel = document.querySelector("#modSearchPanel");
+    const modSearchSummary = document.querySelector("#modSearchSummary");
+    const modSearchResults = document.querySelector("#modSearchResults");
     const installedModsList = document.querySelector("#installedModsList");
     const modGuidanceList = document.querySelector("#modGuidanceList");
     const autoBackupEnabled = document.querySelector("#autoBackupEnabled");
@@ -706,6 +819,21 @@ const PAGE = String.raw`<!doctype html>
     const createMapForm = document.querySelector("#createMapForm");
     const createMapMessage = document.querySelector("#createMapMessage");
     const cancelCreateMapBtn = document.querySelector("#cancelCreateMapBtn");
+    const editConfigDialog = document.querySelector("#editConfigDialog");
+    const editConfigForm = document.querySelector("#editConfigForm");
+    const editConfigMessage = document.querySelector("#editConfigMessage");
+    const editConfigTitle = document.querySelector("#editConfigTitle");
+    const cancelEditConfigBtn = document.querySelector("#cancelEditConfigBtn");
+    const installModDialog = document.querySelector("#installModDialog");
+    const installModForm = document.querySelector("#installModForm");
+    const installModTitle = document.querySelector("#installModTitle");
+    const installModHelp = document.querySelector("#installModHelp");
+    const installModMessage = document.querySelector("#installModMessage");
+    const nexusFilesPanel = document.querySelector("#nexusFilesPanel");
+    const nexusFilesSummary = document.querySelector("#nexusFilesSummary");
+    const nexusFilesList = document.querySelector("#nexusFilesList");
+    const openInstallSourceBtn = document.querySelector("#openInstallSourceBtn");
+    const cancelInstallModBtn = document.querySelector("#cancelInstallModBtn");
     const playersMessage = document.querySelector("#playersMessage");
     const onlinePlayersList = document.querySelector("#onlinePlayersList");
     const farmhandsList = document.querySelector("#farmhandsList");
@@ -717,6 +845,8 @@ const PAGE = String.raw`<!doctype html>
     let shutdownPollTimer = null;
     let logsMode = "recent";
     let latestModManagement = null;
+    let latestModSearchResults = [];
+    let latestModSearchQuery = "";
 
     document.querySelector(".tabs").addEventListener("click", (e) => {
       const btn = e.target.closest(".tab-btn");
@@ -751,6 +881,180 @@ const PAGE = String.raw`<!doctype html>
     function closeCreateMapDialog() {
       createMapDialog.classList.add("hidden");
       setMessage(createMapMessage, "");
+    }
+
+    function formatTimeOfDay(value) {
+      const raw = String(value ?? 0).padStart(4, "0");
+      return raw.slice(0, -2) + ":" + raw.slice(-2);
+    }
+
+    function farmTypeLabel(value) {
+      const map = { 0: "标准农场", 1: "河边农场", 2: "森林农场", 3: "山顶农场", 4: "荒野农场", 5: "四角农场", 6: "海滩农场", 7: "草原农场" };
+      return map[value] != null ? map[value] + "（" + value + "）" : String(value ?? "n/a");
+    }
+
+    function openEditConfigDialog(saveName, config) {
+      const form = editConfigForm.elements;
+      form.saveName.value = saveName;
+      form.farmName.value = config.farmName || "";
+      form.money.value = config.money ?? 0;
+      form.year.value = config.year ?? 1;
+      form.currentSeason.value = config.currentSeason || "spring";
+      form.dayOfMonth.value = config.dayOfMonth ?? 1;
+      form.timeOfDay.value = formatTimeOfDay(config.timeOfDay);
+      form.totalMoneyEarned.value = (config.totalMoneyEarned ?? 0).toLocaleString();
+      form.whichFarm.value = farmTypeLabel(config.whichFarm);
+      editConfigTitle.textContent = "存档配置：" + saveName;
+      setMessage(editConfigMessage, "");
+      editConfigDialog.classList.remove("hidden");
+      setTimeout(() => form.farmName.focus(), 0);
+    }
+
+    function closeEditConfigDialog() {
+      editConfigDialog.classList.add("hidden");
+      setMessage(editConfigMessage, "");
+    }
+
+    function openInstallModDialog(options = {}) {
+      const form = installModForm.elements;
+      form.url.value = "";
+      form.displayName.value = options.displayName || "";
+      form.sourceUrl.value = options.sourceUrl || "";
+      form.nexusId.value = options.nexusId || "";
+      installModTitle.textContent = options.displayName ? "安装模组：" + options.displayName : "安装模组";
+      installModHelp.textContent = options.sourceUrl
+        ? "先打开来源页复制 zip 下载 URL，再粘贴到这里。面板会在后端下载、校验并安装到 data/mods。"
+        : "粘贴 zip 下载 URL。面板会在后端下载、校验并安装到 data/mods。";
+      openInstallSourceBtn.disabled = !options.sourceUrl;
+      nexusFilesPanel.classList.add("hidden");
+      nexusFilesSummary.textContent = "";
+      nexusFilesList.innerHTML = "";
+      setMessage(installModMessage, "");
+      installModDialog.classList.remove("hidden");
+      setTimeout(() => form.url.focus(), 0);
+      if (options.nexusId) {
+        loadNexusFiles(options.nexusId).catch((error) => setMessage(installModMessage, error.message, "bad"));
+      }
+    }
+
+    function closeInstallModDialog() {
+      installModDialog.classList.add("hidden");
+      setMessage(installModMessage, "");
+    }
+
+    function formatKb(sizeKb) {
+      const value = Number(sizeKb || 0);
+      if (!Number.isFinite(value) || value <= 0) return "未知大小";
+      if (value >= 1024 * 1024) return (value / 1024 / 1024).toFixed(1) + " GB";
+      if (value >= 1024) return (value / 1024).toFixed(1) + " MB";
+      return Math.round(value) + " KB";
+    }
+
+    const nexusFileGroupOrder = ["main", "patch", "optional", "old", "other"];
+    const nexusFileGroupMeta = {
+      main: { title: "主文件", hint: "通常优先安装这一组。" },
+      patch: { title: "补丁 / 更新", hint: "通常需要先安装主文件或匹配指定版本。" },
+      optional: { title: "可选文件", hint: "按模组说明选择，不一定需要安装。" },
+      old: { title: "旧版本", hint: "仅在兼容旧存档或旧依赖时选择。" },
+      other: { title: "其他文件", hint: "安装前先确认 Nexus 文件说明。" },
+    };
+
+    function nexusFileGroup(file) {
+      const group = String(file?.group || "").toLowerCase();
+      if (nexusFileGroupOrder.includes(group)) return group;
+      const id = Number(file?.categoryId || file?.category_id || 0);
+      const name = String(file?.categoryName || file?.category_name || "").toUpperCase();
+      if (id === 1 || name === "MAIN") return "main";
+      if (id === 2 || name.includes("UPDATE") || name.includes("PATCH")) return "patch";
+      if (id === 3 || name.includes("OPTION")) return "optional";
+      if (id === 4 || name.includes("OLD")) return "old";
+      return "other";
+    }
+
+    function groupNexusFiles(files) {
+      const groups = Object.fromEntries(nexusFileGroupOrder.map((group) => [group, []]));
+      files.forEach((file) => groups[nexusFileGroup(file)].push(file));
+      return groups;
+    }
+
+    function normalizeNexusGroups(result, files) {
+      if (!result?.groups || typeof result.groups !== "object") return groupNexusFiles(files);
+      const groups = Object.fromEntries(nexusFileGroupOrder.map((group) => [
+        group,
+        Array.isArray(result.groups[group]) ? result.groups[group] : [],
+      ]));
+      const groupedIds = new Set(nexusFileGroupOrder.flatMap((group) => groups[group].map((file) => String(file.fileId))));
+      files.forEach((file) => {
+        if (!groupedIds.has(String(file.fileId))) groups[nexusFileGroup(file)].push(file);
+      });
+      return groups;
+    }
+
+    function renderNexusFileItem(file, recommendedFileId) {
+      const fileId = String(file.fileId || "");
+      const isRecommended = recommendedFileId && fileId === recommendedFileId;
+      const badges = [
+        isRecommended ? pill("推荐", "ok") : "",
+        file.isPrimary ? pill("主文件", "ok") : "",
+      ].filter(Boolean).join(" ");
+      const buttonClass = isRecommended ? ' class="primary"' : "";
+      const buttonText = isRecommended ? "安装推荐文件" : "安装此文件";
+      const fileName = file.fileName && file.fileName !== file.name
+        ? '<span class="hint">文件名：' + escapeHtml(file.fileName) + '</span>'
+        : "";
+      const uploadedAt = file.uploadedAt
+        ? ' · 上传：' + escapeHtml(formatDateTime(file.uploadedAt))
+        : "";
+      return '<div class="manage-item' + (isRecommended ? ' recommended' : '') + '">' +
+        '<div><strong>' + escapeHtml(file.name) + (badges ? " " + badges : "") + '</strong>' +
+          '<span class="hint">类型：' + escapeHtml(file.categoryName || "UNKNOWN") +
+          ' · 文件 ID：' + escapeHtml(file.fileId) +
+          ' · 大小：' + escapeHtml(formatKb(file.sizeKb)) +
+          (file.version ? ' · 版本：' + escapeHtml(file.version) : '') +
+          uploadedAt + '</span>' +
+          fileName +
+          (file.description ? '<span class="hint">' + escapeHtml(file.description) + '</span>' : '') +
+        '</div>' +
+        '<div class="manage-actions">' +
+          '<button' + buttonClass + ' type="button" data-action="install-nexus-file" data-file-id="' + escapeHtml(file.fileId) + '" data-file-name="' + escapeHtml(file.name) + '">' + buttonText + '</button>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function renderNexusFileGroup(group, files, recommendedFileId) {
+      if (!files.length) return "";
+      const meta = nexusFileGroupMeta[group] || nexusFileGroupMeta.other;
+      return '<div class="nexus-file-group">' +
+        '<div class="nexus-file-heading"><h4>' + escapeHtml(meta.title) + '</h4><span class="hint">' + files.length + ' 个文件</span></div>' +
+        '<div class="hint">' + escapeHtml(meta.hint) + '</div>' +
+        '<div class="manage-list">' + files.map((file) => renderNexusFileItem(file, recommendedFileId)).join("") + '</div>' +
+      '</div>';
+    }
+
+    function renderNexusFiles(result) {
+      const files = Array.isArray(result) ? result : (Array.isArray(result?.files) ? result.files : []);
+      const recommendedFileId = Array.isArray(result) ? "" : String(result?.recommendedFileId || "");
+      const updateCount = Array.isArray(result?.fileUpdates) ? result.fileUpdates.length : 0;
+      const cacheText = result?.cached ? "，使用缓存" : "";
+      const groups = normalizeNexusGroups(result, files);
+      nexusFilesPanel.classList.remove("hidden");
+      nexusFilesSummary.textContent = files.length
+        ? "找到 " + files.length + " 个文件" + cacheText + (recommendedFileId ? "，已标出推荐项" : "") + (updateCount ? "，更新关系 " + updateCount + " 条" : "")
+        : "没有可安装文件";
+      nexusFilesList.innerHTML = files.length
+        ? nexusFileGroupOrder.map((group) => renderNexusFileGroup(group, groups[group] || [], recommendedFileId)).join("")
+        : '<p class="muted">Nexus 没有返回文件列表。仍可粘贴 zip URL 安装。</p>';
+    }
+
+    async function loadNexusFiles(nexusId) {
+      setMessage(installModMessage, "正在读取 Nexus 文件列表...");
+      const result = await request("/api/mods/nexus/files", {
+        method: "POST",
+        body: JSON.stringify({ nexusId }),
+      });
+      renderNexusFiles(result);
+      const sourceText = result?.cached ? "已使用本地缓存，未再次请求 Nexus API；" : "";
+      setMessage(installModMessage, sourceText + "已按 Nexus 文件类型分组；如果下载权限受限，可继续粘贴 zip URL。", "ok");
     }
 
     function appPath(path) {
@@ -892,6 +1196,7 @@ const PAGE = String.raw`<!doctype html>
               ' · 更新：' + escapeHtml(formatDateTime(save.updatedAt)) + '</span></div>' +
             '<div class="manage-actions">' +
               '<button data-action="select-save" data-name="' + escapeHtml(save.name) + '">下次加载</button>' +
+              '<button data-action="edit-config" data-name="' + escapeHtml(save.name) + '">查看配置</button>' +
               '<button data-action="repair-cabins" data-name="' + escapeHtml(save.name) + '">修复小屋</button>' +
               '<button class="danger" data-action="delete-save" data-name="' + escapeHtml(save.name) + '">删除</button>' +
             '</div>' +
@@ -944,6 +1249,49 @@ const PAGE = String.raw`<!doctype html>
       ].some((value) => String(value || "").toLowerCase().includes(query));
     }
 
+    function installedModKeys(mods) {
+      const keys = new Set();
+      (mods || []).forEach((mod) => {
+        if (mod.uniqueId) keys.add(String(mod.uniqueId).toLowerCase());
+        (mod.updateKeys || []).forEach((key) => keys.add(String(key).toLowerCase()));
+      });
+      return keys;
+    }
+
+    function renderModSearchResults() {
+      if (!latestModSearchQuery) {
+        modSearchPanel.classList.add("hidden");
+        modSearchSummary.textContent = "";
+        modSearchResults.innerHTML = "";
+        return;
+      }
+
+      const installedKeys = installedModKeys(latestModManagement?.installed || []);
+      modSearchPanel.classList.remove("hidden");
+      modSearchSummary.textContent = "关键词：" + latestModSearchQuery + "，结果 " + latestModSearchResults.length + " 个";
+
+      modSearchResults.innerHTML = latestModSearchResults.length ? latestModSearchResults.map((mod) => {
+        const isInstalled = (mod.uniqueIds || []).some((id) => installedKeys.has(String(id).toLowerCase())) ||
+          (mod.nexusId && installedKeys.has("nexus:" + String(mod.nexusId).toLowerCase()));
+        const sourceUrl = mod.nexusUrl || mod.sourceUrl || "";
+        return '<div class="manage-item">' +
+          '<div><strong>' + escapeHtml(mod.name) + (isInstalled ? ' <span class="pill ok">已安装</span>' : '') + '</strong>' +
+            '<span class="hint">作者：' + escapeHtml(mod.author || "n/a") +
+            ' · UniqueID：' + escapeHtml((mod.uniqueIds || []).join("，") || "n/a") +
+            ' · Nexus ID：' + escapeHtml(mod.nexusId || "n/a") + '</span>' +
+            '<span class="hint">兼容性：' + escapeHtml(mod.status || "unknown") +
+            (mod.brokeIn ? ' · 失效版本：' + escapeHtml(mod.brokeIn) : '') + '</span>' +
+            '<span class="hint">' + escapeHtml(mod.summary || "暂无说明。") + '</span>' +
+          '</div>' +
+          '<div class="manage-actions">' +
+            (mod.nexusUrl ? '<button data-action="open-mod-url" data-url="' + escapeHtml(mod.nexusUrl) + '">Nexus</button>' : '') +
+            (mod.sourceUrl ? '<button data-action="open-mod-url" data-url="' + escapeHtml(mod.sourceUrl) + '">源码</button>' : '') +
+            '<button class="primary" data-action="install-mod" data-name="' + escapeHtml(mod.name) + '" data-source-url="' + escapeHtml(sourceUrl) + '" data-nexus-id="' + escapeHtml(mod.nexusId || "") + '">安装</button>' +
+          '</div>' +
+        '</div>';
+      }).join("") : '<p class="muted">没有找到匹配的 SMAPI 兼容列表结果。</p>';
+    }
+
     function renderModManagement(data) {
       latestModManagement = data;
       const query = modSearchInput.value.trim().toLowerCase();
@@ -970,14 +1318,16 @@ const PAGE = String.raw`<!doctype html>
             (mod.hasManifest ? '' : '<span class="hint bad">manifest.json 解析失败：' + escapeHtml(mod.manifestError || "未知错误") + '</span>') +
           '</div>' +
           '<div class="manage-actions">' +
-            '<button type="button" disabled title="当前版本先只展示已安装模组，安装和启用/禁用会在下一步接入具体来源后再开放。">仅查看</button>' +
+            '<button class="danger" data-action="delete-mod" data-directory="' + escapeHtml(mod.directoryName) + '" data-name="' + escapeHtml(mod.name) + '">删除</button>' +
           '</div>' +
         '</div>'
       )).join("") : (query ? '<p class="muted">没有匹配当前搜索条件的模组。</p>' : '<p class="muted">还没有安装任何模组。</p>');
+      renderModSearchResults();
 
       modGuidanceList.innerHTML = [
         '<div class="manage-item"><div><strong>安装前备份</strong><span class="hint">修改 Mod 前先导出一份 saves 备份，避免兼容性问题导致存档损坏。</span></div></div>',
         '<div class="manage-item"><div><strong>重启生效</strong><span class="hint">把 Mod 放进 data/mods 后需要重启服务端，SMAPI 才会重新加载。</span></div></div>',
+        '<div class="manage-item"><div><strong>URL 安装</strong><span class="hint">从 Nexus、GitHub 或 SMAPI 页面复制 zip 下载 URL 后，可直接交给面板下载并安装。</span></div></div>',
         '<div class="manage-item"><div><strong>来源说明</strong><span class="hint">SMAPI 兼容模组通常来自 Nexus Mods 或官方/社区发布页，不是 Steam Workshop。</span></div></div>',
         '<div class="manage-item"><div><strong>搜索入口</strong><span class="hint"><a href="' + escapeHtml(sourceLinks.smapi) + '" target="_blank" rel="noreferrer">SMAPI 兼容列表</a> · <a href="' + escapeHtml(sourceLinks.nexus) + '" target="_blank" rel="noreferrer">Nexus 搜索</a> · <a href="' + escapeHtml(sourceLinks.guide) + '" target="_blank" rel="noreferrer">入门文档</a></span></div></div>',
       ].join("");
@@ -1077,6 +1427,11 @@ const PAGE = String.raw`<!doctype html>
       configForm.elements.adminSteamIds.value = (settings.Server.AdminSteamIds || []).join("\n");
       configForm.elements.serverPasswordAction.value = "keep";
       configForm.elements.serverPassword.value = "";
+      configForm.elements.nexusApiKeyAction.value = "keep";
+      configForm.elements.nexusApiKey.value = "";
+      document.querySelector("#nexusApiKeyStatus").textContent = env.nexusApiKeySet
+        ? "Nexus API Key 已配置。面板不会回显密钥，需要更换时请选择“设置新 Key”。"
+        : "Nexus API Key 未配置。当前搜索和 URL 安装不依赖该 Key。";
       hasConfig = true;
     }
 
@@ -1096,6 +1451,8 @@ const PAGE = String.raw`<!doctype html>
         existingCabinBehavior: form.existingCabinBehavior.value,
         serverPasswordAction: form.serverPasswordAction.value,
         serverPassword: form.serverPassword.value,
+        nexusApiKeyAction: form.nexusApiKeyAction.value,
+        nexusApiKey: form.nexusApiKey.value,
         adminSteamIds: form.adminSteamIds.value,
       };
     }
@@ -1373,27 +1730,151 @@ const PAGE = String.raw`<!doctype html>
       }
     });
 
-    function openModSearch(target) {
+    async function performModSearch() {
       const query = modSearchInput.value.trim();
       if (!query) {
         setMessage(modsMessage, "请输入模组名称、UniqueID 或 Nexus ID。", "bad");
         return;
       }
-      const links = modSourceLinks(null, query);
-      const url = target === "nexus" ? links.nexus : links.smapi;
-      window.open(url, "_blank", "noopener,noreferrer");
-      setMessage(modsMessage, target === "nexus" ? "已打开 Nexus Mods 搜索。" : "已打开 SMAPI 兼容列表。", "ok");
+      searchModsBtn.disabled = true;
+      setMessage(modsMessage, "正在搜索 SMAPI 兼容列表...");
+      try {
+        const result = await request("/api/mods/search", {
+          method: "POST",
+          body: JSON.stringify({ query }),
+        });
+        latestModSearchQuery = query;
+        latestModSearchResults = result.results || [];
+        renderModSearchResults();
+        setMessage(modsMessage, "搜索完成，找到 " + latestModSearchResults.length + " 个结果。", "ok");
+      } catch (error) {
+        setMessage(modsMessage, error.message, "bad");
+      } finally {
+        searchModsBtn.disabled = false;
+      }
     }
 
-    searchSmapiModsBtn.addEventListener("click", () => openModSearch("smapi"));
-    searchNexusModsBtn.addEventListener("click", () => openModSearch("nexus"));
+    searchModsBtn.addEventListener("click", () => {
+      performModSearch().catch((error) => setMessage(modsMessage, error.message, "bad"));
+    });
+    installModUrlBtn.addEventListener("click", () => {
+      openInstallModDialog({ displayName: modSearchInput.value.trim() });
+    });
     modSearchInput.addEventListener("input", () => {
       if (latestModManagement) renderModManagement(latestModManagement);
     });
     modSearchInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        openModSearch("smapi");
+        performModSearch().catch((error) => setMessage(modsMessage, error.message, "bad"));
+      }
+    });
+
+    modManagerPanel.addEventListener("click", async (event) => {
+      const button = event.target.closest("button[data-action]");
+      if (!button) return;
+
+      const action = button.dataset.action;
+      try {
+        if (action === "open-mod-url") {
+          const url = button.dataset.url;
+          if (url) window.open(url, "_blank", "noopener,noreferrer");
+          return;
+        }
+
+        if (action === "install-mod") {
+          openInstallModDialog({
+            displayName: button.dataset.name || modSearchInput.value.trim(),
+            sourceUrl: button.dataset.sourceUrl || "",
+            nexusId: button.dataset.nexusId || "",
+          });
+          return;
+        }
+
+        if (action === "install-nexus-file") {
+          const nexusId = installModForm.elements.nexusId.value;
+          const fileId = button.dataset.fileId;
+          const displayName = button.dataset.fileName || installModForm.elements.displayName.value;
+          if (!nexusId || !fileId) {
+            setMessage(installModMessage, "缺少 Nexus 文件信息。", "bad");
+            return;
+          }
+          button.disabled = true;
+          setMessage(installModMessage, "正在通过 Nexus 下载并安装文件...");
+          try {
+            const result = await request("/api/mods/nexus/install", {
+              method: "POST",
+              body: JSON.stringify({ nexusId, fileId, displayName }),
+            });
+            latestModSearchQuery = "";
+            latestModSearchResults = [];
+            await reloadModManagement();
+            closeInstallModDialog();
+            const names = (result.installed || []).map((mod) => mod.name || mod.directoryName).join("，");
+            setMessage(modsMessage, (result.message || "模组已安装，重启服务端后生效。") + (names ? "\n已安装：" + names : ""), "ok");
+          } catch (error) {
+            setMessage(installModMessage, error.message, "bad");
+          } finally {
+            button.disabled = false;
+          }
+          return;
+        }
+
+        if (action === "delete-mod") {
+          const directoryName = button.dataset.directory;
+          const label = button.dataset.name || directoryName;
+          if (!confirm("删除会移除 data/mods 下的模组目录，重启服务端后生效。\n\n确认删除：" + label + "？")) return;
+          setMessage(modsMessage, "正在删除模组...");
+          const result = await request("/api/mods/delete", {
+            method: "POST",
+            body: JSON.stringify({ directoryName }),
+          });
+          await reloadModManagement();
+          setMessage(modsMessage, result.message || "模组已删除，重启服务端后生效。", "ok");
+        }
+      } catch (error) {
+        setMessage(modsMessage, error.message, "bad");
+      }
+    });
+
+    openInstallSourceBtn.addEventListener("click", () => {
+      const sourceUrl = installModForm.elements.sourceUrl.value;
+      if (sourceUrl) window.open(sourceUrl, "_blank", "noopener,noreferrer");
+    });
+    cancelInstallModBtn.addEventListener("click", closeInstallModDialog);
+    installModDialog.addEventListener("click", (event) => {
+      if (event.target === installModDialog) closeInstallModDialog();
+    });
+    installModForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = installModForm.elements;
+      const url = form.url.value.trim();
+      if (!url) {
+        setMessage(installModMessage, "请粘贴 zip 下载 URL。", "bad");
+        return;
+      }
+
+      const submitBtn = installModForm.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      setMessage(installModMessage, "正在下载并安装模组，完成前请不要关闭面板...");
+      try {
+        const result = await request("/api/mods/install", {
+          method: "POST",
+          body: JSON.stringify({
+            url,
+            displayName: form.displayName.value,
+          }),
+        });
+        latestModSearchQuery = "";
+        latestModSearchResults = [];
+        await reloadModManagement();
+        closeInstallModDialog();
+        const names = (result.installed || []).map((mod) => mod.name || mod.directoryName).join("，");
+        setMessage(modsMessage, (result.message || "模组已安装，重启服务端后生效。") + (names ? "\n已安装：" + names : ""), "ok");
+      } catch (error) {
+        setMessage(installModMessage, error.message, "bad");
+      } finally {
+        submitBtn.disabled = false;
       }
     });
 
@@ -1547,6 +2028,41 @@ const PAGE = String.raw`<!doctype html>
       }
     });
 
+    cancelEditConfigBtn.addEventListener("click", closeEditConfigDialog);
+    editConfigDialog.addEventListener("click", (event) => {
+      if (event.target === editConfigDialog) closeEditConfigDialog();
+    });
+
+    editConfigForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = editConfigForm.elements;
+      const payload = {
+        saveName: form.saveName.value,
+        farmName: form.farmName.value,
+        money: form.money.value,
+        year: form.year.value,
+        currentSeason: form.currentSeason.value,
+        dayOfMonth: form.dayOfMonth.value,
+      };
+      const submitBtn = editConfigForm.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      setMessage(editConfigMessage, "正在备份并保存配置...");
+      try {
+        const result = await request("/api/saves/config", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        hasConfig = false;
+        await loadAll();
+        closeEditConfigDialog();
+        setMessage(savesMessage, "存档配置已保存：" + result.saveName + "；编辑前备份：" + result.preEditBackup, "ok");
+      } catch (error) {
+        setMessage(editConfigMessage, error.message, "bad");
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
     saveManagerPanel.addEventListener("click", async (event) => {
       const button = event.target.closest("button[data-action]");
       if (!button) return;
@@ -1562,6 +2078,19 @@ const PAGE = String.raw`<!doctype html>
             body: JSON.stringify({ saveName }),
           });
           setMessage(savesMessage, "已设置。重启服务端后会加载：" + saveName, "ok");
+          return;
+        }
+
+        if (action === "edit-config") {
+          const saveName = button.dataset.name;
+          setMessage(savesMessage, "正在读取存档配置...");
+          try {
+            const result = await request("/api/saves/config?saveName=" + encodeURIComponent(saveName));
+            openEditConfigDialog(saveName, result.config);
+            setMessage(savesMessage, "");
+          } catch (error) {
+            setMessage(savesMessage, error.message, "bad");
+          }
           return;
         }
 

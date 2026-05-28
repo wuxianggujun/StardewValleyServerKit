@@ -77,6 +77,22 @@ SteamCMD 的本机终端；如果终端断开但容器仍在等待，可用
 `backup` 会把 `saves` Docker volume 导出到 `backups/`，用于特殊日期、
 极端天气或 Mod 测试前的回滚点。
 
+## 本地静态自检
+
+不需要 Steam 登录、Docker 或真实 Nexus API Key 的检查：
+
+```powershell
+node --check scripts/admin-panel.js
+node --check scripts/admin-panel/api-routes.js
+node --check scripts/admin-panel/mods.js
+node --check scripts/admin-panel/page.js
+node scripts/admin-panel/mods.self-test.js
+```
+
+`mods.self-test.js` 会覆盖 Nexus 文件分组、推荐主文件、严格 ID 校验、未配置
+`NEXUS_API_KEY` 时的错误提示，以及 Nexus 429 的短退避重试、长 `Retry-After`
+冷却和成功文件列表缓存，不会访问真实 Nexus API。
+
 ## 推荐过夜长测顺序
 
 1. 完成 `.\setup.ps1 login`

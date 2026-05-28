@@ -285,6 +285,7 @@ Web 管理面板建议通过 1Panel 站点反向代理访问，不直接开放 `
 - `AUTO_BACKUP_ENABLED`：是否由 Web 管理面板定时导出 saves volume 备份。
 - `SAVE_BACKUP_INTERVAL_MINUTES`：自动备份间隔，范围 15 到 10080 分钟。
 - `SAVE_BACKUP_RETENTION`：最多保留多少份 `backups/saves-*.tar.gz` 备份，超出后删除最旧备份。
+- `NEXUS_API_KEY`：可选。用于 Web 管理面板读取 Nexus 文件列表和下载链接；不配置时仍可使用 SMAPI 搜索和“从 URL 安装”。
 
 ## Mod 管理
 
@@ -301,8 +302,13 @@ data/mods/
 ```
 
 Web 管理面板的“模组”页会读取 `manifest.json`，显示已安装 Mod 的名称、版本、
-作者、UniqueID 和 UpdateKeys，并提供 SMAPI 兼容列表与 Nexus Mods 搜索入口。
-当前页面不会把 Steam Workshop 伪装成安装源；Stardew Valley 的主流 SMAPI Mod
+作者、UniqueID 和 UpdateKeys。页面支持直接搜索 SMAPI 兼容列表，搜索结果包含 Nexus ID
+时会尝试通过 `NEXUS_API_KEY` 读取 Nexus 文件列表，按主文件、补丁 / 更新、可选文件和旧版本分组展示，
+并优先标出推荐主文件。
+
+不配置 `NEXUS_API_KEY` 也能使用搜索和“从 URL 安装”。从 Nexus、GitHub 或 SMAPI 页面复制公开 zip
+下载 URL 后，面板会在后端下载、校验并安装到 `data/mods/`。覆盖安装同名 Mod 时，旧目录会先移动到
+`backups/mods/`。当前页面不会把 Steam Workshop 伪装成安装源；Stardew Valley 的主流 SMAPI Mod
 通常通过 Nexus Mods、作者页面或社区发布页分发。
 
 建议一次只新增一个 Mod，并按照 [测试计划](docs/TEST_PLAN.md) 进行过夜、节日、地震和重启验证。

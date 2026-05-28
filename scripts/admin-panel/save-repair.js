@@ -715,4 +715,53 @@ function patchCabinsXml(xml, targetCabins) {
   };
 }
 
-module.exports = { decodeXmlText, patchCabinsXml };
+function findPlayerBlock(xml) {
+  const match = String(xml || "").match(/<player\b[^>]*>([\s\S]*?)<\/player>/);
+  return match ? match[0] : null;
+}
+
+function extractSaveConfig(xml) {
+  const playerBlock = findPlayerBlock(xml);
+  return {
+    farmName: xmlTagValue(xml, "farmName") || "",
+    money: playerBlock ? (xmlTagNumber(playerBlock, "money") ?? 0) : 0,
+    totalMoneyEarned: playerBlock ? (xmlTagNumber(playerBlock, "totalMoneyEarned") ?? 0) : 0,
+    year: xmlTagNumber(xml, "year") ?? 1,
+    currentSeason: xmlTagValue(xml, "currentSeason") || "spring",
+    dayOfMonth: xmlTagNumber(xml, "dayOfMonth") ?? 1,
+    timeOfDay: xmlTagNumber(xml, "timeOfDay") ?? 600,
+    whichFarm: xmlTagNumber(xml, "whichFarm") ?? 0,
+  };
+}
+
+function applySaveConfigEdits(xml, edits) {
+  let result = xml;
+
+  if (edits.farmName != null) {
+    result = replaceXmlTagValue(result, "farmName", edits.farmName);
+  }
+
+  if (edits.money != null) {
+    const playerBlock = findPlayerBlock(result);
+    if (playerBlock) {
+      const patched = replaceXmlTagValue(playerBlock, "money", String(edits.money));
+      result = result.replace(playerBlock, patched);
+    }
+  }
+
+  if (edits.year != null) {
+    result = replaceXmlTagValue(result, "year", String(edits.year));
+  }
+
+  if (edits.currentSeason != null) {
+    result = replaceXmlTagValue(result, "currentSeason", edits.currentSeason);
+  }
+
+  if (edits.dayOfMonth != null) {
+    result = replaceXmlTagValue(result, "dayOfMonth", String(edits.dayOfMonth));
+  }
+
+  return result;
+}
+
+module.exports = { decodeXmlText, patchCabinsXml, extractSaveConfig, applySaveConfigEdits };
