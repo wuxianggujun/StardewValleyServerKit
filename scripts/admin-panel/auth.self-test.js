@@ -28,6 +28,9 @@ async function main() {
   assert.match(writes[0].headers["Set-Cookie"], /HttpOnly/);
 
   assert.match(PAGE, /let activeAdminToken = "";/);
+  assert.match(PAGE, /id="adminToolbar" class="toolbar hidden"/);
+  assert.match(PAGE, /adminToolbar\.classList\.add\("hidden"\);/);
+  assert.match(PAGE, /adminToolbar\.classList\.remove\("hidden"\);/);
   assert.match(PAGE, /headers\["X-Admin-Token"\] = activeAdminToken;/);
   assert.match(PAGE, /activeAdminToken = token;/);
   assert.match(PAGE, /activeAdminToken = trimmedToken;/);

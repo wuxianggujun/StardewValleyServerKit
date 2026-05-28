@@ -419,7 +419,7 @@ const PAGE = String.raw`<!doctype html>
         <h1>Stardew Valley Server Kit Admin</h1>
         <p>管理面板，配置保存后通常需要重启服务端。</p>
       </div>
-      <div class="toolbar">
+      <div id="adminToolbar" class="toolbar hidden">
         <button id="refreshBtn" type="button">刷新</button>
         <button id="startBtn" class="primary" type="button">启动服务端</button>
         <button id="stopBtn" class="danger" type="button">停服释放资源</button>
@@ -784,6 +784,7 @@ const PAGE = String.raw`<!doctype html>
     const authForm = document.querySelector("#authForm");
     const tokenInput = document.querySelector("#tokenInput");
     const authMessage = document.querySelector("#authMessage");
+    const adminToolbar = document.querySelector("#adminToolbar");
     const configForm = document.querySelector("#configForm");
     const saveMessage = document.querySelector("#saveMessage");
     const serverActionMessage = document.querySelector("#serverActionMessage");
@@ -1080,6 +1081,7 @@ const PAGE = String.raw`<!doctype html>
       });
       if (response.status === 401) {
         activeAdminToken = "";
+        adminToolbar.classList.add("hidden");
         appPanel.classList.add("hidden");
         authPanel.classList.remove("hidden");
         throw new Error("需要管理令牌");
@@ -1666,6 +1668,7 @@ const PAGE = String.raw`<!doctype html>
       renderRuntimeFarmNotice(status, config);
       renderSaveManagement(saveManagement);
       renderModManagement(modManagement);
+      adminToolbar.classList.remove("hidden");
       authPanel.classList.add("hidden");
       appPanel.classList.remove("hidden");
     }
@@ -2357,6 +2360,7 @@ const PAGE = String.raw`<!doctype html>
         await loadAll();
         startBackgroundPolling();
       } catch (_) {
+        adminToolbar.classList.add("hidden");
         authPanel.classList.remove("hidden");
       }
     })();
