@@ -87,6 +87,7 @@ node --check scripts/admin-panel/api-routes.js
 node --check scripts/admin-panel/mods.js
 node --check scripts/admin-panel/page.js
 node scripts/admin-panel/mods.self-test.js
+node scripts/admin-panel/auth.self-test.js
 ```
 
 `mods.self-test.js` 会覆盖 Nexus 文件分组、推荐主文件、严格 ID 校验、未配置

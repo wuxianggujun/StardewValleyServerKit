@@ -46,7 +46,7 @@ function createApiHandler(deps) {
     const token = typeof body.token === "string" ? body.token.trim() : "";
     if (token && token === env.ADMIN_TOKEN) {
       res.writeHead(204, {
-        "Set-Cookie": `${ADMIN_COOKIE}=${encodeURIComponent(token)}; Path=/; SameSite=Strict; HttpOnly`,
+        "Set-Cookie": `${ADMIN_COOKIE}=${encodeURIComponent(token)}; Path=/; SameSite=Lax; HttpOnly`,
         "Cache-Control": "no-store",
       });
       res.end();
@@ -58,7 +58,7 @@ function createApiHandler(deps) {
 
   if (pathname === "/api/logout" && req.method === "POST") {
     res.writeHead(204, {
-      "Set-Cookie": `${ADMIN_COOKIE}=; Path=/; SameSite=Strict; Max-Age=0`,
+      "Set-Cookie": `${ADMIN_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0`,
       "Cache-Control": "no-store",
     });
     res.end();

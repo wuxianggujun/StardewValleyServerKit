@@ -386,7 +386,8 @@ admin_service_install() {
   step "Installing systemd admin service"
   admin_service_file >"/etc/systemd/system/$SYSTEMD_SERVICE_NAME"
   systemctl daemon-reload
-  systemctl enable --now "$SYSTEMD_SERVICE_NAME"
+  systemctl enable "$SYSTEMD_SERVICE_NAME"
+  systemctl restart "$SYSTEMD_SERVICE_NAME"
 
   sleep 2
   admin_service_status

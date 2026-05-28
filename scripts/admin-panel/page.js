@@ -847,6 +847,7 @@ const PAGE = String.raw`<!doctype html>
     let latestModManagement = null;
     let latestModSearchResults = [];
     let latestModSearchQuery = "";
+    let activeAdminToken = "";
 
     document.querySelector(".tabs").addEventListener("click", (e) => {
       const btn = e.target.closest(".tab-btn");
@@ -1067,12 +1068,18 @@ const PAGE = String.raw`<!doctype html>
     }
 
     async function request(path, options = {}) {
+      const { headers: optionHeaders, ...requestOptions } = options;
+      const headers = { "Content-Type": "application/json", ...(optionHeaders || {}) };
+      if (activeAdminToken && !headers["X-Admin-Token"] && !headers["x-admin-token"]) {
+        headers["X-Admin-Token"] = activeAdminToken;
+      }
       const response = await fetch(appPath(path), {
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-        ...options,
+        ...requestOptions,
+        headers,
       });
       if (response.status === 401) {
+        activeAdminToken = "";
         appPanel.classList.add("hidden");
         authPanel.classList.remove("hidden");
         throw new Error("需要管理令牌");
@@ -1666,11 +1673,13 @@ const PAGE = String.raw`<!doctype html>
     authForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       setMessage(authMessage, "验证中...");
+      const token = tokenInput.value.trim();
       try {
         await request("/api/auth", {
           method: "POST",
-          body: JSON.stringify({ token: tokenInput.value.trim() }),
+          body: JSON.stringify({ token }),
         });
+        activeAdminToken = token;
         tokenInput.value = "";
         setMessage(authMessage, "");
         await loadAll();
@@ -2338,8 +2347,10 @@ const PAGE = String.raw`<!doctype html>
       const token = params.get("token");
       if (token) {
         history.replaceState(null, "", location.pathname);
+        const trimmedToken = token.trim();
         try {
-          await request("/api/auth", { method: "POST", body: JSON.stringify({ token: token.trim() }) });
+          await request("/api/auth", { method: "POST", body: JSON.stringify({ token: trimmedToken }) });
+          activeAdminToken = trimmedToken;
         } catch (_) {}
       }
       try {
