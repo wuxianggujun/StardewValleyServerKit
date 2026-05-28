@@ -759,15 +759,11 @@ const PAGE = String.raw`<!doctype html>
 
   <div id="installModDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="installModTitle">
     <form id="installModForm" class="modal-panel">
-      <h2 id="installModTitle">安装模组 zip</h2>
+      <h2 id="installModTitle">从 URL 安装模组</h2>
       <p id="installModHelp" class="modal-message">粘贴 zip 下载 URL。面板会在后端下载、校验并安装到 data/mods。</p>
       <label>
         <strong>下载 URL</strong>
         <input name="url" type="url" placeholder="https://..." autocomplete="off" />
-      </label>
-      <label>
-        <strong>本地 zip 文件</strong>
-        <input name="localZip" type="file" accept=".zip,application/zip,application/x-zip-compressed" />
       </label>
       <div id="nexusFilesPanel" class="hidden">
         <div class="section-title">
@@ -784,6 +780,23 @@ const PAGE = String.raw`<!doctype html>
         <button id="openInstallSourceBtn" type="button">打开来源页</button>
         <button id="cancelInstallModBtn" type="button">取消</button>
         <button class="primary" type="submit">安装</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="installModLocalDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="installModLocalTitle">
+    <form id="installModLocalForm" class="modal-panel">
+      <h2 id="installModLocalTitle">从本地安装模组</h2>
+      <p class="modal-message">选择电脑里的 zip 文件上传安装。面板会在后端校验并安装到 data/mods。</p>
+      <label>
+        <strong>本地 zip 文件</strong>
+        <input name="localZip" type="file" accept=".zip,application/zip,application/x-zip-compressed" />
+      </label>
+      <input type="hidden" name="displayName" />
+      <div id="installModLocalMessage" class="message"></div>
+      <div class="toolbar modal-actions">
+        <button id="cancelInstallModLocalBtn" type="button">取消</button>
+        <button class="primary" type="submit">上传安装</button>
       </div>
     </form>
   </div>
@@ -841,11 +854,15 @@ const PAGE = String.raw`<!doctype html>
     const installModTitle = document.querySelector("#installModTitle");
     const installModHelp = document.querySelector("#installModHelp");
     const installModMessage = document.querySelector("#installModMessage");
+    const installModLocalDialog = document.querySelector("#installModLocalDialog");
+    const installModLocalForm = document.querySelector("#installModLocalForm");
+    const installModLocalMessage = document.querySelector("#installModLocalMessage");
     const nexusFilesPanel = document.querySelector("#nexusFilesPanel");
     const nexusFilesSummary = document.querySelector("#nexusFilesSummary");
     const nexusFilesList = document.querySelector("#nexusFilesList");
     const openInstallSourceBtn = document.querySelector("#openInstallSourceBtn");
     const cancelInstallModBtn = document.querySelector("#cancelInstallModBtn");
+    const cancelInstallModLocalBtn = document.querySelector("#cancelInstallModLocalBtn");
     const playersMessage = document.querySelector("#playersMessage");
     const onlinePlayersList = document.querySelector("#onlinePlayersList");
     const farmhandsList = document.querySelector("#farmhandsList");
@@ -931,32 +948,42 @@ const PAGE = String.raw`<!doctype html>
     function openInstallModDialog(options = {}) {
       const form = installModForm.elements;
       form.url.value = "";
-      form.localZip.value = "";
       form.displayName.value = options.displayName || "";
       form.sourceUrl.value = options.sourceUrl || "";
       form.nexusId.value = options.nexusId || "";
-      const localMode = options.mode === "local";
-      installModTitle.textContent = options.displayName ? "安装模组：" + options.displayName : (localMode ? "从本地安装模组" : "从 URL 安装模组");
-      installModHelp.textContent = localMode
-        ? "选择电脑里的 zip 文件上传安装。面板会在后端校验并安装到 data/mods。"
-        : (options.sourceUrl
-          ? "先打开来源页复制 zip 下载 URL，再粘贴到这里。也可以改选本地 zip 文件安装。"
-          : "粘贴 zip 下载 URL。也可以改选本地 zip 文件安装。");
+      installModTitle.textContent = options.displayName ? "从 URL 安装：" + options.displayName : "从 URL 安装模组";
+      installModHelp.textContent = options.sourceUrl
+        ? "先打开来源页复制 zip 下载 URL，再粘贴到这里。"
+        : "粘贴 zip 下载 URL。面板会在后端下载、校验并安装到 data/mods。";
       openInstallSourceBtn.disabled = !options.sourceUrl;
       nexusFilesPanel.classList.add("hidden");
       nexusFilesSummary.textContent = "";
       nexusFilesList.innerHTML = "";
       setMessage(installModMessage, "");
       installModDialog.classList.remove("hidden");
-      setTimeout(() => localMode ? form.localZip.focus() : form.url.focus(), 0);
+      setTimeout(() => form.url.focus(), 0);
       if (options.nexusId) {
         loadNexusFiles(options.nexusId).catch((error) => setMessage(installModMessage, error.message, "bad"));
       }
     }
 
+    function openInstallModLocalDialog(options = {}) {
+      const form = installModLocalForm.elements;
+      form.localZip.value = "";
+      form.displayName.value = options.displayName || "";
+      setMessage(installModLocalMessage, "");
+      installModLocalDialog.classList.remove("hidden");
+      setTimeout(() => form.localZip.focus(), 0);
+    }
+
     function closeInstallModDialog() {
       installModDialog.classList.add("hidden");
       setMessage(installModMessage, "");
+    }
+
+    function closeInstallModLocalDialog() {
+      installModLocalDialog.classList.add("hidden");
+      setMessage(installModLocalMessage, "");
     }
 
     function formatKb(sizeKb) {
@@ -1803,7 +1830,7 @@ const PAGE = String.raw`<!doctype html>
       openInstallModDialog({ displayName: modSearchInput.value.trim() });
     });
     installModLocalBtn.addEventListener("click", () => {
-      openInstallModDialog({ displayName: modSearchInput.value.trim(), mode: "local" });
+      openInstallModLocalDialog({ displayName: modSearchInput.value.trim() });
     });
     modSearchInput.addEventListener("input", () => {
       if (latestModManagement) renderModManagement(latestModManagement);
@@ -1890,44 +1917,30 @@ const PAGE = String.raw`<!doctype html>
     installModDialog.addEventListener("click", (event) => {
       if (event.target === installModDialog) closeInstallModDialog();
     });
+    cancelInstallModLocalBtn.addEventListener("click", closeInstallModLocalDialog);
+    installModLocalDialog.addEventListener("click", (event) => {
+      if (event.target === installModLocalDialog) closeInstallModLocalDialog();
+    });
     installModForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = installModForm.elements;
       const url = form.url.value.trim();
-      const localZip = form.localZip.files && form.localZip.files[0];
-      if (!url && !localZip) {
-        setMessage(installModMessage, "请粘贴 zip 下载 URL，或选择本地 zip 文件。", "bad");
-        return;
-      }
-      if (localZip && !/\.zip$/i.test(localZip.name)) {
-        setMessage(installModMessage, "请选择 .zip 格式的本地模组压缩包。", "bad");
-        return;
-      }
-      if (localZip && localZip.size > modUploadMaxBytes) {
-        setMessage(installModMessage, "本地 zip 文件超过 100 MB 限制。", "bad");
+      if (!url) {
+        setMessage(installModMessage, "请粘贴 zip 下载 URL。", "bad");
         return;
       }
 
       const submitBtn = installModForm.querySelector('button[type="submit"]');
       submitBtn.disabled = true;
-      setMessage(installModMessage, localZip ? "正在上传并安装模组，完成前请不要关闭面板..." : "正在下载并安装模组，完成前请不要关闭面板...");
+      setMessage(installModMessage, "正在下载并安装模组，完成前请不要关闭面板...");
       try {
-        const result = localZip
-          ? await request("/api/mods/upload", {
-              method: "POST",
-              body: JSON.stringify({
-                fileName: localZip.name,
-                displayName: form.displayName.value || localZip.name.replace(/\.zip$/i, ""),
-                contentBase64: await readFileAsBase64(localZip),
-              }),
-            })
-          : await request("/api/mods/install", {
-              method: "POST",
-              body: JSON.stringify({
-                url,
-                displayName: form.displayName.value,
-              }),
-            });
+        const result = await request("/api/mods/install", {
+          method: "POST",
+          body: JSON.stringify({
+            url,
+            displayName: form.displayName.value,
+          }),
+        });
         latestModSearchQuery = "";
         latestModSearchResults = [];
         await reloadModManagement();
@@ -1936,6 +1949,48 @@ const PAGE = String.raw`<!doctype html>
         setMessage(modsMessage, (result.message || "模组已安装，重启服务端后生效。") + (names ? "\n已安装：" + names : ""), "ok");
       } catch (error) {
         setMessage(installModMessage, error.message, "bad");
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    installModLocalForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = installModLocalForm.elements;
+      const localZip = form.localZip.files && form.localZip.files[0];
+      if (!localZip) {
+        setMessage(installModLocalMessage, "请选择本地 zip 文件。", "bad");
+        return;
+      }
+      if (!/\.zip$/i.test(localZip.name)) {
+        setMessage(installModLocalMessage, "请选择 .zip 格式的本地模组压缩包。", "bad");
+        return;
+      }
+      if (localZip.size > modUploadMaxBytes) {
+        setMessage(installModLocalMessage, "本地 zip 文件超过 100 MB 限制。", "bad");
+        return;
+      }
+
+      const submitBtn = installModLocalForm.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      setMessage(installModLocalMessage, "正在上传并安装模组，完成前请不要关闭面板...");
+      try {
+        const result = await request("/api/mods/upload", {
+          method: "POST",
+          body: JSON.stringify({
+            fileName: localZip.name,
+            displayName: form.displayName.value || localZip.name.replace(/\.zip$/i, ""),
+            contentBase64: await readFileAsBase64(localZip),
+          }),
+        });
+        latestModSearchQuery = "";
+        latestModSearchResults = [];
+        await reloadModManagement();
+        closeInstallModLocalDialog();
+        const names = (result.installed || []).map((mod) => mod.name || mod.directoryName).join("，");
+        setMessage(modsMessage, (result.message || "模组已安装，重启服务端后生效。") + (names ? "\n已安装：" + names : ""), "ok");
+      } catch (error) {
+        setMessage(installModLocalMessage, error.message, "bad");
       } finally {
         submitBtn.disabled = false;
       }
