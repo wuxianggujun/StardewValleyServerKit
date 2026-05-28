@@ -998,15 +998,16 @@ async function pruneBackups(retention, options = {}) {
 
 async function readSaveConfigFromVolume(payload) {
   const saveName = validateSaveName(payload.saveName);
-  const { saves } = await listSaves();
-  if (!saves.some((save) => save.name === saveName)) {
+  const [{ saves }, settings] = await Promise.all([listSaves(), readSettings()]);
+  const save = saves.find((item) => item.name === saveName);
+  if (!save) {
     throw new Error(`Save not found: ${saveName}`);
   }
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "sdv-config-"));
   try {
     await copySaveFileFromVolume(saveName, tempDir);
     const xml = await fsp.readFile(path.join(tempDir, "save.xml"), "utf8");
-    return { saveName, config: extractSaveConfig(xml) };
+    return { saveName, config: extractSaveConfig(xml), save, settings };
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -1036,24 +1037,38 @@ async function writeSaveConfigToVolume(payload) {
     edits.dayOfMonth = intInRange(payload.dayOfMonth, "Day", 1, 28);
   }
 
-  if (!Object.keys(edits).length) {
+  const settings = await readSettings();
+  const maintenanceEdits = applySaveMaintenanceSettings(settings, payload);
+  const hasSaveEdits = Object.keys(edits).length > 0;
+  const hasMaintenanceEdits = Object.keys(maintenanceEdits).length > 0;
+  if (!hasSaveEdits && !hasMaintenanceEdits) {
     throw new Error("No editable fields provided.");
   }
 
-  const preEditBackup = await createSavesBackup(`Automatic backup before editing config of save ${saveName}.`);
+  const preEditBackup = hasSaveEdits
+    ? await createSavesBackup(`Automatic backup before editing config of save ${saveName}.`)
+    : null;
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "sdv-config-"));
   try {
     await copySaveFileFromVolume(saveName, tempDir);
     const saveFile = path.join(tempDir, "save.xml");
     const xml = await fsp.readFile(saveFile, "utf8");
-    const patched = applySaveConfigEdits(xml, edits);
-    await fsp.writeFile(saveFile, patched, "utf8");
-    await writeSaveFileToVolume(saveName, tempDir);
+    const patched = hasSaveEdits ? applySaveConfigEdits(xml, edits) : xml;
+    if (hasSaveEdits) {
+      await fsp.writeFile(saveFile, patched, "utf8");
+      await writeSaveFileToVolume(saveName, tempDir);
+    }
+    if (Object.keys(maintenanceEdits).length) {
+      await writeSettings(settings);
+    }
     return {
       saveName,
       edits,
-      preEditBackup: preEditBackup.archive,
+      maintenanceEdits,
+      preEditBackup: preEditBackup?.archive || null,
       config: extractSaveConfig(patched),
+      settings,
+      restartRequired: Boolean(Object.keys(maintenanceEdits).length),
     };
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
@@ -1302,6 +1317,19 @@ function applyRuntimeSettings(settings, payload) {
   settings.Server.VerboseLogging = bool(payload.verboseLogging);
   settings.Server.LobbyMode = stringChoice(payload.lobbyMode, "Lobby mode", ["Shared", "Individual"]);
   settings.Server.AdminSteamIds = parseSteamIds(payload.adminSteamIds);
+}
+
+function applySaveMaintenanceSettings(settings, payload) {
+  const edits = {};
+  if (payload.maxPlayers != null) {
+    edits.maxPlayers = intInRange(payload.maxPlayers, "Max players", 1, 10);
+    settings.Server.MaxPlayers = edits.maxPlayers;
+  }
+  if (payload.targetCabins != null) {
+    edits.targetCabins = intInRange(payload.targetCabins, "Target cabins", 1, 9);
+    settings.Game.StartingCabins = edits.targetCabins;
+  }
+  return edits;
 }
 
 function runtimeEnvValues(payload, settings) {
@@ -2230,6 +2258,7 @@ module.exports = {
     uploadPayloadFromJson,
     runtimeEnvValues,
     saveConfig,
+    applySaveMaintenanceSettings,
     getConfig,
     readEnv,
     readSettings,

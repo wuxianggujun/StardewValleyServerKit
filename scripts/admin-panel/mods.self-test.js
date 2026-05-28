@@ -56,6 +56,10 @@ async function main() {
   assert.match(PAGE, /id="installedModsList" class="manage-list scroll-list"/);
   assert.match(PAGE, /id="modGuidanceList" class="manage-list"/);
   assert.match(PAGE, /id="nexusFilesList" class="manage-list scroll-list"/);
+  assert.match(PAGE, /<strong>最大玩家数<\/strong><input name="maxPlayers" type="number" min="1" max="10"/);
+  assert.match(PAGE, /<strong>目标小屋\/角色槽<\/strong><input name="targetCabins" type="number" min="1" max="9"/);
+  assert.match(PAGE, /id="repairCabinsFromConfigBtn"/);
+  assert.match(PAGE, /repairSaveCabinsFromForm\(saveName, form\.targetCabins\.value, editConfigMessage\)/);
   assertThrowsMessage(
     () => __test.uploadedArchiveFromPayload({ fileName: "mod.txt", buffer: Buffer.from("PK\u0003\u0004") }),
     /\.zip 格式/,

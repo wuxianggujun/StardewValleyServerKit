@@ -134,6 +134,17 @@ async function main() {
       "76561198000000000",
       "76561198000000001",
     ]);
+    const maintenanceSettings = JSON.parse(JSON.stringify(savedSettings));
+    assert.deepEqual(
+      __test.applySaveMaintenanceSettings(maintenanceSettings, { maxPlayers: "7", targetCabins: "6" }),
+      { maxPlayers: 7, targetCabins: 6 },
+    );
+    assert.equal(maintenanceSettings.Server.MaxPlayers, 7);
+    assert.equal(maintenanceSettings.Game.StartingCabins, 6);
+    assert.throws(
+      () => __test.applySaveMaintenanceSettings(maintenanceSettings, { maxPlayers: "11" }),
+      /Max players must be between 1 and 10/,
+    );
 
     const beforeKeepEnv = await readText(envFile);
     await assert.rejects(

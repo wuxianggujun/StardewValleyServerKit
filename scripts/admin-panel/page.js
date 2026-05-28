@@ -790,7 +790,7 @@ const PAGE = String.raw`<!doctype html>
   <div id="editConfigDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editConfigTitle">
     <form id="editConfigForm" class="modal-panel">
       <h2 id="editConfigTitle">存档配置</h2>
-      <p class="modal-message">编辑基础字段后保存，系统会自动备份再写入。地图类型和时间为只读。</p>
+      <p class="modal-message">编辑基础字段、最大玩家数和目标小屋数。保存存档字段会自动备份；修复小屋会按目标小屋/角色槽执行。</p>
       <fieldset>
         <label class="field-6"><strong>农场名称</strong><input name="farmName" maxlength="48" /></label>
         <label class="field-6"><strong>地图类型</strong><input name="whichFarm" disabled /></label>
@@ -807,10 +807,14 @@ const PAGE = String.raw`<!doctype html>
         <label class="field-4"><strong>日期</strong><input name="dayOfMonth" type="number" min="1" max="28" /></label>
         <label class="field-4"><strong>当前时间</strong><input name="timeOfDay" disabled /></label>
         <label class="field-4"><strong>累计收入</strong><input name="totalMoneyEarned" disabled /></label>
+        <label class="field-4"><strong>最大玩家数</strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
+        <label class="field-4"><strong>目标小屋/角色槽</strong><input name="targetCabins" type="number" min="1" max="9" /></label>
+        <label class="field-4"><strong>当前小屋状态</strong><input name="cabinStatus" disabled /></label>
       </fieldset>
       <input type="hidden" name="saveName" />
       <div id="editConfigMessage" class="message"></div>
       <div class="toolbar modal-actions">
+        <button id="repairCabinsFromConfigBtn" type="button">修复小屋</button>
         <button id="cancelEditConfigBtn" type="button">取消</button>
         <button class="primary" type="submit">保存配置</button>
       </div>
@@ -909,6 +913,7 @@ const PAGE = String.raw`<!doctype html>
     const editConfigMessage = document.querySelector("#editConfigMessage");
     const editConfigTitle = document.querySelector("#editConfigTitle");
     const cancelEditConfigBtn = document.querySelector("#cancelEditConfigBtn");
+    const repairCabinsFromConfigBtn = document.querySelector("#repairCabinsFromConfigBtn");
     const installModDialog = document.querySelector("#installModDialog");
     const installModForm = document.querySelector("#installModForm");
     const installModTitle = document.querySelector("#installModTitle");
@@ -983,7 +988,10 @@ const PAGE = String.raw`<!doctype html>
       return map[value] != null ? map[value] + "（" + value + "）" : String(value ?? "n/a");
     }
 
-    function openEditConfigDialog(saveName, config) {
+    function openEditConfigDialog(saveName, result) {
+      const config = result.config || {};
+      const settings = result.settings || {};
+      const save = result.save || {};
       const form = editConfigForm.elements;
       form.saveName.value = saveName;
       form.farmName.value = config.farmName || "";
@@ -994,6 +1002,9 @@ const PAGE = String.raw`<!doctype html>
       form.timeOfDay.value = formatTimeOfDay(config.timeOfDay);
       form.totalMoneyEarned.value = (config.totalMoneyEarned ?? 0).toLocaleString();
       form.whichFarm.value = farmTypeLabel(config.whichFarm);
+      form.maxPlayers.value = settings.Server?.MaxPlayers ?? configForm.elements.maxPlayers.value ?? 4;
+      form.targetCabins.value = settings.Game?.StartingCabins ?? Math.max(save.usableCabinCount || 0, save.cabinCount || 1, 1);
+      form.cabinStatus.value = "小屋 " + (save.cabinCount ?? 0) + " 座，可用角色 " + (save.usableCabinCount ?? save.cabinCount ?? 0) + " 个";
       editConfigTitle.textContent = "存档配置：" + saveName;
       setMessage(editConfigMessage, "");
       editConfigDialog.classList.remove("hidden");
@@ -1341,7 +1352,6 @@ const PAGE = String.raw`<!doctype html>
             '<div class="manage-actions">' +
               '<button data-action="select-save" data-name="' + escapeHtml(save.name) + '">下次加载</button>' +
               '<button data-action="edit-config" data-name="' + escapeHtml(save.name) + '">查看配置</button>' +
-              '<button data-action="repair-cabins" data-name="' + escapeHtml(save.name) + '">修复小屋</button>' +
               '<button class="danger" data-action="delete-save" data-name="' + escapeHtml(save.name) + '">删除</button>' +
             '</div>' +
           '</div>'
@@ -1857,6 +1867,45 @@ const PAGE = String.raw`<!doctype html>
       return data;
     }
 
+    async function repairSaveCabinsFromForm(saveName, targetCabins, messageTarget) {
+      async function submit(force) {
+        return request("/api/saves/repair-cabins", {
+          method: "POST",
+          body: JSON.stringify({ saveName, targetCabins, force }),
+        });
+      }
+
+      setMessage(messageTarget, "正在备份并修复小屋...");
+      let result;
+      try {
+        result = await submit(false);
+      } catch (error) {
+        if (error.status !== 409) throw error;
+        if (!confirm(error.message + "\n\n仍然强制修复该存档的小屋？")) return null;
+        setMessage(messageTarget, "正在强制备份并修复小屋...");
+        result = await submit(true);
+      }
+
+      hasConfig = false;
+      await loadAll();
+      return result;
+    }
+
+    function repairSaveCabinsResultText(result) {
+      const patch = result.cabinPatch || {};
+      const restartText = result.restarted ? "；服务端已重启" : "";
+      return "小屋已修复：" + result.saveName +
+        "；目标 " + result.targetCabins +
+        "；补建 " + (patch.addedCabins || 0) +
+        " 座；移动 " + (patch.movedCabins || 0) +
+        " 座；清理障碍 " + (patch.clearedFarmObstacles || 0) +
+        " 处；新增角色槽 " + (patch.addedFarmhands || 0) +
+        " 个；修正小屋引用 " + (patch.fixedCabinReferences || 0) +
+        " 个；修正角色 ID " + (patch.fixedFarmhandIds || 0) +
+        " 个；" + patchVerificationText(patch) +
+        "；执行前备份：" + result.preRepairBackup + restartText;
+    }
+
     refreshModsBtn.addEventListener("click", async () => {
       setMessage(modsMessage, "刷新中...");
       try {
@@ -2232,6 +2281,8 @@ const PAGE = String.raw`<!doctype html>
         year: form.year.value,
         currentSeason: form.currentSeason.value,
         dayOfMonth: form.dayOfMonth.value,
+        maxPlayers: form.maxPlayers.value,
+        targetCabins: form.targetCabins.value,
       };
       const submitBtn = editConfigForm.querySelector('button[type="submit"]');
       submitBtn.disabled = true;
@@ -2244,11 +2295,29 @@ const PAGE = String.raw`<!doctype html>
         hasConfig = false;
         await loadAll();
         closeEditConfigDialog();
-        setMessage(savesMessage, "存档配置已保存：" + result.saveName + "；编辑前备份：" + result.preEditBackup, "ok");
+        const backupText = result.preEditBackup ? "；编辑前备份：" + result.preEditBackup : "";
+        const restartText = result.restartRequired ? "；人数/小屋设置重启后生效" : "";
+        setMessage(savesMessage, "存档配置已保存：" + result.saveName + backupText + restartText, "ok");
       } catch (error) {
         setMessage(editConfigMessage, error.message, "bad");
       } finally {
         submitBtn.disabled = false;
+      }
+    });
+
+    repairCabinsFromConfigBtn.addEventListener("click", async () => {
+      const form = editConfigForm.elements;
+      const saveName = form.saveName.value;
+      repairCabinsFromConfigBtn.disabled = true;
+      try {
+        const result = await repairSaveCabinsFromForm(saveName, form.targetCabins.value, editConfigMessage);
+        if (!result) return;
+        closeEditConfigDialog();
+        setMessage(savesMessage, repairSaveCabinsResultText(result), "ok");
+      } catch (error) {
+        setMessage(editConfigMessage, error.message, "bad");
+      } finally {
+        repairCabinsFromConfigBtn.disabled = false;
       }
     });
 
@@ -2275,52 +2344,11 @@ const PAGE = String.raw`<!doctype html>
           setMessage(savesMessage, "正在读取存档配置...");
           try {
             const result = await request("/api/saves/config?saveName=" + encodeURIComponent(saveName));
-            openEditConfigDialog(saveName, result.config);
+            openEditConfigDialog(saveName, result);
             setMessage(savesMessage, "");
           } catch (error) {
             setMessage(savesMessage, error.message, "bad");
           }
-          return;
-        }
-
-        if (action === "repair-cabins") {
-          const saveName = button.dataset.name;
-
-          async function submit(force) {
-            return request("/api/saves/repair-cabins", {
-              method: "POST",
-              body: JSON.stringify({ saveName, force }),
-            });
-          }
-
-          setMessage(savesMessage, "正在备份并修复小屋...");
-          let result;
-          try {
-            result = await submit(false);
-          } catch (error) {
-            if (error.status !== 409) throw error;
-            if (!confirm(error.message + "\n\n仍然强制修复该存档的小屋？")) return;
-            setMessage(savesMessage, "正在强制备份并修复小屋...");
-            result = await submit(true);
-          }
-
-          hasConfig = false;
-          await loadAll();
-          const patch = result.cabinPatch || {};
-          const restartText = result.restarted ? "；服务端已重启" : "";
-          setMessage(
-            savesMessage,
-            "小屋已修复：" + result.saveName +
-              "；补建 " + (patch.addedCabins || 0) +
-              " 座；移动 " + (patch.movedCabins || 0) +
-              " 座；清理障碍 " + (patch.clearedFarmObstacles || 0) +
-              " 处；新增角色槽 " + (patch.addedFarmhands || 0) +
-              " 个；修正小屋引用 " + (patch.fixedCabinReferences || 0) +
-              " 个；修正角色 ID " + (patch.fixedFarmhandIds || 0) +
-              " 个；" + patchVerificationText(patch) +
-              "；执行前备份：" + result.preRepairBackup + restartText,
-            "ok",
-          );
           return;
         }
 
