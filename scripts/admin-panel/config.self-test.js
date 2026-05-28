@@ -66,6 +66,21 @@ async function main() {
     assert.equal(uploadPayload.fileName, "local.zip");
     assert.equal(uploadPayload.displayName, "Local Mod");
     assert.equal(uploadPayload.buffer.length, 4);
+    const inferredMultipart = __test.parseMultipartUpload({
+      headers: { "content-type": "application/json" },
+    }, multipartBody);
+    assert.equal(inferredMultipart.fileName, "local.zip");
+    const legacyUpload = __test.uploadPayloadFromJson(Buffer.from(JSON.stringify({
+      fileName: "legacy.zip",
+      displayName: "Legacy Mod",
+      contentBase64: "UEsDBA==",
+    })));
+    assert.equal(legacyUpload.fileName, "legacy.zip");
+    assert.equal(legacyUpload.buffer.length, 4);
+    assert.throws(
+      () => __test.uploadPayloadFromJson(Buffer.from("{bad")),
+      /上传请求格式无效/,
+    );
 
     await fsp.mkdir(path.dirname(settingsFile), { recursive: true });
     await fsp.writeFile(envFile, [

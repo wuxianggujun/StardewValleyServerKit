@@ -447,14 +447,23 @@ async function readRequestBuffer(req, options = {}) {
   return Buffer.concat(chunks);
 }
 
-function parseMultipartUpload(req, body) {
+function multipartBoundary(req, body) {
   const contentType = String(req.headers["content-type"] || "");
   const boundaryMatch = contentType.match(/multipart\/form-data;\s*boundary=(?:"([^"]+)"|([^;]+))/i);
-  if (!boundaryMatch) {
+  if (boundaryMatch) return boundaryMatch[1] || boundaryMatch[2];
+  const firstLineEnd = body.indexOf(Buffer.from("\r\n"));
+  const firstLine = body.slice(0, firstLineEnd === -1 ? Math.min(body.length, 200) : firstLineEnd).toString("latin1");
+  if (firstLine.startsWith("--") && firstLine.length > 2) return firstLine.slice(2);
+  return "";
+}
+
+function parseMultipartUpload(req, body) {
+  const boundaryText = multipartBoundary(req, body);
+  if (!boundaryText) {
     throw apiError(415, "本地上传必须使用 multipart/form-data。");
   }
 
-  const boundary = Buffer.from(`--${boundaryMatch[1] || boundaryMatch[2]}`, "latin1");
+  const boundary = Buffer.from(`--${boundaryText}`, "latin1");
   const parts = [];
   let cursor = body.indexOf(boundary);
   while (cursor !== -1) {
@@ -491,8 +500,34 @@ function parseMultipartUpload(req, body) {
   return payload;
 }
 
+function uploadPayloadFromJson(body) {
+  let payload;
+  try {
+    payload = JSON.parse(body.toString("utf8"));
+  } catch (error) {
+    throw apiError(400, "上传请求格式无效，请刷新页面后重新选择 zip 文件上传。");
+  }
+  const rawContent = typeof payload?.contentBase64 === "string" ? payload.contentBase64.trim() : "";
+  const commaIndex = rawContent.indexOf(",");
+  const base64 = (commaIndex >= 0 ? rawContent.slice(commaIndex + 1) : rawContent).replace(/\s+/g, "");
+  return {
+    fileName: payload?.fileName,
+    displayName: payload?.displayName,
+    buffer: base64 ? Buffer.from(base64, "base64") : Buffer.alloc(0),
+  };
+}
+
 async function readUploadBody(req) {
-  return parseMultipartUpload(req, await readRequestBuffer(req, { maxBytes: MOD_UPLOAD_BODY_MAX_BYTES }));
+  const body = await readRequestBuffer(req, { maxBytes: MOD_UPLOAD_BODY_MAX_BYTES });
+  const contentType = String(req.headers["content-type"] || "");
+  const firstByte = body.find((byte) => ![9, 10, 13, 32].includes(byte));
+  if (/multipart\/form-data/i.test(contentType) || firstByte === 45) {
+    return parseMultipartUpload(req, body);
+  }
+  if (/application\/json/i.test(contentType) || firstByte === 123) {
+    return uploadPayloadFromJson(body);
+  }
+  throw apiError(415, "本地上传必须使用 multipart/form-data。");
 }
 
 async function serverApiRequest(method, pathname, body, options = {}) {
@@ -2192,6 +2227,7 @@ module.exports = {
     parseEnv,
     patchEnvText,
     parseMultipartUpload,
+    uploadPayloadFromJson,
     runtimeEnvValues,
     saveConfig,
     getConfig,

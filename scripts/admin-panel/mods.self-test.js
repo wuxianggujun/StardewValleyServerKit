@@ -53,6 +53,7 @@ async function main() {
     __test.uploadedArchiveFromPayload({ fileName: "mod.zip", buffer: Buffer.from("PK\u0003\u0004") }).buffer.length,
     4,
   );
+  assert.deepEqual(__test.stripJsonComments("{\n// comment\n\"Name\":\"A\",\n}\n"), "{\n\n\"Name\":\"A\"}\n");
   assertThrowsMessage(
     () => __test.normalizeNexusApiError({ statusCode: 429, retryAfterMs: 90000, message: "HTTP 429" }),
     /建议等待 90 秒后再试/,
@@ -197,6 +198,27 @@ async function main() {
     assert.equal(uploadResult.bytes, 4);
     assert.equal(uploadResult.installed[0].directoryName, "Uploaded Mod");
     assert.equal(await pathExists(path.join(modsDir, "Uploaded Mod", "manifest.json")), true);
+
+    const jsoncService = createModService({
+      rootDir,
+      docker: async (args) => {
+        const volumeArg = args[args.lastIndexOf("-v") + 1];
+        const mountSuffix = ":/work";
+        const tempDir = volumeArg.endsWith(mountSuffix)
+          ? volumeArg.slice(0, -mountSuffix.length)
+          : volumeArg;
+        const modDir = path.join(tempDir, "extract", "JsoncMod");
+        await fsp.mkdir(modDir, { recursive: true });
+        await fsp.writeFile(path.join(modDir, "manifest.json"), '{\n// Nexus archive comment\n"Name": "Jsonc Mod",\n"UniqueID": "Example.Jsonc",\n"Version": "1.0.0",\n}\n');
+        return { ok: true, stdout: "", stderr: "" };
+      },
+      readEnv: async () => ({}),
+    });
+    const jsoncUploadResult = await jsoncService.installModFromUpload({
+      fileName: "jsonc.zip",
+      buffer: Buffer.from("PK\u0003\u0004"),
+    });
+    assert.equal(jsoncUploadResult.installed[0].directoryName, "Jsonc Mod");
 
     let retryCalls = 0;
     const retrySleeps = [];

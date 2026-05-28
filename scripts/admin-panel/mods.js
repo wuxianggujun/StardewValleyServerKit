@@ -371,7 +371,57 @@ async function ensureModsDir(state) {
 }
 
 async function readManifestFile(manifestPath) {
-  return JSON.parse(stripBom(await fsp.readFile(manifestPath, "utf8")));
+  const text = stripBom(await fsp.readFile(manifestPath, "utf8"));
+  try {
+    return JSON.parse(text);
+  } catch (firstError) {
+    try {
+      return JSON.parse(stripJsonComments(text));
+    } catch (_) {
+      throw new Error(`manifest.json 解析失败：${path.basename(path.dirname(manifestPath))}：${firstError.message}`);
+    }
+  }
+}
+
+function stripJsonComments(text) {
+  let output = "";
+  let inString = false;
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
+    const next = text[index + 1];
+    if (inString) {
+      output += ch;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === quote) {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inString = true;
+      quote = ch;
+      output += ch;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      while (index < text.length && text[index] !== "\n") index += 1;
+      output += "\n";
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      index += 2;
+      while (index < text.length && !(text[index] === "*" && text[index + 1] === "/")) index += 1;
+      index += 1;
+      continue;
+    }
+    output += ch;
+  }
+  return output.replace(/,\s*([}\]])/g, "$1");
 }
 
 async function readModManifest(modDir) {
@@ -1051,6 +1101,7 @@ module.exports = {
     isAllowedDownloadHost,
     shouldSkipModDirectory,
     assertInsideRoot,
+    stripJsonComments,
     uploadedArchiveFromPayload,
     nexusFileGroup,
     nexusRetryDelayMs,
