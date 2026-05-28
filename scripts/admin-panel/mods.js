@@ -836,27 +836,7 @@ function uploadedArchiveFromPayload(payload) {
     throw new Error("请选择 .zip 格式的本地模组压缩包。");
   }
 
-  const rawContent = typeof payload?.contentBase64 === "string" ? payload.contentBase64.trim() : "";
-  if (!rawContent) {
-    throw new Error("上传文件内容为空。");
-  }
-
-  const commaIndex = rawContent.indexOf(",");
-  const base64 = (commaIndex >= 0 ? rawContent.slice(commaIndex + 1) : rawContent).replace(/\s+/g, "");
-  if (!base64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
-    throw new Error("上传文件内容不是有效的 Base64。");
-  }
-
-  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
-  const estimatedBytes = Math.floor((base64.length * 3) / 4) - padding;
-  if (estimatedBytes <= 0) {
-    throw new Error("上传文件内容为空。");
-  }
-  if (estimatedBytes > MOD_DOWNLOAD_MAX_BYTES) {
-    throw new Error("上传文件超过 100 MB 限制。");
-  }
-
-  const buffer = Buffer.from(base64, "base64");
+  const buffer = Buffer.isBuffer(payload?.buffer) ? payload.buffer : Buffer.alloc(0);
   if (!buffer.length) {
     throw new Error("上传文件内容为空。");
   }

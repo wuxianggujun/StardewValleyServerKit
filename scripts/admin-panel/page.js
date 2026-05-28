@@ -1143,18 +1143,36 @@ const PAGE = String.raw`<!doctype html>
       return response.json();
     }
 
-    function readFileAsBase64(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = String(reader.result || "");
-          const marker = "base64,";
-          const markerIndex = result.indexOf(marker);
-          resolve(markerIndex >= 0 ? result.slice(markerIndex + marker.length) : result);
-        };
-        reader.onerror = () => reject(reader.error || new Error("读取本地文件失败。"));
-        reader.readAsDataURL(file);
+    async function uploadModFile(file, displayName) {
+      const formData = new FormData();
+      formData.append("file", file, file.name);
+      formData.append("displayName", displayName || "");
+      const headers = {};
+      if (activeAdminToken) headers["X-Admin-Token"] = activeAdminToken;
+      const response = await fetch(appPath("/api/mods/upload"), {
+        method: "POST",
+        credentials: "same-origin",
+        headers,
+        body: formData,
       });
+      if (response.status === 401) {
+        activeAdminToken = "";
+        adminToolbar.classList.add("hidden");
+        appPanel.classList.add("hidden");
+        authPanel.classList.remove("hidden");
+        throw new Error("需要管理令牌");
+      }
+      if (!response.ok) {
+        let message = response.statusText;
+        try {
+          const body = await response.json();
+          message = body.error || message;
+        } catch (_) {}
+        const error = new Error(message);
+        error.status = response.status;
+        throw error;
+      }
+      return response.json();
     }
 
     function pill(text, kind) {
@@ -1975,14 +1993,7 @@ const PAGE = String.raw`<!doctype html>
       submitBtn.disabled = true;
       setMessage(installModLocalMessage, "正在上传并安装模组，完成前请不要关闭面板...");
       try {
-        const result = await request("/api/mods/upload", {
-          method: "POST",
-          body: JSON.stringify({
-            fileName: localZip.name,
-            displayName: form.displayName.value || localZip.name.replace(/\.zip$/i, ""),
-            contentBase64: await readFileAsBase64(localZip),
-          }),
-        });
+        const result = await uploadModFile(localZip, form.displayName.value || localZip.name.replace(/\.zip$/i, ""));
         latestModSearchQuery = "";
         latestModSearchResults = [];
         await reloadModManagement();

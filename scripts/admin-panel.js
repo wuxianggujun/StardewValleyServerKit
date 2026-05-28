@@ -53,7 +53,7 @@ const SMAPI_COMMAND_PIPE_POLL_MS = 2000;
 const NEW_GAME_SAVE_WAIT_TIMEOUT_MS = 120000;
 const NEW_GAME_SAVE_WAIT_POLL_MS = 3000;
 const JSON_BODY_MAX_BYTES = 1024 * 1024;
-const MOD_UPLOAD_JSON_MAX_BYTES = 140 * 1024 * 1024;
+const MOD_UPLOAD_BODY_MAX_BYTES = 110 * 1024 * 1024;
 const DEFAULT_AUTO_BACKUP_ENABLED = false;
 const DEFAULT_AUTO_BACKUP_INTERVAL_MINUTES = 360;
 const DEFAULT_BACKUP_RETENTION = 10;
@@ -429,6 +429,70 @@ async function readJsonBody(req, options = {}) {
   }
   if (!chunks.length) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function readRequestBuffer(req, options = {}) {
+  const maxBytes = options.maxBytes || JSON_BODY_MAX_BYTES;
+  const chunks = [];
+  let totalBytes = 0;
+  for await (const chunk of req) {
+    totalBytes += chunk.length;
+    if (totalBytes > maxBytes) {
+      const error = apiError(413, "请求体过大。");
+      req.destroy(error);
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+function parseMultipartUpload(req, body) {
+  const contentType = String(req.headers["content-type"] || "");
+  const boundaryMatch = contentType.match(/multipart\/form-data;\s*boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) {
+    throw apiError(415, "本地上传必须使用 multipart/form-data。");
+  }
+
+  const boundary = Buffer.from(`--${boundaryMatch[1] || boundaryMatch[2]}`, "latin1");
+  const parts = [];
+  let cursor = body.indexOf(boundary);
+  while (cursor !== -1) {
+    cursor += boundary.length;
+    if (body[cursor] === 45 && body[cursor + 1] === 45) break;
+    if (body[cursor] === 13 && body[cursor + 1] === 10) cursor += 2;
+
+    const headerEnd = body.indexOf(Buffer.from("\r\n\r\n"), cursor);
+    if (headerEnd === -1) break;
+    const headerText = body.slice(cursor, headerEnd).toString("latin1");
+    let dataStart = headerEnd + 4;
+    let next = body.indexOf(boundary, dataStart);
+    if (next === -1) break;
+    let dataEnd = next;
+    if (dataEnd >= 2 && body[dataEnd - 2] === 13 && body[dataEnd - 1] === 10) dataEnd -= 2;
+
+    const disposition = headerText.match(/content-disposition:\s*form-data;([^\r\n]*)/i)?.[1] || "";
+    const name = disposition.match(/name="([^"]+)"/i)?.[1] || "";
+    const fileName = disposition.match(/filename="([^"]*)"/i)?.[1] || "";
+    parts.push({ name, fileName, data: body.slice(dataStart, dataEnd) });
+    cursor = next;
+  }
+
+  const payload = {};
+  const filePart = parts.find((part) => part.name === "file");
+  if (filePart) {
+    payload.fileName = filePart.fileName;
+    payload.buffer = filePart.data;
+  }
+  const displayNamePart = parts.find((part) => part.name === "displayName");
+  if (displayNamePart) {
+    payload.displayName = displayNamePart.data.toString("utf8");
+  }
+  return payload;
+}
+
+async function readUploadBody(req) {
+  return parseMultipartUpload(req, await readRequestBuffer(req, { maxBytes: MOD_UPLOAD_BODY_MAX_BYTES }));
 }
 
 async function serverApiRequest(method, pathname, body, options = {}) {
@@ -2025,7 +2089,7 @@ async function updateBackupPolicy(payload) {
 const handleApi = createApiHandler({
   ADMIN_COOKIE,
   readJsonBody,
-  MOD_UPLOAD_JSON_MAX_BYTES,
+  readUploadBody,
   readEnv,
   isAuthorized,
   json,
@@ -2127,6 +2191,7 @@ module.exports = {
   __test: {
     parseEnv,
     patchEnvText,
+    parseMultipartUpload,
     runtimeEnvValues,
     saveConfig,
     getConfig,

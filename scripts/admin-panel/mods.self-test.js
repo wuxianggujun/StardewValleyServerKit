@@ -42,15 +42,15 @@ async function main() {
   assert.match(PAGE, /name="localZip" type="file"/);
   assert.match(PAGE, /\/api\/mods\/upload/);
   assertThrowsMessage(
-    () => __test.uploadedArchiveFromPayload({ fileName: "mod.txt", contentBase64: "UEsDBA==" }),
+    () => __test.uploadedArchiveFromPayload({ fileName: "mod.txt", buffer: Buffer.from("PK\u0003\u0004") }),
     /\.zip 格式/,
   );
   assertThrowsMessage(
-    () => __test.uploadedArchiveFromPayload({ fileName: "mod.zip", contentBase64: "" }),
+    () => __test.uploadedArchiveFromPayload({ fileName: "mod.zip", buffer: Buffer.alloc(0) }),
     /内容为空/,
   );
   assert.equal(
-    __test.uploadedArchiveFromPayload({ fileName: "mod.zip", contentBase64: "data:application/zip;base64,UEsDBA==" }).buffer.length,
+    __test.uploadedArchiveFromPayload({ fileName: "mod.zip", buffer: Buffer.from("PK\u0003\u0004") }).buffer.length,
     4,
   );
   assertThrowsMessage(
@@ -191,7 +191,7 @@ async function main() {
     });
     const uploadResult = await uploadService.installModFromUpload({
       fileName: "uploaded.zip",
-      contentBase64: "UEsDBA==",
+      buffer: Buffer.from("PK\u0003\u0004"),
     });
     assert.equal(uploadResult.installedCount, 1);
     assert.equal(uploadResult.bytes, 4);

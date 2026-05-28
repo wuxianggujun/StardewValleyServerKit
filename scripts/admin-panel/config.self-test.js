@@ -53,6 +53,20 @@ async function main() {
       `GAME_PORT="3"${eol}GAME_PORT="3"${eol}`,
     );
 
+    const boundary = "----sdv-test-boundary";
+    const multipartBody = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="displayName"\r\n\r\nLocal Mod\r\n`, "utf8"),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="local.zip"\r\nContent-Type: application/zip\r\n\r\n`, "utf8"),
+      Buffer.from("PK\u0003\u0004", "latin1"),
+      Buffer.from(`\r\n--${boundary}--\r\n`, "utf8"),
+    ]);
+    const uploadPayload = __test.parseMultipartUpload({
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+    }, multipartBody);
+    assert.equal(uploadPayload.fileName, "local.zip");
+    assert.equal(uploadPayload.displayName, "Local Mod");
+    assert.equal(uploadPayload.buffer.length, 4);
+
     await fsp.mkdir(path.dirname(settingsFile), { recursive: true });
     await fsp.writeFile(envFile, [
       "GAME_PORT=\"24642\"",
