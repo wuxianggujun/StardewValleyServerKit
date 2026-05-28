@@ -269,6 +269,7 @@ const PAGE = String.raw`<!doctype html>
     .manage-list {
       display: grid;
       gap: 0;
+      align-content: start;
       border-top: 1px solid #eef1f5;
       min-width: 0;
     }
@@ -287,9 +288,6 @@ const PAGE = String.raw`<!doctype html>
     }
     #modSearchResults {
       max-height: min(28vh, 300px);
-    }
-    #modGuidanceList {
-      max-height: min(32vh, 340px);
     }
     #nexusFilesList {
       max-height: min(42vh, 420px);
@@ -656,7 +654,7 @@ const PAGE = String.raw`<!doctype html>
             </div>
             <div class="manage-column">
               <h3>安装说明</h3>
-              <div id="modGuidanceList" class="manage-list scroll-list"></div>
+              <div id="modGuidanceList" class="manage-list"></div>
             </div>
           </div>
         </div>
