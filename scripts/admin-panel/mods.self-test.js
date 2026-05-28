@@ -31,8 +31,11 @@ async function main() {
   assert.equal(__test.nexusRetryDelayMs({ statusCode: 429, retryAfterMs: 20000 }, 0), 15000);
   assert.equal(__test.nexusRetryDelayMs({ statusCode: 429 }, 1), 2400);
   assert.equal(__test.formatWaitSeconds(1001), "2 秒");
+  assert.equal(__test.isAllowedDownloadHost("supporter-files.nexus-cdn.com"), true);
+  assert.equal(__test.isAllowedDownloadHost("evil-nexus-cdn.com"), false);
   assert.match(PAGE, /使用缓存/);
   assert.match(PAGE, /未再次请求 Nexus API/);
+  assert.match(PAGE, /\.field-8 \{ grid-column: span 8; \}/);
   assertThrowsMessage(
     () => __test.normalizeNexusApiError({ statusCode: 429, retryAfterMs: 90000, message: "HTTP 429" }),
     /建议等待 90 秒后再试/,

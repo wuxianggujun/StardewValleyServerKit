@@ -21,6 +21,7 @@ const MOD_DOWNLOAD_TIMEOUT_MS = 60000;
 const MAX_REDIRECTS = 5;
 const DOWNLOAD_HOSTS = [
   "nexusmods.com",
+  "nexus-cdn.com",
   "smapi.io",
   "github.com",
   "raw.githubusercontent.com",
@@ -993,6 +994,7 @@ module.exports = {
     fileCategoryRank,
     formatWaitSeconds,
     intPositive,
+    isAllowedDownloadHost,
     shouldSkipModDirectory,
     assertInsideRoot,
     nexusFileGroup,

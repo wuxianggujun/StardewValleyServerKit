@@ -196,6 +196,7 @@ const PAGE = String.raw`<!doctype html>
     .field-3 { grid-column: span 3; }
     .field-4 { grid-column: span 4; }
     .field-6 { grid-column: span 6; }
+    .field-8 { grid-column: span 8; }
     .field-12 { grid-column: span 12; }
     .checkline {
       display: flex;
@@ -403,7 +404,7 @@ const PAGE = String.raw`<!doctype html>
     }
     @media (max-width: 860px) {
       .span-4, .span-6, .span-8 { grid-column: span 12; }
-      .field-3, .field-4, .field-6 { grid-column: span 12; }
+      .field-3, .field-4, .field-6, .field-8 { grid-column: span 12; }
       .backup-policy { grid-template-columns: 1fr; }
       .manage-grid { grid-template-columns: 1fr; }
       .manage-item { grid-template-columns: 1fr; }
