@@ -576,6 +576,7 @@ const PAGE = String.raw`<!doctype html>
             <div class="field-6 toolbar">
               <button id="searchModsBtn" class="primary" type="button">搜索</button>
               <button id="installModUrlBtn" type="button">从 URL 安装</button>
+              <button id="installModLocalBtn" type="button">从本地安装</button>
             </div>
           </div>
           <div id="modsMessage" class="message"></div>
@@ -758,7 +759,7 @@ const PAGE = String.raw`<!doctype html>
 
   <div id="installModDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="installModTitle">
     <form id="installModForm" class="modal-panel">
-      <h2 id="installModTitle">安装模组</h2>
+      <h2 id="installModTitle">安装模组 zip</h2>
       <p id="installModHelp" class="modal-message">粘贴 zip 下载 URL。面板会在后端下载、校验并安装到 data/mods。</p>
       <label>
         <strong>下载 URL</strong>
@@ -813,6 +814,7 @@ const PAGE = String.raw`<!doctype html>
     const modSearchInput = document.querySelector("#modSearchInput");
     const searchModsBtn = document.querySelector("#searchModsBtn");
     const installModUrlBtn = document.querySelector("#installModUrlBtn");
+    const installModLocalBtn = document.querySelector("#installModLocalBtn");
     const modSearchPanel = document.querySelector("#modSearchPanel");
     const modSearchSummary = document.querySelector("#modSearchSummary");
     const modSearchResults = document.querySelector("#modSearchResults");
@@ -933,17 +935,20 @@ const PAGE = String.raw`<!doctype html>
       form.displayName.value = options.displayName || "";
       form.sourceUrl.value = options.sourceUrl || "";
       form.nexusId.value = options.nexusId || "";
-      installModTitle.textContent = options.displayName ? "安装模组：" + options.displayName : "安装模组";
-      installModHelp.textContent = options.sourceUrl
-        ? "先打开来源页复制 zip 下载 URL，或直接选择本地 zip 文件。面板会在后端校验并安装到 data/mods。"
-        : "粘贴 zip 下载 URL，或选择本地 zip 文件。面板会在后端校验并安装到 data/mods。";
+      const localMode = options.mode === "local";
+      installModTitle.textContent = options.displayName ? "安装模组：" + options.displayName : (localMode ? "从本地安装模组" : "从 URL 安装模组");
+      installModHelp.textContent = localMode
+        ? "选择电脑里的 zip 文件上传安装。面板会在后端校验并安装到 data/mods。"
+        : (options.sourceUrl
+          ? "先打开来源页复制 zip 下载 URL，再粘贴到这里。也可以改选本地 zip 文件安装。"
+          : "粘贴 zip 下载 URL。也可以改选本地 zip 文件安装。");
       openInstallSourceBtn.disabled = !options.sourceUrl;
       nexusFilesPanel.classList.add("hidden");
       nexusFilesSummary.textContent = "";
       nexusFilesList.innerHTML = "";
       setMessage(installModMessage, "");
       installModDialog.classList.remove("hidden");
-      setTimeout(() => form.url.focus(), 0);
+      setTimeout(() => localMode ? form.localZip.focus() : form.url.focus(), 0);
       if (options.nexusId) {
         loadNexusFiles(options.nexusId).catch((error) => setMessage(installModMessage, error.message, "bad"));
       }
@@ -1361,7 +1366,7 @@ const PAGE = String.raw`<!doctype html>
       modGuidanceList.innerHTML = [
         '<div class="manage-item"><div><strong>安装前备份</strong><span class="hint">修改 Mod 前先导出一份 saves 备份，避免兼容性问题导致存档损坏。</span></div></div>',
         '<div class="manage-item"><div><strong>重启生效</strong><span class="hint">把 Mod 放进 data/mods 后需要重启服务端，SMAPI 才会重新加载。</span></div></div>',
-        '<div class="manage-item"><div><strong>URL 安装</strong><span class="hint">从 Nexus、GitHub 或 SMAPI 页面复制 zip 下载 URL 后，可直接交给面板下载并安装。</span></div></div>',
+        '<div class="manage-item"><div><strong>URL / 本地 zip 安装</strong><span class="hint">可以粘贴 Nexus、GitHub 或 SMAPI 的 zip 下载 URL，也可以直接选择电脑里的 zip 文件上传安装。</span></div></div>',
         '<div class="manage-item"><div><strong>来源说明</strong><span class="hint">SMAPI 兼容模组通常来自 Nexus Mods 或官方/社区发布页，不是 Steam Workshop。</span></div></div>',
         '<div class="manage-item"><div><strong>搜索入口</strong><span class="hint"><a href="' + escapeHtml(sourceLinks.smapi) + '" target="_blank" rel="noreferrer">SMAPI 兼容列表</a> · <a href="' + escapeHtml(sourceLinks.nexus) + '" target="_blank" rel="noreferrer">Nexus 搜索</a> · <a href="' + escapeHtml(sourceLinks.guide) + '" target="_blank" rel="noreferrer">入门文档</a></span></div></div>',
       ].join("");
@@ -1796,6 +1801,9 @@ const PAGE = String.raw`<!doctype html>
     });
     installModUrlBtn.addEventListener("click", () => {
       openInstallModDialog({ displayName: modSearchInput.value.trim() });
+    });
+    installModLocalBtn.addEventListener("click", () => {
+      openInstallModDialog({ displayName: modSearchInput.value.trim(), mode: "local" });
     });
     modSearchInput.addEventListener("input", () => {
       if (latestModManagement) renderModManagement(latestModManagement);

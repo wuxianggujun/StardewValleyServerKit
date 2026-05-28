@@ -36,6 +36,7 @@ async function main() {
   assert.match(PAGE, /使用缓存/);
   assert.match(PAGE, /未再次请求 Nexus API/);
   assert.match(PAGE, /\.field-8 \{ grid-column: span 8; \}/);
+  assert.match(PAGE, /从本地安装/);
   assert.match(PAGE, /name="localZip" type="file"/);
   assert.match(PAGE, /\/api\/mods\/upload/);
   assertThrowsMessage(
