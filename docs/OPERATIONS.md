@@ -226,6 +226,24 @@ Web 管理面板的“存档管理”还能执行：
 
 恢复备份不是单个存档导入，而是整份 saves volume 回滚。执行前确认在线玩家已经下线，且当前状态已经过夜保存或可以丢弃。
 
+## Mod 管理
+
+Web 管理面板的“模组”页会扫描宿主机 `data/mods`，也就是容器内的
+`/data/game/Mods`。页面会读取每个 Mod 目录下的 `manifest.json`，显示名称、
+版本、作者、UniqueID、MinimumApiVersion、EntryDll 和 UpdateKeys。
+
+安装建议：
+
+- 新增或升级 Mod 前，先在“模组”页点击“安装前备份”，或执行 `.\setup.ps1 backup`。
+- 优先在 SMAPI 兼容列表确认 Mod 是否支持当前游戏和 SMAPI 版本。
+- 下载后把 SMAPI Mod 解压到 `data/mods`，确保 `manifest.json` 位于单个 Mod 目录内。
+- 修改 Mod 后重启服务端；运行中的 SMAPI 不会稳定热加载已替换的 Mod 文件。
+- 一次只新增或升级一个 Mod，完成过夜保存、重启和再次加载验证后再继续。
+
+Stardew Valley 的主流 SMAPI Mod 不通过 SteamCMD 下载。SteamCMD 在本项目中只用于
+下载或更新游戏本体；模组页提供 SMAPI 兼容列表和 Nexus Mods 搜索入口，后续如果要做
+自动下载，需要单独接入具体来源的授权、下载和压缩包安全校验。
+
 ## 玩家管理
 
 Web 管理面板会通过 JunimoServer HTTP API 读取在线玩家和农场角色：

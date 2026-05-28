@@ -300,6 +300,11 @@ data/mods/
 .\setup.ps1 restart
 ```
 
+Web 管理面板的“模组”页会读取 `manifest.json`，显示已安装 Mod 的名称、版本、
+作者、UniqueID 和 UpdateKeys，并提供 SMAPI 兼容列表与 Nexus Mods 搜索入口。
+当前页面不会把 Steam Workshop 伪装成安装源；Stardew Valley 的主流 SMAPI Mod
+通常通过 Nexus Mods、作者页面或社区发布页分发。
+
 建议一次只新增一个 Mod，并按照 [测试计划](docs/TEST_PLAN.md) 进行过夜、节日、地震和重启验证。
 
 新增或升级 Mod 前，先执行：
