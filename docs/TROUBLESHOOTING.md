@@ -497,6 +497,54 @@ docker port sdv-server
 3. 确认 Mod 支持当前 Stardew Valley 和 SMAPI 版本。
 4. 重启服务器。
 
+## 管理面板显示 Mod 无配置
+
+现象：
+
+- “模组”页能看到 Mod，但配置按钮显示“无配置”。
+- 你已经安装了 Generic Mod Config Menu，但网页里仍然没有可编辑配置。
+
+说明：
+
+管理面板只编辑 Mod 目录下已经存在的 `config.json`。`manifest.json` 只能说明目录是一个
+SMAPI Mod，不代表它已经生成配置文件。很多 Mod 需要 SMAPI 成功加载并运行一次后才会生成
+`config.json`，也有些 Mod 根本没有可编辑配置。
+
+先确认服务器上有没有配置文件：
+
+```bash
+cd /opt/stardew/StardewValleyServerKit || exit 1
+
+echo "===== host mods ====="
+find data/mods -maxdepth 6 -type f \( -iname manifest.json -o -iname config.json \) 2>/dev/null \
+  | sed 's#^data/mods/##' \
+  | sort
+
+echo
+echo "HOST_MANIFEST_COUNT=$(find data/mods -type f -iname manifest.json 2>/dev/null | wc -l)"
+echo "HOST_CONFIG_COUNT=$(find data/mods -type f -iname config.json 2>/dev/null | wc -l)"
+```
+
+如果 `HOST_CONFIG_COUNT=0`，网页显示“无配置”是正常结果。此时应重启游戏服务端，
+让 SMAPI 和 Mod 有机会生成配置：
+
+```bash
+docker compose --env-file .env restart server
+sleep 30
+find data/mods -maxdepth 6 -type f -iname config.json | sort
+```
+
+如果仍然没有 `config.json`，继续看 SMAPI 是否真的加载了这些 Mod：
+
+```bash
+docker exec sdv-server sh -lc '
+grep -E "Loaded [0-9]+ mods|Skipped mods|ERROR SMAPI|from Mods/" /tmp/server-output.log 2>/dev/null | tail -n 180
+'
+```
+
+注意：`sudo systemctl restart sdv-admin.service` 只重启 Web 管理面板，不会让 SMAPI
+重新加载 Mod，也不会生成 Mod 配置。
+
 ## 更新后无法启动
 
 处理：
