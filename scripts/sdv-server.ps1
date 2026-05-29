@@ -571,7 +571,9 @@ function Invoke-AdminPanel {
 
     if ($Public) {
         Set-EnvValue "ADMIN_HOST" "0.0.0.0"
+        Set-EnvValue "ADMIN_ALLOW_PUBLIC_HTTP" "true"
         Write-Warn "ADMIN_HOST has been set to 0.0.0.0 for server access."
+        Write-Warn "ADMIN_ALLOW_PUBLIC_HTTP=true was enabled for direct private-network access."
     }
 
     $adminHost = Get-EnvOrDefault "ADMIN_HOST" "127.0.0.1"
@@ -583,12 +585,13 @@ function Invoke-AdminPanel {
         Write-Host "Open (public): http://<server-public-ip>:$adminPort"
         Write-Warn "Allow TCP $adminPort in both 1Panel firewall and cloud security group."
         Write-Warn "Restrict TCP $adminPort to your own public IP whenever possible."
+        Write-Warn "Prefer HTTPS reverse proxy with ADMIN_HOST=127.0.0.1 for public access."
     }
     else {
         Write-Host "Open: http://${adminHost}:$adminPort"
     }
     Write-Warn "Keep this terminal open while using the admin panel."
-    Write-Warn "ADMIN_TOKEN is printed only in this local terminal and is also stored in .env."
+    Write-Warn "ADMIN_TOKEN is stored in .env and is not printed to logs."
     & node $adminScript
 }
 
@@ -599,7 +602,7 @@ function Invoke-AdminTokenRotate {
     Set-EnvValue "ADMIN_TOKEN" $token
 
     Write-Step "Rotated admin token"
-    Write-Host "ADMIN_TOKEN: $token"
+    Write-Ok "ADMIN_TOKEN has been updated in .env and is not printed to logs."
     Write-Warn "Existing browser sessions must log in again."
 }
 

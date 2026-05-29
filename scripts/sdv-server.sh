@@ -189,7 +189,8 @@ show_access_info() {
   warn "Players on another LAN device should use the real Ethernet/Wi-Fi IPv4 address."
 
   if [[ "$admin_host" == "0.0.0.0" ]]; then
-    warn "ADMIN_HOST=0.0.0.0 listens on all interfaces. Restrict TCP access with firewall rules."
+    warn "ADMIN_HOST=0.0.0.0 listens on all interfaces and requires ADMIN_ALLOW_PUBLIC_HTTP=true."
+    warn "Prefer ADMIN_HOST=127.0.0.1 behind a HTTPS reverse proxy."
   fi
   warn "VNC passwords, API keys, and admin tokens are stored in .env and are not printed here."
 }
@@ -318,7 +319,9 @@ admin_panel() {
   local admin_host admin_port
   if [[ "$public_mode" == "1" ]]; then
     set_env_value ADMIN_HOST "0.0.0.0"
+    set_env_value ADMIN_ALLOW_PUBLIC_HTTP "true"
     warn "ADMIN_HOST has been set to 0.0.0.0 for server access."
+    warn "ADMIN_ALLOW_PUBLIC_HTTP=true was enabled for direct private-network access."
   fi
 
   admin_host="$(env_or_default ADMIN_HOST 127.0.0.1)"
@@ -330,11 +333,12 @@ admin_panel() {
     printf 'Open (public): http://<server-public-ip>:%s\n' "$admin_port"
     warn "Allow TCP $admin_port in both 1Panel firewall and cloud security group."
     warn "Restrict TCP $admin_port to your own public IP whenever possible."
+    warn "Prefer HTTPS reverse proxy with ADMIN_HOST=127.0.0.1 for public access."
   else
     printf 'Open: http://%s:%s\n' "$admin_host" "$admin_port"
   fi
   warn "Keep this terminal open while using the admin panel."
-  warn "ADMIN_TOKEN is printed only in this local terminal and is also stored in .env."
+  warn "ADMIN_TOKEN is stored in .env and is not printed to logs."
   node "$ROOT_DIR/scripts/admin-panel.js"
 }
 
@@ -346,7 +350,7 @@ admin_token_rotate() {
   set_env_value ADMIN_TOKEN "$token"
 
   step "Rotated admin token"
-  printf 'ADMIN_TOKEN: %s\n' "$token"
+  ok "ADMIN_TOKEN has been updated in .env and is not printed to logs."
   warn "Existing browser sessions must log in again."
 
   if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$SYSTEMD_SERVICE_NAME" >/dev/null 2>&1; then

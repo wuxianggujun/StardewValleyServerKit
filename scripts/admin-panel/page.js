@@ -1,5 +1,15 @@
 "use strict";
 
+const { I18N } = require("./i18n");
+
+const I18N_JSON = JSON.stringify(I18N).replace(/[<>&\u2028\u2029]/g, (ch) => ({
+  "<": "\\u003c",
+  ">": "\\u003e",
+  "&": "\\u0026",
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+}[ch]));
+
 const PAGE = String.raw`<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -66,6 +76,19 @@ const PAGE = String.raw`<!doctype html>
       align-items: center;
       flex-wrap: wrap;
       gap: 8px;
+    }
+    .language-select {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .language-select select {
+      width: auto;
+      min-width: 116px;
+      min-height: 34px;
+      padding: 6px 8px;
     }
     button, input, select, textarea {
       font: inherit;
@@ -192,6 +215,12 @@ const PAGE = String.raw`<!doctype html>
     textarea {
       min-height: 86px;
       resize: vertical;
+    }
+    #modConfigText {
+      min-height: min(52vh, 520px);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.45;
     }
     .field-3 { grid-column: span 3; }
     .field-4 { grid-column: span 4; }
@@ -470,6 +499,36 @@ const PAGE = String.raw`<!doctype html>
       .manage-item { grid-template-columns: 1fr; }
       .manage-actions { justify-content: flex-start; }
       .topbar { align-items: flex-start; flex-direction: column; }
+      .topbar > .toolbar,
+      #adminToolbar {
+        width: 100%;
+      }
+      .section-title {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .section-title > .toolbar {
+        width: 100%;
+      }
+    }
+    @media (max-width: 520px) {
+      main { padding: 12px; }
+      .topbar { padding: 12px; }
+      .panel { padding: 12px; }
+      .toolbar button {
+        max-width: 100%;
+      }
+      .tab-btn {
+        flex: 1 1 auto;
+        padding: 9px 10px;
+      }
+      .modal {
+        padding: 10px;
+      }
+      .modal-panel {
+        max-height: calc(100vh - 20px);
+        padding: 14px;
+      }
     }
   </style>
 </head>
@@ -478,15 +537,23 @@ const PAGE = String.raw`<!doctype html>
     <div class="topbar">
       <div class="brand">
         <h1>Stardew Valley Server Kit Admin</h1>
-        <p>管理面板，配置保存后通常需要重启服务端。</p>
+        <p data-i18n="app.subtitle"></p>
       </div>
-      <div id="adminToolbar" class="toolbar hidden">
-        <button id="refreshBtn" type="button">刷新</button>
-        <button id="startBtn" class="primary" type="button">启动服务端</button>
-        <button id="stopBtn" class="danger" type="button">停服释放资源</button>
-        <button id="cancelAutoStopBtn" type="button" disabled>取消自动停服</button>
-        <button id="restartBtn" class="danger" type="button">重启服务端</button>
-        <span id="serverActionMessage" class="message"></span>
+      <div class="toolbar">
+        <label class="language-select">
+          <span data-i18n="language.label"></span>
+          <select id="languageSelect">
+            <option value="zh-CN" data-i18n="language.zhCN"></option>
+            <option value="en" data-i18n="language.en"></option>
+          </select>
+        </label>
+        <div id="adminToolbar" class="toolbar hidden">
+          <button id="startBtn" class="primary" type="button" data-i18n="action.startServer"></button>
+          <button id="stopBtn" class="danger" type="button" data-i18n="action.stopServer"></button>
+          <button id="cancelAutoStopBtn" type="button" disabled data-i18n="action.cancelAutoStop"></button>
+          <button id="restartBtn" class="danger" type="button" data-i18n="action.restartServer"></button>
+          <span id="serverActionMessage" class="message"></span>
+        </div>
       </div>
     </div>
   </header>
@@ -494,33 +561,33 @@ const PAGE = String.raw`<!doctype html>
   <main>
     <section id="authPanel" class="panel auth hidden">
       <div class="section-title">
-        <h2>管理令牌</h2>
+        <h2 data-i18n="auth.title"></h2>
       </div>
-      <p class="muted">请输入 .env 里的 ADMIN_TOKEN。令牌只用于本地管理 API，不会展示敏感配置。</p>
+      <p class="muted" data-i18n="auth.description"></p>
       <form id="authForm">
         <label>
           <strong>ADMIN_TOKEN</strong>
           <input id="tokenInput" type="password" autocomplete="current-password" />
         </label>
-        <button class="primary" type="submit">进入面板</button>
+        <button class="primary" type="submit" data-i18n="auth.enter"></button>
         <div id="authMessage" class="message"></div>
       </form>
     </section>
 
     <section id="appPanel" class="hidden">
       <div class="tabs" role="tablist">
-        <button class="tab-btn active" type="button" data-tab="overview" role="tab">概览</button>
-        <button class="tab-btn" type="button" data-tab="players" role="tab">玩家</button>
-        <button class="tab-btn" type="button" data-tab="saves" role="tab">存档</button>
-        <button class="tab-btn" type="button" data-tab="mods" role="tab">模组</button>
-        <button class="tab-btn" type="button" data-tab="config" role="tab">配置</button>
-        <button class="tab-btn" type="button" data-tab="logs" role="tab">日志</button>
+        <button class="tab-btn active" type="button" data-tab="overview" role="tab" data-i18n="tab.overview"></button>
+        <button class="tab-btn" type="button" data-tab="players" role="tab" data-i18n="tab.players"></button>
+        <button class="tab-btn" type="button" data-tab="saves" role="tab" data-i18n="tab.saves"></button>
+        <button class="tab-btn" type="button" data-tab="mods" role="tab" data-i18n="tab.mods"></button>
+        <button class="tab-btn" type="button" data-tab="config" role="tab" data-i18n="tab.config"></button>
+        <button class="tab-btn" type="button" data-tab="logs" role="tab" data-i18n="tab.logs"></button>
       </div>
 
       <div class="tab-pane" data-pane="overview">
         <div class="panel span-6">
           <div class="section-title">
-            <h2>运行状态</h2>
+            <h2 data-i18n="overview.status"></h2>
             <span id="generatedAt" class="hint"></span>
           </div>
           <div id="healthList" class="status-list"></div>
@@ -528,28 +595,28 @@ const PAGE = String.raw`<!doctype html>
 
         <div class="panel span-6">
           <div class="section-title">
-            <h2>加入信息</h2>
+            <h2 data-i18n="overview.joinInfo"></h2>
           </div>
           <div id="joinInfo" class="kv-list"></div>
         </div>
 
         <div class="panel span-4">
           <div class="section-title">
-            <h2>玩家摘要</h2>
+            <h2 data-i18n="overview.playerSummary"></h2>
           </div>
           <div id="players" class="players"></div>
         </div>
 
         <div class="panel span-4">
           <div class="section-title">
-            <h2>端口映射</h2>
+            <h2 data-i18n="overview.portMappings"></h2>
           </div>
           <div id="ports" class="kv-list"></div>
         </div>
 
         <div class="panel span-4">
           <div class="section-title">
-            <h2>资源占用</h2>
+            <h2 data-i18n="overview.resources"></h2>
           </div>
           <div id="stats" class="kv-list"></div>
         </div>
@@ -558,22 +625,20 @@ const PAGE = String.raw`<!doctype html>
       <div class="tab-pane hidden" data-pane="players">
         <div id="playerManagerPanel" class="panel span-12 management-panel">
           <div class="section-title">
-            <h2>玩家管理</h2>
+            <h2 data-i18n="players.title"></h2>
             <div class="toolbar">
-              <button id="refreshPlayersBtn" type="button">刷新玩家</button>
+              <button id="refreshPlayersBtn" type="button" data-i18n="players.refresh"></button>
             </div>
           </div>
-          <div class="notice">
-            玩家名称来自服务端 HTTP API；当前镜像没有开放面板直接踢出/封禁的接口，相关按钮会明确标记为不可用。
-          </div>
+          <div class="notice" data-i18n="players.notice"></div>
           <div id="playersMessage" class="message"></div>
           <div class="manage-grid">
             <div class="manage-column">
-              <h3>在线玩家</h3>
+              <h3 data-i18n="players.online"></h3>
               <div id="onlinePlayersList" class="manage-list scroll-list"></div>
             </div>
             <div class="manage-column">
-              <h3>农场角色</h3>
+              <h3 data-i18n="players.farmhands"></h3>
               <div id="farmhandsList" class="manage-list scroll-list"></div>
             </div>
           </div>
@@ -583,35 +648,33 @@ const PAGE = String.raw`<!doctype html>
       <div class="tab-pane hidden" data-pane="saves">
         <div id="saveManagerPanel" class="panel span-12 management-panel">
           <div class="section-title">
-            <h2>存档管理</h2>
+            <h2 data-i18n="saves.title"></h2>
             <div class="toolbar">
-              <button id="refreshSavesBtn" type="button">刷新存档</button>
-              <button id="createBackupBtn" type="button">创建备份</button>
-              <button id="createNewGameBtn" class="primary" type="button">创建地图</button>
+              <button id="refreshSavesBtn" type="button" data-i18n="saves.refresh"></button>
+              <button id="createBackupBtn" type="button" data-i18n="saves.createBackup"></button>
+              <button id="createNewGameBtn" class="primary" type="button" data-i18n="saves.createMap"></button>
             </div>
           </div>
-          <div class="notice">
-            选择存档只设置下次重启要加载的存档。创建地图会打开独立表单，保存新农场配置后调用服务端官方 newgame 命令，自动把新存档设为下次加载并重启。删除存档会先自动备份整个 saves 卷，再只移除选中的存档目录。恢复备份会停止服务端，用备份覆盖整个 saves 卷，并在恢复前自动备份当前状态。
-          </div>
+          <div class="notice" data-i18n="saves.notice"></div>
           <div class="backup-policy">
-            <label class="field-3 checkline"><input id="autoBackupEnabled" type="checkbox" />自动备份</label>
-            <label class="field-3"><strong>间隔分钟</strong><input id="autoBackupInterval" type="number" min="15" max="10080" /></label>
-            <label class="field-3"><strong>最多保留</strong><input id="backupRetention" type="number" min="1" max="100" /></label>
+            <label class="field-3 checkline"><input id="autoBackupEnabled" type="checkbox" /><span data-i18n="saves.autoBackup"></span></label>
+            <label class="field-3"><strong data-i18n="saves.intervalMinutes"></strong><input id="autoBackupInterval" type="number" min="15" max="10080" /></label>
+            <label class="field-3"><strong data-i18n="saves.maxRetain"></strong><input id="backupRetention" type="number" min="1" max="100" /></label>
             <div class="field-3 toolbar">
-              <button id="saveBackupPolicyBtn" type="button">保存备份策略</button>
+              <button id="saveBackupPolicyBtn" type="button" data-i18n="saves.savePolicy"></button>
             </div>
             <div id="backupPolicyStatus" class="field-12 hint"></div>
           </div>
           <div id="savesMessage" class="message"></div>
           <div class="manage-grid">
             <div class="manage-column">
-              <h3>可加载存档</h3>
+              <h3 data-i18n="saves.available"></h3>
               <div id="savesList" class="manage-list scroll-list"></div>
             </div>
             <div class="manage-column">
               <div class="section-title">
-                <h3>备份文件</h3>
-                <button id="deleteSelectedBackupsBtn" class="danger" type="button">删除选中</button>
+                <h3 data-i18n="saves.backupFiles"></h3>
+                <button id="deleteSelectedBackupsBtn" class="danger" type="button" data-i18n="saves.deleteSelected"></button>
               </div>
               <div id="backupsList" class="manage-list scroll-list"></div>
             </div>
@@ -622,38 +685,36 @@ const PAGE = String.raw`<!doctype html>
       <div class="tab-pane hidden" data-pane="mods">
         <div id="modManagerPanel" class="panel span-12 management-panel">
           <div class="section-title">
-            <h2>模组管理</h2>
+            <h2 data-i18n="mods.title"></h2>
             <div class="toolbar">
-              <button id="refreshModsBtn" type="button">刷新模组</button>
-              <button id="backupBeforeModsBtn" type="button">安装前备份</button>
+              <button id="refreshModsBtn" type="button" data-i18n="mods.refresh"></button>
+              <button id="backupBeforeModsBtn" type="button" data-i18n="mods.backupBefore"></button>
             </div>
           </div>
-          <div class="notice">
-            当前项目加载的是 SMAPI Mod：宿主机 data/mods 会挂载到容器 /data/game/Mods。Stardew Valley 的主流模组来源是 Nexus Mods 与 SMAPI 兼容列表，不是 SteamCMD Workshop 订阅；新增、升级或删除模组后请重启服务端。
-          </div>
+          <div class="notice" data-i18n="mods.notice"></div>
           <div class="backup-policy">
-            <label class="field-6"><strong>按名称、UniqueID 或 Nexus ID 搜索</strong><input id="modSearchInput" placeholder="例如 Content Patcher、Pathoschild.ContentPatcher、Nexus:1915" /></label>
+            <label class="field-6"><strong data-i18n="mods.searchLabel"></strong><input id="modSearchInput" data-i18n-placeholder="mods.searchPlaceholder" /></label>
             <div class="field-6 toolbar">
-              <button id="searchModsBtn" class="primary" type="button">搜索</button>
-              <button id="installModUrlBtn" type="button">从 URL 安装</button>
-              <button id="installModLocalBtn" type="button">从本地安装</button>
+              <button id="searchModsBtn" class="primary" type="button" data-i18n="mods.search"></button>
+              <button id="installModUrlBtn" type="button" data-i18n="mods.installUrl"></button>
+              <button id="installModLocalBtn" type="button" data-i18n="mods.installLocal"></button>
             </div>
           </div>
           <div id="modsMessage" class="message"></div>
           <div id="modSearchPanel" class="manage-column hidden">
             <div class="section-title">
-              <h3>搜索结果</h3>
+              <h3 data-i18n="mods.searchResults"></h3>
               <span id="modSearchSummary" class="hint"></span>
             </div>
             <div id="modSearchResults" class="manage-list scroll-list"></div>
           </div>
           <div class="manage-grid">
             <div class="manage-column">
-              <h3>已安装 Mod</h3>
+              <h3 data-i18n="mods.installed"></h3>
               <div id="installedModsList" class="manage-list scroll-list"></div>
             </div>
             <div class="manage-column">
-              <h3>安装说明</h3>
+              <h3 data-i18n="mods.guide"></h3>
               <div id="modGuidanceList" class="manage-list"></div>
             </div>
           </div>
@@ -663,75 +724,74 @@ const PAGE = String.raw`<!doctype html>
       <div class="tab-pane hidden" data-pane="config">
         <div class="panel span-12">
           <div class="section-title">
-            <h2>开服配置</h2>
-            <span class="hint">这里只保存服务端运行配置；地图创建在存档管理里单独完成。</span>
+            <h2 data-i18n="config.title"></h2>
+            <span class="hint" data-i18n="config.hint"></span>
           </div>
           <div id="runtimeFarmNotice" class="notice hidden"></div>
           <form id="configForm">
             <fieldset>
-              <legend>联机</legend>
-              <label class="field-4"><strong>房间总人数</strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
-              <label class="field-4"><strong>大厅模式</strong>
+              <legend data-i18n="config.connection"></legend>
+              <label class="field-4"><strong data-i18n="config.maxPlayers"></strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
+              <label class="field-4"><strong data-i18n="config.lobbyMode"></strong>
                 <select name="lobbyMode">
                   <option value="Shared">Shared</option>
                   <option value="Individual">Individual</option>
                 </select>
               </label>
-              <label class="field-4 checkline"><input name="allowIpConnections" type="checkbox" />允许 IP 直连</label>
-              <label class="field-4 checkline"><input name="separateWallets" type="checkbox" />玩家钱包分开</label>
-              <label class="field-4 checkline"><input name="verboseLogging" type="checkbox" />详细日志</label>
+              <label class="field-4 checkline"><input name="allowIpConnections" type="checkbox" /><span data-i18n="config.allowIp"></span></label>
+              <label class="field-4 checkline"><input name="separateWallets" type="checkbox" /><span data-i18n="config.separateWallets"></span></label>
+              <label class="field-4 checkline"><input name="verboseLogging" type="checkbox" /><span data-i18n="config.verboseLogging"></span></label>
             </fieldset>
 
             <fieldset>
-              <legend>端口</legend>
-              <label class="field-3"><strong>游戏 UDP 端口</strong><input name="gamePort" type="number" min="1" max="65535" /></label>
-              <label class="field-3"><strong>查询 UDP 端口</strong><input name="queryPort" type="number" min="1" max="65535" /></label>
-              <label class="field-3"><strong>VNC 端口</strong><input name="vncPort" type="number" min="1" max="65535" /></label>
-              <label class="field-3"><strong>HTTP API 端口</strong><input name="apiPort" type="number" min="1" max="65535" /></label>
+              <legend data-i18n="config.ports"></legend>
+              <label class="field-3"><strong data-i18n="config.gameUdpPort"></strong><input name="gamePort" type="number" min="1" max="65535" /></label>
+              <label class="field-3"><strong data-i18n="config.queryUdpPort"></strong><input name="queryPort" type="number" min="1" max="65535" /></label>
+              <label class="field-3"><strong data-i18n="config.vncPort"></strong><input name="vncPort" type="number" min="1" max="65535" /></label>
+              <label class="field-3"><strong data-i18n="config.httpApiPort"></strong><input name="apiPort" type="number" min="1" max="65535" /></label>
             </fieldset>
 
             <fieldset>
-              <legend>用户与访问</legend>
-              <label class="field-4"><strong>小屋策略</strong>
+              <legend data-i18n="config.usersAccess"></legend>
+              <label class="field-4"><strong data-i18n="config.cabinStrategy"></strong>
                 <select name="cabinStrategy">
                   <option value="CabinStack">CabinStack</option>
                   <option value="None">None</option>
                 </select>
               </label>
-              <label class="field-4"><strong>已有小屋处理</strong>
+              <label class="field-4"><strong data-i18n="config.existingCabinBehavior"></strong>
                 <select name="existingCabinBehavior">
                   <option value="KeepExisting">KeepExisting</option>
                 </select>
               </label>
-              <label class="field-4"><strong>进服密码操作</strong>
+              <label class="field-4"><strong data-i18n="config.passwordAction"></strong>
                 <select name="serverPasswordAction">
-                  <option value="keep">保持不变</option>
-                  <option value="set">设置新密码</option>
-                  <option value="clear">清空密码</option>
+                  <option value="keep" data-i18n="config.keep"></option>
+                  <option value="set" data-i18n="config.setPassword"></option>
+                  <option value="clear" data-i18n="config.clearPassword"></option>
                 </select>
               </label>
-              <label class="field-4"><strong>新进服密码</strong><input name="serverPassword" type="password" autocomplete="new-password" /></label>
-              <label class="field-12"><strong>管理员 Steam64 ID</strong><textarea name="adminSteamIds" placeholder="每行一个 Steam64 ID"></textarea></label>
+              <label class="field-4"><strong data-i18n="config.newPassword"></strong><input name="serverPassword" type="password" autocomplete="new-password" /></label>
+              <label class="field-12"><strong data-i18n="config.adminSteamIds"></strong><textarea name="adminSteamIds" data-i18n-placeholder="config.adminSteamIdsPlaceholder"></textarea></label>
             </fieldset>
 
             <fieldset>
               <legend>Nexus Mods</legend>
-              <label class="field-4"><strong>API Key 操作</strong>
+              <label class="field-4"><strong data-i18n="config.apiKeyAction"></strong>
                 <select name="nexusApiKeyAction">
-                  <option value="keep">保持不变</option>
-                  <option value="set">设置新 Key</option>
-                  <option value="clear">清空 Key</option>
+                  <option value="keep" data-i18n="config.keep"></option>
+                  <option value="set" data-i18n="config.setKey"></option>
+                  <option value="clear" data-i18n="config.clearKey"></option>
                 </select>
               </label>
-              <label class="field-8"><strong>新 Nexus API Key</strong><input name="nexusApiKey" type="password" autocomplete="new-password" /></label>
+              <label class="field-8"><strong data-i18n="config.newNexusApiKey"></strong><input name="nexusApiKey" type="password" autocomplete="new-password" /></label>
               <div id="nexusApiKeyStatus" class="field-12 hint"></div>
             </fieldset>
 
-            <div class="notice">
-              保存只写运行配置。端口、人数、IP 直连、密码、管理员和 Nexus API Key 等设置会写入 .env；需要服务端读取的配置重启后生效。农场名称和地图类型请在“存档管理”里点击“创建地图”单独设置。
-            </div>
+            <div class="notice" data-i18n="config.notice"></div>
             <div class="toolbar">
-              <button class="primary" type="submit">保存配置</button>
+              <button class="primary" type="submit" data-i18n="action.saveConfig"></button>
+              <button id="saveConfigRestartBtn" class="danger" type="submit" data-restart-after-save="true" data-i18n="action.saveAndRestart"></button>
               <span id="saveMessage" class="message"></span>
             </div>
           </form>
@@ -741,10 +801,10 @@ const PAGE = String.raw`<!doctype html>
       <div class="tab-pane hidden" data-pane="logs">
         <div class="panel span-12">
           <div class="section-title">
-            <h2>最近日志</h2>
+            <h2 data-i18n="logs.title"></h2>
             <div class="toolbar">
-              <button id="loadLogsBtn" type="button">刷新更多日志</button>
-              <button id="copyLogsBtn" type="button">复制日志</button>
+              <button id="loadLogsBtn" type="button" data-i18n="logs.refreshMore"></button>
+              <button id="copyLogsBtn" type="button" data-i18n="logs.copy"></button>
             </div>
           </div>
           <pre id="logs"></pre>
@@ -755,12 +815,12 @@ const PAGE = String.raw`<!doctype html>
 
   <div id="createMapDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="createMapTitle">
     <form id="createMapForm" class="modal-panel">
-      <h2 id="createMapTitle">创建地图</h2>
-      <p class="modal-message">填写新农场信息后，面板会保存这些新地图配置，再调用服务端官方 newgame 命令，自动选择新存档并重启。旧存档不会删除。</p>
+      <h2 id="createMapTitle" data-i18n="createMap.title"></h2>
+      <p class="modal-message" data-i18n="createMap.description"></p>
       <fieldset>
-        <label class="field-6"><strong>农场名称</strong><input name="farmName" maxlength="48" /></label>
-        <label class="field-6"><strong>地图类型</strong><select name="farmType"></select></label>
-        <label class="field-4"><strong>利润比例</strong>
+        <label class="field-6"><strong data-i18n="createMap.farmName"></strong><input name="farmName" maxlength="48" /></label>
+        <label class="field-6"><strong data-i18n="createMap.farmType"></strong><select name="farmType"></select></label>
+        <label class="field-4"><strong data-i18n="createMap.profitMargin"></strong>
           <select name="profitMargin">
             <option value="1">100%</option>
             <option value="0.75">75%</option>
@@ -768,70 +828,71 @@ const PAGE = String.raw`<!doctype html>
             <option value="0.25">25%</option>
           </select>
         </label>
-        <label class="field-4"><strong>房间总人数</strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
-        <label class="field-4"><strong>初始小屋/角色槽</strong><input name="startingCabins" type="number" min="0" max="9" /></label>
-        <label class="field-4"><strong>夜间怪物</strong>
+        <label class="field-4"><strong data-i18n="config.maxPlayers"></strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
+        <label class="field-4"><strong data-i18n="createMap.startingCabins"></strong><input name="startingCabins" type="number" min="0" max="9" /></label>
+        <label class="field-4"><strong data-i18n="createMap.monstersAtNight"></strong>
           <select name="spawnMonstersAtNight">
-            <option value="auto">自动</option>
-            <option value="true">开启</option>
-            <option value="false">关闭</option>
+            <option value="auto" data-i18n="createMap.auto"></option>
+            <option value="true" data-i18n="createMap.enable"></option>
+            <option value="false" data-i18n="createMap.disable"></option>
           </select>
         </label>
-        <label class="field-4 checkline"><input name="separateWallets" type="checkbox" />玩家钱包分开</label>
+        <label class="field-4 checkline"><input name="separateWallets" type="checkbox" /><span data-i18n="config.separateWallets"></span></label>
       </fieldset>
       <div id="createMapMessage" class="message"></div>
       <div class="toolbar modal-actions">
-        <button id="cancelCreateMapBtn" type="button">取消</button>
-        <button class="primary" type="submit">创建地图并开服</button>
+        <button id="cancelCreateMapBtn" type="button" data-i18n="action.cancel"></button>
+        <button class="primary" type="submit" data-i18n="createMap.submit"></button>
       </div>
     </form>
   </div>
 
   <div id="editConfigDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editConfigTitle">
     <form id="editConfigForm" class="modal-panel">
-      <h2 id="editConfigTitle">存档配置</h2>
-      <p class="modal-message">编辑基础字段、最大玩家数和目标小屋数。保存存档字段会自动备份；修复小屋会按目标小屋/角色槽执行。</p>
+      <h2 id="editConfigTitle" data-i18n="saveConfig.title"></h2>
+      <p class="modal-message" data-i18n="saveConfig.description"></p>
       <fieldset>
-        <label class="field-6"><strong>农场名称</strong><input name="farmName" maxlength="48" /></label>
-        <label class="field-6"><strong>地图类型</strong><input name="whichFarm" disabled /></label>
-        <label class="field-4"><strong>金钱</strong><input name="money" type="number" min="0" max="999999999" /></label>
-        <label class="field-4"><strong>年份</strong><input name="year" type="number" min="1" max="9999" /></label>
-        <label class="field-4"><strong>季节</strong>
+        <label class="field-6"><strong data-i18n="createMap.farmName"></strong><input name="farmName" maxlength="48" /></label>
+        <label class="field-6"><strong data-i18n="createMap.farmType"></strong><input name="whichFarm" disabled /></label>
+        <label class="field-4"><strong data-i18n="saveConfig.money"></strong><input name="money" type="number" min="0" max="999999999" /></label>
+        <label class="field-4"><strong data-i18n="saveConfig.year"></strong><input name="year" type="number" min="1" max="9999" /></label>
+        <label class="field-4"><strong data-i18n="saveConfig.season"></strong>
           <select name="currentSeason">
-            <option value="spring">春</option>
-            <option value="summer">夏</option>
-            <option value="fall">秋</option>
-            <option value="winter">冬</option>
+            <option value="spring" data-i18n="saveConfig.spring"></option>
+            <option value="summer" data-i18n="saveConfig.summer"></option>
+            <option value="fall" data-i18n="saveConfig.fall"></option>
+            <option value="winter" data-i18n="saveConfig.winter"></option>
           </select>
         </label>
-        <label class="field-4"><strong>日期</strong><input name="dayOfMonth" type="number" min="1" max="28" /></label>
-        <label class="field-4"><strong>当前时间</strong><input name="timeOfDay" disabled /></label>
-        <label class="field-4"><strong>累计收入</strong><input name="totalMoneyEarned" disabled /></label>
-        <label class="field-4"><strong>最大玩家数</strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
-        <label class="field-4"><strong>目标小屋/角色槽</strong><input name="targetCabins" type="number" min="1" max="9" /></label>
-        <label class="field-4"><strong>当前小屋状态</strong><input name="cabinStatus" disabled /></label>
+        <label class="field-4"><strong data-i18n="saveConfig.day"></strong><input name="dayOfMonth" type="number" min="1" max="28" /></label>
+        <label class="field-4"><strong data-i18n="saveConfig.currentTime"></strong><input name="timeOfDay" disabled /></label>
+        <label class="field-4"><strong data-i18n="saveConfig.totalIncome"></strong><input name="totalMoneyEarned" disabled /></label>
+        <label class="field-4"><strong data-i18n="config.maxPlayers"></strong><input name="maxPlayers" type="number" min="1" max="10" /></label>
+        <label class="field-4"><strong data-i18n="saveConfig.targetCabins"></strong><input name="targetCabins" type="number" min="1" max="9" /></label>
+        <label class="field-4"><strong data-i18n="saveConfig.currentCabinStatus"></strong><input name="cabinStatus" disabled /></label>
       </fieldset>
       <input type="hidden" name="saveName" />
       <div id="editConfigMessage" class="message"></div>
       <div class="toolbar modal-actions">
-        <button id="repairCabinsFromConfigBtn" type="button">修复小屋</button>
-        <button id="cancelEditConfigBtn" type="button">取消</button>
-        <button class="primary" type="submit">保存配置</button>
+        <button id="repairCabinsFromConfigBtn" type="button" data-i18n="saveConfig.repairCabins"></button>
+        <button id="cancelEditConfigBtn" type="button" data-i18n="action.cancel"></button>
+        <button class="primary" type="submit" data-i18n="action.saveConfig"></button>
+        <button id="saveEditConfigRestartBtn" class="danger" type="submit" data-restart-after-save="true" data-i18n="action.saveAndRestart"></button>
       </div>
     </form>
   </div>
 
   <div id="installModDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="installModTitle">
     <form id="installModForm" class="modal-panel">
-      <h2 id="installModTitle">从 URL 安装模组</h2>
-      <p id="installModHelp" class="modal-message">粘贴 zip 下载 URL。面板会在后端下载、校验并安装到 data/mods。</p>
+      <h2 id="installModTitle" data-i18n="installUrl.title"></h2>
+      <p id="installModHelp" class="modal-message" data-i18n="installUrl.help"></p>
       <label>
-        <strong>下载 URL</strong>
+        <strong data-i18n="installUrl.downloadUrl"></strong>
         <input name="url" type="url" placeholder="https://..." autocomplete="off" />
       </label>
       <div id="nexusFilesPanel" class="hidden">
         <div class="section-title">
-          <h3>Nexus 文件</h3>
+          <h3 data-i18n="installUrl.nexusFiles"></h3>
           <span id="nexusFilesSummary" class="hint"></span>
         </div>
         <div id="nexusFilesList" class="manage-list scroll-list"></div>
@@ -841,30 +902,50 @@ const PAGE = String.raw`<!doctype html>
       <input type="hidden" name="nexusId" />
       <div id="installModMessage" class="message"></div>
       <div class="toolbar modal-actions">
-        <button id="openInstallSourceBtn" type="button">打开来源页</button>
-        <button id="cancelInstallModBtn" type="button">取消</button>
-        <button class="primary" type="submit">安装</button>
+        <button id="openInstallSourceBtn" type="button" data-i18n="installUrl.openSource"></button>
+        <button id="cancelInstallModBtn" type="button" data-i18n="action.cancel"></button>
+        <button class="primary" type="submit" data-i18n="action.install"></button>
       </div>
     </form>
   </div>
 
   <div id="installModLocalDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="installModLocalTitle">
     <form id="installModLocalForm" class="modal-panel">
-      <h2 id="installModLocalTitle">从本地安装模组</h2>
-      <p class="modal-message">选择电脑里的 zip 文件上传安装。面板会在后端校验并安装到 data/mods。</p>
+      <h2 id="installModLocalTitle" data-i18n="installLocal.title"></h2>
+      <p class="modal-message" data-i18n="installLocal.help"></p>
       <label>
-        <strong>本地 zip 文件</strong>
+        <strong data-i18n="installLocal.localZip"></strong>
         <input name="localZip" type="file" accept=".zip,application/zip,application/x-zip-compressed" />
       </label>
       <input type="hidden" name="displayName" />
       <div id="installModLocalMessage" class="message"></div>
       <div class="toolbar modal-actions">
-        <button id="cancelInstallModLocalBtn" type="button">取消</button>
-        <button class="primary" type="submit">上传安装</button>
+        <button id="cancelInstallModLocalBtn" type="button" data-i18n="action.cancel"></button>
+        <button class="primary" type="submit" data-i18n="installLocal.upload"></button>
       </div>
     </form>
   </div>
 
+  <div id="modConfigDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modConfigTitle">
+    <form id="modConfigForm" class="modal-panel">
+      <h2 id="modConfigTitle" data-i18n="modConfig.title"></h2>
+      <p class="modal-message" data-i18n="modConfig.description"></p>
+      <label>
+        <strong>config.json</strong>
+        <textarea id="modConfigText" name="text" spellcheck="false" autocomplete="off"></textarea>
+      </label>
+      <input type="hidden" name="directoryName" />
+      <div id="modConfigMessage" class="message"></div>
+      <div class="toolbar modal-actions">
+        <button id="formatModConfigBtn" type="button" data-i18n="modConfig.formatJson"></button>
+        <button id="cancelModConfigBtn" type="button" data-i18n="action.cancel"></button>
+        <button class="primary" type="submit" data-i18n="action.saveConfig"></button>
+        <button id="saveModConfigRestartBtn" class="danger" type="submit" data-restart-after-save="true" data-i18n="action.saveAndRestart"></button>
+      </div>
+    </form>
+  </div>
+
+  <script>window.SDV_I18N = ${I18N_JSON};</script>
   <script>
     const authPanel = document.querySelector("#authPanel");
     const appPanel = document.querySelector("#appPanel");
@@ -922,6 +1003,12 @@ const PAGE = String.raw`<!doctype html>
     const installModLocalDialog = document.querySelector("#installModLocalDialog");
     const installModLocalForm = document.querySelector("#installModLocalForm");
     const installModLocalMessage = document.querySelector("#installModLocalMessage");
+    const modConfigDialog = document.querySelector("#modConfigDialog");
+    const modConfigForm = document.querySelector("#modConfigForm");
+    const modConfigTitle = document.querySelector("#modConfigTitle");
+    const modConfigMessage = document.querySelector("#modConfigMessage");
+    const formatModConfigBtn = document.querySelector("#formatModConfigBtn");
+    const cancelModConfigBtn = document.querySelector("#cancelModConfigBtn");
     const nexusFilesPanel = document.querySelector("#nexusFilesPanel");
     const nexusFilesSummary = document.querySelector("#nexusFilesSummary");
     const nexusFilesList = document.querySelector("#nexusFilesList");
@@ -935,13 +1022,75 @@ const PAGE = String.raw`<!doctype html>
     const logsPanel = document.querySelector("#logs");
     const loadLogsBtn = document.querySelector("#loadLogsBtn");
     const copyLogsBtn = document.querySelector("#copyLogsBtn");
+    const languageSelect = document.querySelector("#languageSelect");
+    const i18n = window.SDV_I18N || {};
+    const defaultLanguage = "zh-CN";
+    const languageStorageKey = "sdv-admin-language";
     let hasConfig = false;
     let shutdownPollTimer = null;
     let logsMode = "recent";
+    let latestStatus = null;
+    let latestConfig = null;
+    let latestSaveManagement = null;
+    let latestPlayerManagement = null;
     let latestModManagement = null;
     let latestModSearchResults = [];
     let latestModSearchQuery = "";
     let activeAdminToken = "";
+    let currentLanguage = pickLanguage(localStorage.getItem(languageStorageKey) || navigator.language || defaultLanguage);
+
+    function pickLanguage(language) {
+      const value = String(language || "").toLowerCase();
+      if (value === "en" || value.startsWith("en-")) return "en";
+      if (value === "zh" || value === "zh-cn" || value.startsWith("zh-hans")) return "zh-CN";
+      return i18n[value] ? value : defaultLanguage;
+    }
+
+    function t(key, params = {}) {
+      const dict = i18n[currentLanguage] || {};
+      const fallback = i18n[defaultLanguage] || {};
+      const raw = dict[key] ?? fallback[key] ?? key;
+      return String(raw).replace(/\{([A-Za-z0-9_]+)\}/g, (_, name) => (
+        params[name] == null ? "" : String(params[name])
+      ));
+    }
+
+    function applyStaticTranslations() {
+      document.documentElement.lang = currentLanguage;
+      document.querySelectorAll("[data-i18n]").forEach((element) => {
+        element.textContent = t(element.dataset.i18n);
+      });
+      document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
+        element.setAttribute("placeholder", t(element.dataset.i18nPlaceholder));
+      });
+      document.querySelectorAll("[data-i18n-title]").forEach((element) => {
+        element.setAttribute("title", t(element.dataset.i18nTitle));
+      });
+      if (languageSelect) languageSelect.value = currentLanguage;
+    }
+
+    function setLanguage(language) {
+      currentLanguage = pickLanguage(language);
+      localStorage.setItem(languageStorageKey, currentLanguage);
+      applyStaticTranslations();
+      rerenderLocalizedData();
+    }
+
+    function rerenderLocalizedData() {
+      if (latestConfig) {
+        refreshFarmTypeOptions(latestConfig);
+        renderNexusApiKeyStatus(latestConfig.env || {});
+      }
+      if (latestStatus) {
+        renderStatus(latestStatus);
+        if (latestConfig) renderRuntimeFarmNotice(latestStatus, latestConfig);
+      }
+      if (latestSaveManagement) renderSaveManagement(latestSaveManagement);
+      if (latestPlayerManagement && !latestStatus) renderPlayerManagement(latestPlayerManagement);
+      if (latestModManagement) renderModManagement(latestModManagement);
+    }
+
+    applyStaticTranslations();
 
     document.querySelector(".tabs").addEventListener("click", (e) => {
       const btn = e.target.closest(".tab-btn");
@@ -951,6 +1100,8 @@ const PAGE = String.raw`<!doctype html>
       document.querySelectorAll(".tab-pane").forEach((p) => p.classList.add("hidden"));
       document.querySelector('[data-pane="' + btn.dataset.tab + '"]').classList.remove("hidden");
     });
+
+    languageSelect.addEventListener("change", () => setLanguage(languageSelect.value));
 
     function setMessage(target, text, type) {
       target.textContent = text || "";
@@ -984,7 +1135,16 @@ const PAGE = String.raw`<!doctype html>
     }
 
     function farmTypeLabel(value) {
-      const map = { 0: "标准农场", 1: "河边农场", 2: "森林农场", 3: "山顶农场", 4: "荒野农场", 5: "四角农场", 6: "海滩农场", 7: "草原农场" };
+      const map = {
+        0: t("farm.standard"),
+        1: t("farm.riverland"),
+        2: t("farm.forest"),
+        3: t("farm.hilltop"),
+        4: t("farm.wilderness"),
+        5: t("farm.fourCorners"),
+        6: t("farm.beach"),
+        7: t("farm.meadowlands"),
+      };
       return map[value] != null ? map[value] + "（" + value + "）" : String(value ?? "n/a");
     }
 
@@ -1004,8 +1164,11 @@ const PAGE = String.raw`<!doctype html>
       form.whichFarm.value = farmTypeLabel(config.whichFarm);
       form.maxPlayers.value = settings.Server?.MaxPlayers ?? configForm.elements.maxPlayers.value ?? 4;
       form.targetCabins.value = settings.Game?.StartingCabins ?? Math.max(save.usableCabinCount || 0, save.cabinCount || 1, 1);
-      form.cabinStatus.value = "小屋 " + (save.cabinCount ?? 0) + " 座，可用角色 " + (save.usableCabinCount ?? save.cabinCount ?? 0) + " 个";
-      editConfigTitle.textContent = "存档配置：" + saveName;
+      form.cabinStatus.value = t("saveConfig.cabinStatus", {
+        cabins: save.cabinCount ?? 0,
+        roles: save.usableCabinCount ?? save.cabinCount ?? 0,
+      });
+      editConfigTitle.textContent = t("saveConfig.titleWithName", { name: saveName });
       setMessage(editConfigMessage, "");
       editConfigDialog.classList.remove("hidden");
       setTimeout(() => form.farmName.focus(), 0);
@@ -1022,10 +1185,12 @@ const PAGE = String.raw`<!doctype html>
       form.displayName.value = options.displayName || "";
       form.sourceUrl.value = options.sourceUrl || "";
       form.nexusId.value = options.nexusId || "";
-      installModTitle.textContent = options.displayName ? "从 URL 安装：" + options.displayName : "从 URL 安装模组";
+      installModTitle.textContent = options.displayName
+        ? t("installUrl.titleWithName", { name: options.displayName })
+        : t("installUrl.title");
       installModHelp.textContent = options.sourceUrl
-        ? "先打开来源页复制 zip 下载 URL，再粘贴到这里。"
-        : "粘贴 zip 下载 URL。面板会在后端下载、校验并安装到 data/mods。";
+        ? t("installUrl.helpSource")
+        : t("installUrl.help");
       openInstallSourceBtn.disabled = !options.sourceUrl;
       nexusFilesPanel.classList.add("hidden");
       nexusFilesSummary.textContent = "";
@@ -1057,9 +1222,35 @@ const PAGE = String.raw`<!doctype html>
       setMessage(installModLocalMessage, "");
     }
 
+    function formatJsonText(text) {
+      return JSON.stringify(JSON.parse(text), null, 2) + "\n";
+    }
+
+    async function openModConfigDialog(directoryName, displayName) {
+      const label = displayName || directoryName;
+      modConfigForm.elements.directoryName.value = directoryName;
+      modConfigForm.elements.text.value = "";
+      modConfigTitle.textContent = t("modConfig.titleWithName", { name: label });
+      setMessage(modConfigMessage, t("modConfig.reading"));
+      modConfigDialog.classList.remove("hidden");
+      try {
+        const config = await request("/api/mods/config?directoryName=" + encodeURIComponent(directoryName));
+        modConfigForm.elements.text.value = config.text || "";
+        setMessage(modConfigMessage, t("modConfig.readOk"), "ok");
+        setTimeout(() => modConfigForm.elements.text.focus(), 0);
+      } catch (error) {
+        setMessage(modConfigMessage, error.message, "bad");
+      }
+    }
+
+    function closeModConfigDialog() {
+      modConfigDialog.classList.add("hidden");
+      setMessage(modConfigMessage, "");
+    }
+
     function formatKb(sizeKb) {
       const value = Number(sizeKb || 0);
-      if (!Number.isFinite(value) || value <= 0) return "未知大小";
+      if (!Number.isFinite(value) || value <= 0) return t("farm.unknownSize");
       if (value >= 1024 * 1024) return (value / 1024 / 1024).toFixed(1) + " GB";
       if (value >= 1024) return (value / 1024).toFixed(1) + " MB";
       return Math.round(value) + " KB";
@@ -1068,11 +1259,11 @@ const PAGE = String.raw`<!doctype html>
     const nexusFileGroupOrder = ["main", "patch", "optional", "old", "other"];
     const modUploadMaxBytes = 100 * 1024 * 1024;
     const nexusFileGroupMeta = {
-      main: { title: "主文件", hint: "通常优先安装这一组。" },
-      patch: { title: "补丁 / 更新", hint: "通常需要先安装主文件或匹配指定版本。" },
-      optional: { title: "可选文件", hint: "按模组说明选择，不一定需要安装。" },
-      old: { title: "旧版本", hint: "仅在兼容旧存档或旧依赖时选择。" },
-      other: { title: "其他文件", hint: "安装前先确认 Nexus 文件说明。" },
+      main: { title: "nexus.group.main.title", hint: "nexus.group.main.hint" },
+      patch: { title: "nexus.group.patch.title", hint: "nexus.group.patch.hint" },
+      optional: { title: "nexus.group.optional.title", hint: "nexus.group.optional.hint" },
+      old: { title: "nexus.group.old.title", hint: "nexus.group.old.hint" },
+      other: { title: "nexus.group.other.title", hint: "nexus.group.other.hint" },
     };
 
     function nexusFileGroup(file) {
@@ -1110,29 +1301,29 @@ const PAGE = String.raw`<!doctype html>
       const fileId = String(file.fileId || "");
       const isRecommended = recommendedFileId && fileId === recommendedFileId;
       const badges = [
-        isRecommended ? pill("推荐", "ok") : "",
-        file.isPrimary ? pill("主文件", "ok") : "",
+        isRecommended ? pill(t("nexus.recommended"), "ok") : "",
+        file.isPrimary ? pill(t("nexus.mainFile"), "ok") : "",
       ].filter(Boolean).join(" ");
       const buttonClass = isRecommended ? ' class="primary"' : "";
-      const buttonText = isRecommended ? "安装推荐文件" : "安装此文件";
+      const buttonText = isRecommended ? t("nexus.installRecommended") : t("nexus.installFile");
       const fileName = file.fileName && file.fileName !== file.name
-        ? '<span class="hint">文件名：' + escapeHtml(file.fileName) + '</span>'
+        ? '<span class="hint">' + escapeHtml(t("nexus.fileName", { name: file.fileName })) + '</span>'
         : "";
       const uploadedAt = file.uploadedAt
-        ? ' · 上传：' + escapeHtml(formatDateTime(file.uploadedAt))
+        ? escapeHtml(t("nexus.uploaded", { time: formatDateTime(file.uploadedAt) }))
         : "";
       return '<div class="manage-item' + (isRecommended ? ' recommended' : '') + '">' +
         '<div><strong>' + escapeHtml(file.name) + (badges ? " " + badges : "") + '</strong>' +
-          '<span class="hint">类型：' + escapeHtml(file.categoryName || "UNKNOWN") +
-          ' · 文件 ID：' + escapeHtml(file.fileId) +
-          ' · 大小：' + escapeHtml(formatKb(file.sizeKb)) +
-          (file.version ? ' · 版本：' + escapeHtml(file.version) : '') +
+          '<span class="hint">' + escapeHtml(t("nexus.type", { type: file.categoryName || "UNKNOWN" })) +
+          ' · ' + escapeHtml(t("nexus.fileId", { id: file.fileId })) +
+          ' · ' + escapeHtml(t("nexus.size", { size: formatKb(file.sizeKb) })) +
+          (file.version ? ' · ' + escapeHtml(t("nexus.version", { version: file.version })) : '') +
           uploadedAt + '</span>' +
           fileName +
           (file.description ? '<span class="hint">' + escapeHtml(file.description) + '</span>' : '') +
         '</div>' +
         '<div class="manage-actions">' +
-          '<button' + buttonClass + ' type="button" data-action="install-nexus-file" data-file-id="' + escapeHtml(file.fileId) + '" data-file-name="' + escapeHtml(file.name) + '">' + buttonText + '</button>' +
+          '<button' + buttonClass + ' type="button" data-action="install-nexus-file" data-file-id="' + escapeHtml(file.fileId) + '" data-file-name="' + escapeHtml(file.name) + '">' + escapeHtml(buttonText) + '</button>' +
         '</div>' +
       '</div>';
     }
@@ -1141,8 +1332,8 @@ const PAGE = String.raw`<!doctype html>
       if (!files.length) return "";
       const meta = nexusFileGroupMeta[group] || nexusFileGroupMeta.other;
       return '<div class="nexus-file-group">' +
-        '<div class="nexus-file-heading"><h4>' + escapeHtml(meta.title) + '</h4><span class="hint">' + files.length + ' 个文件</span></div>' +
-        '<div class="hint">' + escapeHtml(meta.hint) + '</div>' +
+        '<div class="nexus-file-heading"><h4>' + escapeHtml(t(meta.title)) + '</h4><span class="hint">' + escapeHtml(t("nexus.fileCount", { count: files.length })) + '</span></div>' +
+        '<div class="hint">' + escapeHtml(t(meta.hint)) + '</div>' +
         '<div class="manage-list">' + files.map((file) => renderNexusFileItem(file, recommendedFileId)).join("") + '</div>' +
       '</div>';
     }
@@ -1151,26 +1342,31 @@ const PAGE = String.raw`<!doctype html>
       const files = Array.isArray(result) ? result : (Array.isArray(result?.files) ? result.files : []);
       const recommendedFileId = Array.isArray(result) ? "" : String(result?.recommendedFileId || "");
       const updateCount = Array.isArray(result?.fileUpdates) ? result.fileUpdates.length : 0;
-      const cacheText = result?.cached ? "，使用缓存" : "";
+      const cacheText = result?.cached ? t("nexus.cacheSuffix") : "";
       const groups = normalizeNexusGroups(result, files);
       nexusFilesPanel.classList.remove("hidden");
       nexusFilesSummary.textContent = files.length
-        ? "找到 " + files.length + " 个文件" + cacheText + (recommendedFileId ? "，已标出推荐项" : "") + (updateCount ? "，更新关系 " + updateCount + " 条" : "")
-        : "没有可安装文件";
+        ? t("nexus.foundFiles", {
+            count: files.length,
+            cache: cacheText,
+            recommended: recommendedFileId ? t("nexus.recommendedSuffix") : "",
+            updates: updateCount ? t("nexus.updateRelationsSuffix", { count: updateCount }) : "",
+          })
+        : t("nexus.noInstallableFiles");
       nexusFilesList.innerHTML = files.length
         ? nexusFileGroupOrder.map((group) => renderNexusFileGroup(group, groups[group] || [], recommendedFileId)).join("")
-        : '<p class="muted">Nexus 没有返回文件列表。仍可粘贴 zip URL 安装。</p>';
+        : '<p class="muted">' + escapeHtml(t("nexus.noFiles")) + '</p>';
     }
 
     async function loadNexusFiles(nexusId) {
-      setMessage(installModMessage, "正在读取 Nexus 文件列表...");
+      setMessage(installModMessage, t("nexus.reading"));
       const result = await request("/api/mods/nexus/files", {
         method: "POST",
         body: JSON.stringify({ nexusId }),
       });
       renderNexusFiles(result);
-      const sourceText = result?.cached ? "已使用本地缓存，未再次请求 Nexus API；" : "";
-      setMessage(installModMessage, sourceText + "已按 Nexus 文件类型分组；如果下载权限受限，可继续粘贴 zip URL。", "ok");
+      const sourceText = result?.cached ? t("nexus.cachePrefix") : "";
+      setMessage(installModMessage, sourceText + t("nexus.groupedOk"), "ok");
     }
 
     function appPath(path) {
@@ -1198,7 +1394,7 @@ const PAGE = String.raw`<!doctype html>
         adminToolbar.classList.add("hidden");
         appPanel.classList.add("hidden");
         authPanel.classList.remove("hidden");
-        throw new Error("需要管理令牌");
+        throw new Error(t("auth.required"));
       }
       if (!response.ok) {
         let message = response.statusText;
@@ -1231,7 +1427,7 @@ const PAGE = String.raw`<!doctype html>
         adminToolbar.classList.add("hidden");
         appPanel.classList.add("hidden");
         authPanel.classList.remove("hidden");
-        throw new Error("需要管理令牌");
+        throw new Error(t("auth.required"));
       }
       if (!response.ok) {
         let message = response.statusText;
@@ -1260,6 +1456,15 @@ const PAGE = String.raw`<!doctype html>
       }[ch]));
     }
 
+    function safeExternalUrl(value) {
+      try {
+        const parsed = new URL(String(value || ""), location.href);
+        return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : "";
+      } catch (_) {
+        return "";
+      }
+    }
+
     function row(label, value) {
       return '<div class="row"><span>' + escapeHtml(label) + '</span><strong>' + value + "</strong></div>";
     }
@@ -1286,11 +1491,16 @@ const PAGE = String.raw`<!doctype html>
 
     function formatGameDate(runtime) {
       if (!runtime || !runtime.year) return "n/a";
-      const seasons = { spring: "春", summer: "夏", fall: "秋", winter: "冬" };
+      const seasons = {
+        spring: t("saveConfig.spring"),
+        summer: t("saveConfig.summer"),
+        fall: t("saveConfig.fall"),
+        winter: t("saveConfig.winter"),
+      };
       const season = seasons[String(runtime.season || "").toLowerCase()] || runtime.season || "";
       const rawTime = String(runtime.timeOfDay || 0).padStart(4, "0");
       const time = rawTime.slice(0, -2) + ":" + rawTime.slice(-2);
-      return "第 " + runtime.year + " 年 " + season + " " + runtime.day + " 日 " + time;
+      return t("status.gameDate", { year: runtime.year, season, day: runtime.day, time });
     }
 
     function renderRuntimeFarmNotice(status, config) {
@@ -1302,10 +1512,10 @@ const PAGE = String.raw`<!doctype html>
       }
 
       const configuredName = config.settings.Game.FarmName || "Junimo";
-      const nameText = "当前运行中的存档是「" + runtime.farmName + "」，配置里的新农场名称是「" + configuredName + "」。";
+      const nameText = t("status.runtimeName", { runtime: runtime.farmName, configured: configuredName });
       const suffix = runtime.farmName === configuredName
-        ? "地图、利润、初始小屋等字段仍以存档内容为准。"
-        : "重启会继续加载当前存档，不会把它改名或换地图。";
+        ? t("status.runtimeSame")
+        : t("status.runtimeDifferent");
 
       runtimeFarmNotice.textContent = nameText + suffix;
       runtimeFarmNotice.classList.remove("hidden");
@@ -1319,47 +1529,49 @@ const PAGE = String.raw`<!doctype html>
       backupRetention.value = policy.retention || 10;
 
       const parts = [];
-      parts.push(policy.enabled ? "自动备份已开启" : "自动备份已关闭");
-      parts.push("最多保留 " + (policy.retention || 10) + " 份");
-      if (policy.enabled && state.nextRunAt) parts.push("下次：" + formatDateTime(state.nextRunAt));
-      if (state.running) parts.push("正在备份");
+      parts.push(policy.enabled ? t("saves.policyEnabled") : t("saves.policyDisabled"));
+      parts.push(t("saves.policyRetention", { count: policy.retention || 10 }));
+      if (policy.enabled && state.nextRunAt) parts.push(t("saves.nextRun", { time: formatDateTime(state.nextRunAt) }));
+      if (state.running) parts.push(t("saves.backupRunning"));
       if (state.lastResult?.ok) {
-        parts.push("上次：" + formatDateTime(state.lastRunAt) + "，" + state.lastResult.archive);
-        if (state.lastResult.pruned?.length) parts.push("已清理旧备份 " + state.lastResult.pruned.length + " 份");
+        parts.push(t("saves.lastRun", { time: formatDateTime(state.lastRunAt), archive: state.lastResult.archive }));
+        if (state.lastResult.pruned?.length) parts.push(t("saves.pruned", { count: state.lastResult.pruned.length }));
       } else if (state.lastResult?.error) {
-        parts.push("上次失败：" + state.lastResult.error);
+        parts.push(t("saves.lastFailed", { error: state.lastResult.error }));
       }
       backupPolicyStatus.textContent = parts.join(" · ");
     }
 
     function renderSaveManagement(data) {
+      latestSaveManagement = data;
       renderBackupPolicy(data);
       if (!data.volumeExists) {
-        savesList.innerHTML = '<p class="muted">还没有 saves Docker volume。先启动服务端一次。</p>';
+        savesList.innerHTML = '<p class="muted">' + escapeHtml(t("saves.noVolume")) + '</p>';
       } else if (data.saves.length) {
         savesList.innerHTML = data.saves.map((save) => (
           (() => {
             const cabinText = save.usableCabinCount === save.cabinCount
-              ? ' · 小屋：' + escapeHtml(save.cabinCount ?? 0)
-              : ' · 小屋：' + escapeHtml(save.cabinCount ?? 0) + ' · 可用角色：' + escapeHtml(save.usableCabinCount ?? 0);
+              ? ' · ' + escapeHtml(t("saves.cabins", { count: save.cabinCount ?? 0 }))
+              : ' · ' + escapeHtml(t("saves.cabins", { count: save.cabinCount ?? 0 })) +
+                ' · ' + escapeHtml(t("saves.usableFarmhands", { count: save.usableCabinCount ?? 0 }));
             return (
           '<div class="manage-item">' +
             '<div><strong>' + escapeHtml(save.name) + '</strong>' +
-              '<span class="hint">农场：' + escapeHtml(save.farmName || "Unknown") +
-              ' · 地图：' + escapeHtml(save.farmType ?? "n/a") +
+              '<span class="hint">' + escapeHtml(t("saves.farm", { name: save.farmName || "Unknown" })) +
+              ' · ' + escapeHtml(t("saves.map", { type: save.farmType ?? "n/a" })) +
               cabinText +
-              ' · 更新：' + escapeHtml(formatDateTime(save.updatedAt)) + '</span></div>' +
+              ' · ' + escapeHtml(t("saves.updated", { time: formatDateTime(save.updatedAt) })) + '</span></div>' +
             '<div class="manage-actions">' +
-              '<button data-action="select-save" data-name="' + escapeHtml(save.name) + '">下次加载</button>' +
-              '<button data-action="edit-config" data-name="' + escapeHtml(save.name) + '">查看配置</button>' +
-              '<button class="danger" data-action="delete-save" data-name="' + escapeHtml(save.name) + '">删除</button>' +
+              '<button data-action="select-save" data-name="' + escapeHtml(save.name) + '">' + escapeHtml(t("saves.nextLoad")) + '</button>' +
+              '<button data-action="edit-config" data-name="' + escapeHtml(save.name) + '">' + escapeHtml(t("saves.viewConfig")) + '</button>' +
+              '<button class="danger" data-action="delete-save" data-name="' + escapeHtml(save.name) + '">' + escapeHtml(t("action.delete")) + '</button>' +
             '</div>' +
           '</div>'
             );
           })()
         )).join("");
       } else {
-        savesList.innerHTML = '<p class="muted">未发现可加载存档。</p>';
+        savesList.innerHTML = '<p class="muted">' + escapeHtml(t("saves.noSaves")) + '</p>';
       }
 
       backupsList.innerHTML = data.backups.length ? data.backups.map((backup) => (
@@ -1369,13 +1581,13 @@ const PAGE = String.raw`<!doctype html>
             '<strong>' + escapeHtml(backup.archive) + '</strong>' +
           '</label>' +
             '<span class="hint">' + escapeHtml(formatBytes(backup.sizeBytes)) +
-            ' · 创建：' + escapeHtml(formatDateTime(backup.createdAt)) + '</span></div>' +
+            ' · ' + escapeHtml(t("saves.created", { time: formatDateTime(backup.createdAt) })) + '</span></div>' +
           '<div class="manage-actions">' +
-            '<button data-action="restore-backup" data-archive="' + escapeHtml(backup.archive) + '">恢复</button>' +
-            '<button class="danger" data-action="delete-backup" data-archive="' + escapeHtml(backup.archive) + '">删除</button>' +
+            '<button data-action="restore-backup" data-archive="' + escapeHtml(backup.archive) + '">' + escapeHtml(t("action.restore")) + '</button>' +
+            '<button class="danger" data-action="delete-backup" data-archive="' + escapeHtml(backup.archive) + '">' + escapeHtml(t("action.delete")) + '</button>' +
           '</div>' +
         '</div>'
-      )).join("") : '<p class="muted">还没有备份文件。</p>';
+      )).join("") : '<p class="muted">' + escapeHtml(t("saves.noBackups")) + '</p>';
       deleteSelectedBackupsBtn.disabled = !data.backups.length;
     }
 
@@ -1385,9 +1597,9 @@ const PAGE = String.raw`<!doctype html>
       const nexusBase = source?.searchUrls?.nexusSearch || "https://www.nexusmods.com/stardewvalley/search/";
       const nexus = encoded ? nexusBase + "?gsearchtype=mods&gsearch=" + encoded : nexusBase;
       return {
-        smapi,
-        nexus,
-        guide: source?.searchUrls?.moddingGuide || "https://stardewvalleywiki.com/Modding:Player_Guide/Getting_Started",
+        smapi: safeExternalUrl(smapi) || "https://smapi.io/mods",
+        nexus: safeExternalUrl(nexus) || "https://www.nexusmods.com/stardewvalley/search/",
+        guide: safeExternalUrl(source?.searchUrls?.moddingGuide) || "https://stardewvalleywiki.com/Modding:Player_Guide/Getting_Started",
       };
     }
 
@@ -1422,28 +1634,33 @@ const PAGE = String.raw`<!doctype html>
 
       const installedKeys = installedModKeys(latestModManagement?.installed || []);
       modSearchPanel.classList.remove("hidden");
-      modSearchSummary.textContent = "关键词：" + latestModSearchQuery + "，结果 " + latestModSearchResults.length + " 个";
+      modSearchSummary.textContent = t("mods.querySummary", {
+        query: latestModSearchQuery,
+        count: latestModSearchResults.length,
+      });
 
       modSearchResults.innerHTML = latestModSearchResults.length ? latestModSearchResults.map((mod) => {
         const isInstalled = (mod.uniqueIds || []).some((id) => installedKeys.has(String(id).toLowerCase())) ||
           (mod.nexusId && installedKeys.has("nexus:" + String(mod.nexusId).toLowerCase()));
-        const sourceUrl = mod.nexusUrl || mod.sourceUrl || "";
+        const nexusUrl = safeExternalUrl(mod.nexusUrl);
+        const sourceExternalUrl = safeExternalUrl(mod.sourceUrl);
+        const sourceUrl = nexusUrl || sourceExternalUrl || "";
         return '<div class="manage-item">' +
-          '<div><strong>' + escapeHtml(mod.name) + (isInstalled ? ' <span class="pill ok">已安装</span>' : '') + '</strong>' +
-            '<span class="hint">作者：' + escapeHtml(mod.author || "n/a") +
-            ' · UniqueID：' + escapeHtml((mod.uniqueIds || []).join("，") || "n/a") +
-            ' · Nexus ID：' + escapeHtml(mod.nexusId || "n/a") + '</span>' +
-            '<span class="hint">兼容性：' + escapeHtml(mod.status || "unknown") +
-            (mod.brokeIn ? ' · 失效版本：' + escapeHtml(mod.brokeIn) : '') + '</span>' +
-            '<span class="hint">' + escapeHtml(mod.summary || "暂无说明。") + '</span>' +
+          '<div><strong>' + escapeHtml(mod.name) + (isInstalled ? ' <span class="pill ok">' + escapeHtml(t("mods.installedBadge")) + '</span>' : '') + '</strong>' +
+            '<span class="hint">' + escapeHtml(t("mods.author", { author: mod.author || "n/a" })) +
+            ' · ' + escapeHtml(t("mods.uniqueIds", { ids: (mod.uniqueIds || []).join(", ") || "n/a" })) +
+            ' · ' + escapeHtml(t("mods.nexusId", { id: mod.nexusId || "n/a" })) + '</span>' +
+            '<span class="hint">' + escapeHtml(t("mods.compatibility", { status: mod.status || "unknown" })) +
+            (mod.brokeIn ? ' · ' + escapeHtml(t("mods.brokeIn", { version: mod.brokeIn })) : '') + '</span>' +
+            '<span class="hint">' + escapeHtml(mod.summary || t("mods.noSummary")) + '</span>' +
           '</div>' +
           '<div class="manage-actions">' +
-            (mod.nexusUrl ? '<button data-action="open-mod-url" data-url="' + escapeHtml(mod.nexusUrl) + '">Nexus</button>' : '') +
-            (mod.sourceUrl ? '<button data-action="open-mod-url" data-url="' + escapeHtml(mod.sourceUrl) + '">源码</button>' : '') +
-            '<button class="primary" data-action="install-mod" data-name="' + escapeHtml(mod.name) + '" data-source-url="' + escapeHtml(sourceUrl) + '" data-nexus-id="' + escapeHtml(mod.nexusId || "") + '">安装</button>' +
+            (nexusUrl ? '<button data-action="open-mod-url" data-url="' + escapeHtml(nexusUrl) + '">Nexus</button>' : '') +
+            (sourceExternalUrl ? '<button data-action="open-mod-url" data-url="' + escapeHtml(sourceExternalUrl) + '">' + escapeHtml(t("mods.source")) + '</button>' : '') +
+            '<button class="primary" data-action="install-mod" data-name="' + escapeHtml(mod.name) + '" data-source-url="' + escapeHtml(sourceUrl) + '" data-nexus-id="' + escapeHtml(mod.nexusId || "") + '">' + escapeHtml(t("action.install")) + '</button>' +
           '</div>' +
         '</div>';
-      }).join("") : '<p class="muted">没有找到匹配的 SMAPI 兼容列表结果。</p>';
+      }).join("") : '<p class="muted">' + escapeHtml(t("mods.noSearchResults")) + '</p>';
     }
 
     function renderModManagement(data) {
@@ -1454,46 +1671,58 @@ const PAGE = String.raw`<!doctype html>
       const sourceLinks = modSourceLinks(data.sources, "");
       setMessage(
         modsMessage,
-        query ? "匹配 " + filtered.length + " / " + installed.length + " 个模组。" : "已安装 " + installed.length + " 个模组。",
+        query
+          ? t("mods.matchCount", { filtered: filtered.length, total: installed.length })
+          : t("mods.installedCount", { count: installed.length }),
         "ok",
       );
       installedModsList.innerHTML = filtered.length ? filtered.map((mod) => (
         '<div class="manage-item">' +
           '<div><strong>' + escapeHtml(mod.name) + '</strong>' +
-            '<span class="hint">目录：' + escapeHtml(mod.directoryName) +
+            '<span class="hint">' + escapeHtml(t("mods.directory", { directory: mod.directoryName })) +
             ' · UniqueID：' + escapeHtml(mod.uniqueId || "n/a") +
-            ' · 版本：' + escapeHtml(mod.version || "n/a") +
-            ' · 作者：' + escapeHtml(mod.author || "n/a") + '</span>' +
-            '<span class="hint">' + escapeHtml(mod.description || "无描述") + '</span>' +
-            '<span class="hint">API：' + escapeHtml(mod.minimumApiVersion || "n/a") +
-            ' · DLL：' + escapeHtml(mod.entryDll || "n/a") +
-            ' · 更新：' + escapeHtml(formatDateTime(mod.updatedAt)) + '</span>' +
-            (mod.updateKeys?.length ? '<span class="hint">UpdateKeys：' + escapeHtml(mod.updateKeys.join("，")) + '</span>' : '') +
-            (mod.hasManifest ? '' : '<span class="hint bad">manifest.json 解析失败：' + escapeHtml(mod.manifestError || "未知错误") + '</span>') +
+            ' · ' + escapeHtml(t("mods.version", { version: mod.version || "n/a" })) +
+            ' · ' + escapeHtml(t("mods.author", { author: mod.author || "n/a" })) + '</span>' +
+            '<span class="hint">' + escapeHtml(mod.description || t("mods.noDescription")) + '</span>' +
+            '<span class="hint">' + escapeHtml(t("mods.api", { api: mod.minimumApiVersion || "n/a" })) +
+            ' · ' + escapeHtml(t("mods.dll", { dll: mod.entryDll || "n/a" })) +
+            ' · ' + escapeHtml(t("mods.updated", { time: formatDateTime(mod.updatedAt) })) + '</span>' +
+            '<span class="hint">' + escapeHtml(t("mods.config", { text: mod.hasConfig ? ("config.json · " + formatDateTime(mod.configUpdatedAt)) : t("mods.configMissing") })) + '</span>' +
+            (mod.updateKeys?.length ? '<span class="hint">UpdateKeys：' + escapeHtml(mod.updateKeys.join(", ")) + '</span>' : '') +
+            (mod.hasManifest ? '' : '<span class="hint bad">' + escapeHtml(t("mods.manifestFailed", { error: mod.manifestError || t("mods.unknownError") })) + '</span>') +
           '</div>' +
           '<div class="manage-actions">' +
-            '<button class="danger" data-action="delete-mod" data-directory="' + escapeHtml(mod.directoryName) + '" data-name="' + escapeHtml(mod.name) + '">删除</button>' +
+            (mod.hasConfig
+              ? '<button data-action="edit-mod-config" data-directory="' + escapeHtml(mod.directoryName) + '" data-name="' + escapeHtml(mod.name) + '">' + escapeHtml(t("tab.config")) + '</button>'
+              : '<button disabled title="' + escapeHtml(t("mods.noConfigTitle")) + '">' + escapeHtml(t("mods.noConfig")) + '</button>') +
+            '<button class="danger" data-action="delete-mod" data-directory="' + escapeHtml(mod.directoryName) + '" data-name="' + escapeHtml(mod.name) + '">' + escapeHtml(t("action.delete")) + '</button>' +
           '</div>' +
         '</div>'
-      )).join("") : (query ? '<p class="muted">没有匹配当前搜索条件的模组。</p>' : '<p class="muted">还没有安装任何模组。</p>');
+      )).join("") : (query
+        ? '<p class="muted">' + escapeHtml(t("mods.noMatchInstalled")) + '</p>'
+        : '<p class="muted">' + escapeHtml(t("mods.noInstalled")) + '</p>');
       renderModSearchResults();
 
       modGuidanceList.innerHTML = [
-        '<div class="manage-item"><div><strong>安装前备份</strong><span class="hint">修改 Mod 前先导出一份 saves 备份，避免兼容性问题导致存档损坏。</span></div></div>',
-        '<div class="manage-item"><div><strong>重启生效</strong><span class="hint">把 Mod 放进 data/mods 后需要重启服务端，SMAPI 才会重新加载。</span></div></div>',
-        '<div class="manage-item"><div><strong>URL / 本地 zip 安装</strong><span class="hint">可以粘贴 Nexus、GitHub 或 SMAPI 的 zip 下载 URL，也可以直接选择电脑里的 zip 文件上传安装。</span></div></div>',
-        '<div class="manage-item"><div><strong>来源说明</strong><span class="hint">SMAPI 兼容模组通常来自 Nexus Mods 或官方/社区发布页，不是 Steam Workshop。</span></div></div>',
-        '<div class="manage-item"><div><strong>搜索入口</strong><span class="hint"><a href="' + escapeHtml(sourceLinks.smapi) + '" target="_blank" rel="noreferrer">SMAPI 兼容列表</a> · <a href="' + escapeHtml(sourceLinks.nexus) + '" target="_blank" rel="noreferrer">Nexus 搜索</a> · <a href="' + escapeHtml(sourceLinks.guide) + '" target="_blank" rel="noreferrer">入门文档</a></span></div></div>',
+        '<div class="manage-item"><div><strong>' + escapeHtml(t("mods.guideBackupTitle")) + '</strong><span class="hint">' + escapeHtml(t("mods.guideBackup")) + '</span></div></div>',
+        '<div class="manage-item"><div><strong>' + escapeHtml(t("mods.guideRestartTitle")) + '</strong><span class="hint">' + escapeHtml(t("mods.guideRestart")) + '</span></div></div>',
+        '<div class="manage-item"><div><strong>' + escapeHtml(t("mods.guideInstallTitle")) + '</strong><span class="hint">' + escapeHtml(t("mods.guideInstall")) + '</span></div></div>',
+        '<div class="manage-item"><div><strong>' + escapeHtml(t("mods.guideSourceTitle")) + '</strong><span class="hint">' + escapeHtml(t("mods.guideSource")) + '</span></div></div>',
+        '<div class="manage-item"><div><strong>' + escapeHtml(t("mods.guideLinksTitle")) + '</strong><span class="hint"><a href="' + escapeHtml(sourceLinks.smapi) + '" target="_blank" rel="noreferrer">' + escapeHtml(t("mods.smapiList")) + '</a> · <a href="' + escapeHtml(sourceLinks.nexus) + '" target="_blank" rel="noreferrer">' + escapeHtml(t("mods.nexusSearch")) + '</a> · <a href="' + escapeHtml(sourceLinks.guide) + '" target="_blank" rel="noreferrer">' + escapeHtml(t("mods.gettingStarted")) + '</a></span></div></div>',
       ].join("");
     }
 
     function renderPlayerManagement(data) {
-      const unsupported = data.unsupportedMessage || "当前服务端镜像未开放该操作。";
+      latestPlayerManagement = data;
+      const unsupported = data.unsupportedMessage || t("players.unsupported");
       const apiHint = data.apiAvailable
         ? (data.auth?.enabled
-          ? "进服密码保护：已启用，已验证 " + data.auth.authenticatedCount + " 人，待验证 " + data.auth.pendingCount + " 人。"
-          : "服务端 HTTP API 已连接。")
-        : "未连接到服务端 HTTP API。请确认 API_ENABLED=true、容器已启动且 API_KEY 一致。";
+          ? t("players.apiProtected", {
+              authenticated: data.auth.authenticatedCount,
+              pending: data.auth.pendingCount,
+            })
+          : t("players.apiConnected"))
+        : t("players.apiDisconnected");
       setMessage(playersMessage, apiHint, data.apiAvailable ? "ok" : "bad");
 
       if (data.onlinePlayers?.length) {
@@ -1501,11 +1730,11 @@ const PAGE = String.raw`<!doctype html>
           '<div class="manage-item">' +
             '<div><strong>' + escapeHtml(player.name) + '</strong>' +
               '<span class="hint">ID：' + escapeHtml(player.id || "n/a") +
-              ' · 状态：在线</span></div>' +
+              ' · ' + escapeHtml(t("players.statusOnline")) + '</span></div>' +
             '<div class="manage-actions">' +
-              '<button data-action="grant-admin" data-name="' + escapeHtml(player.name) + '">授予管理员</button>' +
-              '<button disabled title="' + escapeHtml(unsupported) + '">踢出</button>' +
-              '<button class="danger" disabled title="' + escapeHtml(unsupported) + '">封禁</button>' +
+              '<button data-action="grant-admin" data-name="' + escapeHtml(player.name) + '">' + escapeHtml(t("players.grantAdmin")) + '</button>' +
+              '<button disabled title="' + escapeHtml(unsupported) + '">' + escapeHtml(t("players.kick")) + '</button>' +
+              '<button class="danger" disabled title="' + escapeHtml(unsupported) + '">' + escapeHtml(t("players.ban")) + '</button>' +
             '</div>' +
           '</div>'
         )).join("");
@@ -1513,52 +1742,79 @@ const PAGE = String.raw`<!doctype html>
         onlinePlayersList.innerHTML = data.recentPlayers.map((player) => (
           '<div class="manage-item">' +
             '<div><strong>' + escapeHtml(player.name) + '</strong>' +
-              '<span class="hint">' + escapeHtml(player.address || "最近日志记录") +
+              '<span class="hint">' + escapeHtml(player.address || t("players.recentLog")) +
               ' · ' + escapeHtml(player.lastEvent || "seen") + '</span></div>' +
             '<div class="manage-actions">' +
-              '<button disabled title="需要服务端 HTTP API 在线玩家列表。">授予管理员</button>' +
-              '<button disabled title="' + escapeHtml(unsupported) + '">踢出</button>' +
-              '<button class="danger" disabled title="' + escapeHtml(unsupported) + '">封禁</button>' +
+              '<button disabled title="' + escapeHtml(t("players.apiListRequired")) + '">' + escapeHtml(t("players.grantAdmin")) + '</button>' +
+              '<button disabled title="' + escapeHtml(unsupported) + '">' + escapeHtml(t("players.kick")) + '</button>' +
+              '<button class="danger" disabled title="' + escapeHtml(unsupported) + '">' + escapeHtml(t("players.ban")) + '</button>' +
             '</div>' +
           '</div>'
         )).join("");
       } else {
-        onlinePlayersList.innerHTML = '<p class="muted">当前没有在线玩家。</p>';
+        onlinePlayersList.innerHTML = '<p class="muted">' + escapeHtml(t("players.noOnline")) + '</p>';
       }
 
       if (data.farmhands?.length) {
         farmhandsList.innerHTML = data.farmhands.map((farmhand) => {
-          const name = farmhand.name || "未命名角色";
+          const name = farmhand.name || t("players.unnamedFarmhand");
           const canDelete = farmhand.name && !farmhand.isOnline;
           const deleteTitle = farmhand.isOnline
-            ? "在线角色不能删除。"
-            : (farmhand.name ? "删除该离线角色和对应小屋。" : "未命名角色不能按名称删除。");
+            ? t("players.onlineCannotDelete")
+            : (farmhand.name ? t("players.deleteOfflineTitle") : t("players.unnamedCannotDelete"));
           return (
             '<div class="manage-item">' +
               '<div><strong>' + escapeHtml(name) + '</strong>' +
                 '<span class="hint">ID：' + escapeHtml(farmhand.id || "n/a") +
-                ' · ' + escapeHtml(farmhand.isCustomized ? "已创建" : "未创建") +
-                ' · ' + escapeHtml(farmhand.isOnline ? "在线" : "离线") + '</span></div>' +
+                ' · ' + escapeHtml(farmhand.isCustomized ? t("players.customized") : t("players.notCustomized")) +
+                ' · ' + escapeHtml(farmhand.isOnline ? t("players.onlineState") : t("players.offlineState")) + '</span></div>' +
               '<div class="manage-actions">' +
                 '<button class="danger" ' +
                   (canDelete ? 'data-action="delete-farmhand" data-name="' + escapeHtml(farmhand.name) + '"' : "disabled") +
-                  ' title="' + escapeHtml(deleteTitle) + '">删除离线角色</button>' +
+                  ' title="' + escapeHtml(deleteTitle) + '">' + escapeHtml(t("players.deleteOffline")) + '</button>' +
               '</div>' +
             '</div>'
           );
         }).join("");
       } else {
-        farmhandsList.innerHTML = '<p class="muted">未读取到农场角色。</p>';
+        farmhandsList.innerHTML = '<p class="muted">' + escapeHtml(t("players.noFarmhands")) + '</p>';
       }
     }
 
-    function fillConfig(data) {
-      const settings = data.settings;
-      const env = data.env;
+    function farmTypeName(value, fallback) {
+      const keys = {
+        0: "farm.standard",
+        1: "farm.riverland",
+        2: "farm.forest",
+        3: "farm.hilltop",
+        4: "farm.wilderness",
+        5: "farm.fourCorners",
+        6: "farm.beach",
+        7: "farm.meadowlands",
+      };
+      return keys[value] ? t(keys[value]) : (fallback || String(value));
+    }
+
+    function refreshFarmTypeOptions(data) {
+      const currentValue = createMapForm.elements.farmType.value;
       const farmTypeOptions = data.farmTypes.map((item) => (
-        '<option value="' + item.value + '">' + escapeHtml(item.label) + "</option>"
+        '<option value="' + escapeHtml(item.value) + '">' + escapeHtml(farmTypeName(item.value, item.label)) + "</option>"
       )).join("");
       createMapForm.elements.farmType.innerHTML = farmTypeOptions;
+      if (currentValue) createMapForm.elements.farmType.value = currentValue;
+    }
+
+    function renderNexusApiKeyStatus(env) {
+      document.querySelector("#nexusApiKeyStatus").textContent = env.nexusApiKeySet
+        ? t("config.nexusKeySet")
+        : t("config.nexusKeyUnset");
+    }
+
+    function fillConfig(data) {
+      latestConfig = data;
+      const settings = data.settings;
+      const env = data.env;
+      refreshFarmTypeOptions(data);
 
       createMapForm.elements.farmName.value = settings.Game.FarmName || "Junimo";
       createMapForm.elements.farmType.value = settings.Game.FarmType ?? 0;
@@ -1583,9 +1839,7 @@ const PAGE = String.raw`<!doctype html>
       configForm.elements.serverPassword.value = "";
       configForm.elements.nexusApiKeyAction.value = "keep";
       configForm.elements.nexusApiKey.value = "";
-      document.querySelector("#nexusApiKeyStatus").textContent = env.nexusApiKeySet
-        ? "Nexus API Key 已配置。面板不会回显密钥，需要更换时请选择“设置新 Key”。"
-        : "Nexus API Key 未配置。当前搜索和 URL 安装不依赖该 Key。";
+      renderNexusApiKeyStatus(env);
       hasConfig = true;
     }
 
@@ -1632,53 +1886,58 @@ const PAGE = String.raw`<!doctype html>
 
     function stackStateText(state) {
       if (!state) return "";
-      if (!state.ok && state.error) return "容器状态读取失败：" + state.error;
-      if (!state.containers?.length) return "未返回容器状态";
+      if (!state.ok && state.error) return t("status.containerReadFailed", { error: state.error });
+      if (!state.containers?.length) return t("status.noContainers");
       return state.containers.map((container) => {
         const health = container.health && container.health !== "none" ? "/" + container.health : "";
-        const startedAt = container.startedAt ? "，启动：" + formatDateTime(container.startedAt) : "";
+        const startedAt = container.startedAt ? t("status.startedAt", { time: formatDateTime(container.startedAt) }) : "";
         return container.name + "=" + (container.status || "unknown") + health + startedAt;
       }).join("；");
     }
 
     function operationStepsText(steps) {
       return (steps || [])
-        .map((step, index) => (index + 1) + ". " + step.label + (step.detail ? "：" + step.detail : ""))
+        .map((step, index) => (index + 1) + ". " + step.label + (step.detail ? ": " + step.detail : ""))
         .join("\n");
     }
 
     function patchVerificationText(patch) {
       const verification = patch?.verification;
       return verification
-        ? "复验：小屋 " + verification.cabinCount + " 座，可用角色 " + verification.usableCabinCount + " 个。"
+        ? t("saveConfig.verification", {
+            cabins: verification.cabinCount,
+            roles: verification.usableCabinCount,
+          })
         : "";
     }
 
     function createMapResultText(result) {
       const patch = result.cabinPatch || {};
       const lines = [
-        "新地图已创建：" + result.farmName,
-        result.newSaveName ? "新存档：" + result.newSaveName : "",
-        result.selectedSaveName ? "已自动设为下次加载：" + result.selectedSaveName : "",
-        result.preNewGameBackup ? "执行前备份：" + result.preNewGameBackup : "",
+        t("createMap.created", { farmName: result.farmName }),
+        result.newSaveName ? t("createMap.newSave", { saveName: result.newSaveName }) : "",
+        result.selectedSaveName ? t("createMap.selectedSave", { saveName: result.selectedSaveName }) : "",
+        result.preNewGameBackup ? t("createMap.preBackup", { backup: result.preNewGameBackup }) : "",
         result.restarted
-          ? (result.restartVerified ? "服务端重启已确认。" : "已执行重启命令，但未确认到 running 状态。")
-          : "服务端未重启。",
+          ? (result.restartVerified ? t("createMap.restartVerified") : t("createMap.restartUnverified"))
+          : t("createMap.notRestarted"),
       ];
       if (result.cabinPatch) {
         lines.push(
-          "小屋补丁：补建 " + (patch.addedCabins || 0) +
-            " 座，移动 " + (patch.movedCabins || 0) +
-            " 座，清理障碍 " + (patch.clearedFarmObstacles || 0) +
-            " 处，新增角色槽 " + (patch.addedFarmhands || 0) +
-            " 个，修正引用 " + (patch.fixedCabinReferences || 0) + " 个。",
+          t("createMap.cabinPatch", {
+            added: patch.addedCabins || 0,
+            moved: patch.movedCabins || 0,
+            cleared: patch.clearedFarmObstacles || 0,
+            farmhands: patch.addedFarmhands || 0,
+            fixed: patch.fixedCabinReferences || 0,
+          }),
         );
         lines.push(patchVerificationText(patch));
       }
       const state = stackStateText(result.stackState);
-      if (state) lines.push("当前容器：" + state);
+      if (state) lines.push(t("createMap.currentStack", { state }));
       const steps = operationStepsText(result.steps);
-      if (steps) lines.push("执行记录：\n" + steps);
+      if (steps) lines.push(t("createMap.steps", { steps }));
       return lines.filter(Boolean).join("\n");
     }
 
@@ -1712,11 +1971,40 @@ const PAGE = String.raw`<!doctype html>
 
     function shutdownLabel(readiness) {
       if (!readiness) return "n/a";
-      if (readiness.mode === "safe-empty") return "可停服：在线 0 人";
-      if (readiness.mode === "safe-saved") return "可停服：近期已存档";
-      if (readiness.mode === "warn-unsaved") return "需谨慎：可能未存档";
-      if (readiness.mode === "unknown-saved") return "需确认：人数未知但近期已存档";
-      return "需确认：在线人数未知";
+      if (readiness.mode === "safe-empty") return t("status.safeEmpty");
+      if (readiness.mode === "safe-saved") return t("status.safeSaved");
+      if (readiness.mode === "warn-unsaved") return t("status.warnUnsaved");
+      if (readiness.mode === "unknown-saved") return t("status.unknownSaved");
+      return t("status.unknownOnline");
+    }
+
+    function shutdownReadinessMessage(readiness) {
+      if (!readiness) return t("server.readinessUnknown");
+      const count = readiness.onlinePlayerCount ?? "n/a";
+      if (readiness.mode === "safe-empty") return t("server.readinessSafeEmpty");
+      if (readiness.mode === "safe-saved") return t("server.readinessSafeSaved", { count });
+      if (readiness.mode === "warn-unsaved") return t("server.readinessWarnUnsaved", { count });
+      if (readiness.mode === "unknown-saved") return t("server.readinessUnknownSaved");
+      return t("server.readinessUnknown");
+    }
+
+    function preferServerMessage(message, fallback) {
+      return currentLanguage === defaultLanguage && message ? message : fallback;
+    }
+
+    async function restartServerAfterSave(messageTarget) {
+      if (!confirm(t("server.confirmRestart"))) return false;
+      setMessage(messageTarget, t("server.restarting"));
+      await request("/api/restart", { method: "POST", body: "{}" });
+      setTimeout(() => loadAll().catch(() => {}), 4000);
+      setMessage(messageTarget, t("config.savedAndRestarted"), "ok");
+      return true;
+    }
+
+    function setFormSubmitDisabled(form, disabled) {
+      form.querySelectorAll('button[type="submit"]').forEach((button) => {
+        button.disabled = disabled;
+      });
     }
 
     function renderServerActions(data) {
@@ -1730,7 +2018,7 @@ const PAGE = String.raw`<!doctype html>
       createNewGameBtn.disabled = jobActive;
 
       if (jobActive) {
-        setMessage(serverActionMessage, job.message || "正在等待自动停服...", "warn");
+        setMessage(serverActionMessage, preferServerMessage(job.message, t("status.waitingAutoStop")), "warn");
         if (!shutdownPollTimer) {
           shutdownPollTimer = setTimeout(() => {
             shutdownPollTimer = null;
@@ -1742,13 +2030,13 @@ const PAGE = String.raw`<!doctype html>
           clearTimeout(shutdownPollTimer);
           shutdownPollTimer = null;
         }
-        setMessage(serverActionMessage, job.message || "已自动停服。", "ok");
+        setMessage(serverActionMessage, preferServerMessage(job.message, t("status.autoStopped")), "ok");
       } else if (job?.state === "failed" || job?.state === "timed-out") {
         if (shutdownPollTimer) {
           clearTimeout(shutdownPollTimer);
           shutdownPollTimer = null;
         }
-        setMessage(serverActionMessage, job.message || "自动停服未完成。", "bad");
+        setMessage(serverActionMessage, preferServerMessage(job.message, t("status.autoStopFailed")), "bad");
       } else if (!serverActionMessage.textContent) {
         if (shutdownPollTimer) {
           clearTimeout(shutdownPollTimer);
@@ -1759,42 +2047,43 @@ const PAGE = String.raw`<!doctype html>
     }
 
     function renderStatus(data) {
+      latestStatus = data;
       document.querySelector("#generatedAt").textContent = new Date(data.generatedAt).toLocaleTimeString();
       renderServerActions(data);
       const health = document.querySelector("#healthList");
       health.innerHTML = data.health.length ? data.health.map((item) => {
         const kind = item.health === "healthy" || item.status === "running" ? "ok" : "bad";
         return row(item.name, pill((item.status || "unknown") + " / " + (item.health || "none"), kind));
-      }).join("") : row("Docker", pill(data.dockerAvailable ? "服务端已停止" : "不可用", data.dockerAvailable ? "warn" : "bad"));
+      }).join("") : row("Docker", pill(data.dockerAvailable ? t("overview.dockerStopped") : t("overview.unavailable"), data.dockerAvailable ? "warn" : "bad"));
 
       const join = document.querySelector("#joinInfo");
       const lan = data.lanAddresses.filter((item) => item.recommended)[0] || data.lanAddresses[0];
       join.innerHTML = [
-        row("服务端", pill(data.stackRunning ? "运行中" : "已停止", data.stackRunning ? "ok" : "warn")),
-        row("本机 IP", escapeHtml(data.join.sameMachine)),
-        row("局域网 IP", escapeHtml(lan ? lan.address : "n/a")),
-        row("游戏端口", escapeHtml(data.join.gamePort)),
-        row("IP 直连", pill(data.join.allowIpConnections ? "已开启" : "已关闭", data.join.allowIpConnections ? "ok" : "bad")),
-        row("邀请码", escapeHtml(data.join.inviteCode || "n/a")),
-        row("当前农场", escapeHtml(data.runtime?.farmName || "n/a")),
-        row("游戏日期", escapeHtml(formatGameDate(data.runtime))),
-        row("停服判断", escapeHtml(shutdownLabel(data.shutdownReadiness))),
+        row(t("overview.server"), pill(data.stackRunning ? t("overview.running") : t("overview.stopped"), data.stackRunning ? "ok" : "warn")),
+        row(t("overview.localIp"), escapeHtml(data.join.sameMachine)),
+        row(t("overview.lanIp"), escapeHtml(lan ? lan.address : "n/a")),
+        row(t("overview.gamePort"), escapeHtml(data.join.gamePort)),
+        row(t("overview.ipConnect"), pill(data.join.allowIpConnections ? t("overview.enabled") : t("overview.disabled"), data.join.allowIpConnections ? "ok" : "bad")),
+        row(t("overview.inviteCode"), escapeHtml(data.join.inviteCode || "n/a")),
+        row(t("overview.currentFarm"), escapeHtml(data.runtime?.farmName || "n/a")),
+        row(t("overview.gameDate"), escapeHtml(formatGameDate(data.runtime))),
+        row(t("overview.shutdownReadiness"), escapeHtml(shutdownLabel(data.shutdownReadiness))),
       ].join("");
 
       document.querySelector("#players").innerHTML = data.players.length ? data.players.map((player) => (
         '<div class="row"><span>' + escapeHtml(player.name) + '<br><span class="hint">' + escapeHtml(player.address || "") + '</span></span>' +
         pill(player.lastEvent || "seen", player.lastEvent === "joined" || player.lastEvent === "online" ? "ok" : "warn") + "</div>"
-      )).join("") : '<p class="muted">还没有最近玩家活动。</p>';
+      )).join("") : '<p class="muted">' + escapeHtml(t("overview.noRecentPlayers")) + '</p>';
 
       renderPlayerManagement(data.playerManagement || {});
 
       document.querySelector("#ports").innerHTML = data.publishedPorts.length
-        ? data.publishedPorts.map((line, index) => row("映射 " + (index + 1), escapeHtml(line))).join("")
-        : '<p class="muted">未读取到端口映射。</p>';
+        ? data.publishedPorts.map((line, index) => row(t("overview.mapping", { index: index + 1 }), escapeHtml(line))).join("")
+        : '<p class="muted">' + escapeHtml(t("overview.noPorts")) + '</p>';
 
       document.querySelector("#stats").innerHTML = data.stats.length
         ? data.stats.map((item) => row(item.name, escapeHtml((item.cpu || "") + " / " + (item.memory || "")))).join("")
-        : '<p class="muted">未读取到资源占用。</p>';
+        : '<p class="muted">' + escapeHtml(t("overview.noStats")) + '</p>';
 
       if (logsMode === "recent") {
         setLogsText(data.recentSignals.join("\n"), "recent");
@@ -1808,6 +2097,7 @@ const PAGE = String.raw`<!doctype html>
         request("/api/saves"),
         request("/api/mods"),
       ]);
+      latestConfig = config;
       renderStatus(status);
       if (!hasConfig) fillConfig(config);
       renderRuntimeFarmNotice(status, config);
@@ -1820,7 +2110,7 @@ const PAGE = String.raw`<!doctype html>
 
     authForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      setMessage(authMessage, "验证中...");
+      setMessage(authMessage, t("auth.verifying"));
       const token = tokenInput.value.trim();
       try {
         await request("/api/auth", {
@@ -1838,14 +2128,20 @@ const PAGE = String.raw`<!doctype html>
 
     configForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      setMessage(saveMessage, "保存中...");
+      const restartAfterSave = event.submitter?.dataset.restartAfterSave === "true";
+      setFormSubmitDisabled(configForm, true);
+      setMessage(saveMessage, t("config.saving"));
       try {
         await request("/api/config", { method: "POST", body: JSON.stringify(formPayload()) });
         hasConfig = false;
         await loadAll();
-        setMessage(saveMessage, "已保存，运行配置重启后生效。", "ok");
+        if (!restartAfterSave || !(await restartServerAfterSave(saveMessage))) {
+          setMessage(saveMessage, t("config.saved"), "ok");
+        }
       } catch (error) {
         setMessage(saveMessage, error.message, "bad");
+      } finally {
+        setFormSubmitDisabled(configForm, false);
       }
     });
 
@@ -1875,14 +2171,14 @@ const PAGE = String.raw`<!doctype html>
         });
       }
 
-      setMessage(messageTarget, "正在备份并修复小屋...");
+      setMessage(messageTarget, t("saveConfig.repairing"));
       let result;
       try {
         result = await submit(false);
       } catch (error) {
         if (error.status !== 409) throw error;
-        if (!confirm(error.message + "\n\n仍然强制修复该存档的小屋？")) return null;
-        setMessage(messageTarget, "正在强制备份并修复小屋...");
+        if (!confirm(t("saveConfig.confirmForceRepair", { message: error.message }))) return null;
+        setMessage(messageTarget, t("saveConfig.forceRepairing"));
         result = await submit(true);
       }
 
@@ -1893,21 +2189,24 @@ const PAGE = String.raw`<!doctype html>
 
     function repairSaveCabinsResultText(result) {
       const patch = result.cabinPatch || {};
-      const restartText = result.restarted ? "；服务端已重启" : "";
-      return "小屋已修复：" + result.saveName +
-        "；目标 " + result.targetCabins +
-        "；补建 " + (patch.addedCabins || 0) +
-        " 座；移动 " + (patch.movedCabins || 0) +
-        " 座；清理障碍 " + (patch.clearedFarmObstacles || 0) +
-        " 处；新增角色槽 " + (patch.addedFarmhands || 0) +
-        " 个；修正小屋引用 " + (patch.fixedCabinReferences || 0) +
-        " 个；修正角色 ID " + (patch.fixedFarmhandIds || 0) +
-        " 个；" + patchVerificationText(patch) +
-        "；执行前备份：" + result.preRepairBackup + restartText;
+      const restartText = result.restarted ? t("saves.restartDoneSuffix") : "";
+      return t("saveConfig.repairResult", {
+        saveName: result.saveName,
+        target: result.targetCabins,
+        added: patch.addedCabins || 0,
+        moved: patch.movedCabins || 0,
+        cleared: patch.clearedFarmObstacles || 0,
+        farmhands: patch.addedFarmhands || 0,
+        fixedCabins: patch.fixedCabinReferences || 0,
+        fixedIds: patch.fixedFarmhandIds || 0,
+        verification: patchVerificationText(patch),
+        backup: result.preRepairBackup,
+        restart: restartText,
+      });
     }
 
     refreshModsBtn.addEventListener("click", async () => {
-      setMessage(modsMessage, "刷新中...");
+      setMessage(modsMessage, t("mods.refreshing"));
       try {
         await reloadModManagement();
       } catch (error) {
@@ -1916,11 +2215,11 @@ const PAGE = String.raw`<!doctype html>
     });
 
     backupBeforeModsBtn.addEventListener("click", async () => {
-      setMessage(modsMessage, "正在创建安装前备份...");
+      setMessage(modsMessage, t("mods.creatingBackup"));
       try {
         const result = await request("/api/saves/backup", { method: "POST", body: "{}" });
         await reloadSaveManagement();
-        setMessage(modsMessage, "安装前备份已创建：" + result.archive, "ok");
+        setMessage(modsMessage, t("mods.backupCreated", { archive: result.archive }), "ok");
       } catch (error) {
         setMessage(modsMessage, error.message, "bad");
       }
@@ -1929,11 +2228,11 @@ const PAGE = String.raw`<!doctype html>
     async function performModSearch() {
       const query = modSearchInput.value.trim();
       if (!query) {
-        setMessage(modsMessage, "请输入模组名称、UniqueID 或 Nexus ID。", "bad");
+        setMessage(modsMessage, t("mods.enterQuery"), "bad");
         return;
       }
       searchModsBtn.disabled = true;
-      setMessage(modsMessage, "正在搜索 SMAPI 兼容列表...");
+      setMessage(modsMessage, t("mods.searching"));
       try {
         const result = await request("/api/mods/search", {
           method: "POST",
@@ -1942,7 +2241,7 @@ const PAGE = String.raw`<!doctype html>
         latestModSearchQuery = query;
         latestModSearchResults = result.results || [];
         renderModSearchResults();
-        setMessage(modsMessage, "搜索完成，找到 " + latestModSearchResults.length + " 个结果。", "ok");
+        setMessage(modsMessage, t("mods.searchDone", { count: latestModSearchResults.length }), "ok");
       } catch (error) {
         setMessage(modsMessage, error.message, "bad");
       } finally {
@@ -1976,7 +2275,7 @@ const PAGE = String.raw`<!doctype html>
       const action = button.dataset.action;
       try {
         if (action === "open-mod-url") {
-          const url = button.dataset.url;
+          const url = safeExternalUrl(button.dataset.url);
           if (url) window.open(url, "_blank", "noopener,noreferrer");
           return;
         }
@@ -1995,11 +2294,11 @@ const PAGE = String.raw`<!doctype html>
           const fileId = button.dataset.fileId;
           const displayName = button.dataset.fileName || installModForm.elements.displayName.value;
           if (!nexusId || !fileId) {
-            setMessage(installModMessage, "缺少 Nexus 文件信息。", "bad");
+            setMessage(installModMessage, t("mods.missingNexusFile"), "bad");
             return;
           }
           button.disabled = true;
-          setMessage(installModMessage, "正在通过 Nexus 下载并安装文件...");
+          setMessage(installModMessage, t("mods.installingNexus"));
           try {
             const result = await request("/api/mods/nexus/install", {
               method: "POST",
@@ -2009,8 +2308,8 @@ const PAGE = String.raw`<!doctype html>
             latestModSearchResults = [];
             await reloadModManagement();
             closeInstallModDialog();
-            const names = (result.installed || []).map((mod) => mod.name || mod.directoryName).join("，");
-            setMessage(modsMessage, (result.message || "模组已安装，重启服务端后生效。") + (names ? "\n已安装：" + names : ""), "ok");
+            const names = (result.installed || []).map((mod) => mod.name || mod.directoryName).join(", ");
+            setMessage(modsMessage, preferServerMessage(result.message, t("mods.installedRestart")) + (names ? t("mods.installedNames", { names }) : ""), "ok");
           } catch (error) {
             setMessage(installModMessage, error.message, "bad");
           } finally {
@@ -2019,17 +2318,22 @@ const PAGE = String.raw`<!doctype html>
           return;
         }
 
+        if (action === "edit-mod-config") {
+          await openModConfigDialog(button.dataset.directory, button.dataset.name);
+          return;
+        }
+
         if (action === "delete-mod") {
           const directoryName = button.dataset.directory;
           const label = button.dataset.name || directoryName;
-          if (!confirm("删除会移除 data/mods 下的模组目录，重启服务端后生效。\n\n确认删除：" + label + "？")) return;
-          setMessage(modsMessage, "正在删除模组...");
+          if (!confirm(t("mods.confirmDelete", { name: label }))) return;
+          setMessage(modsMessage, t("mods.deleting"));
           const result = await request("/api/mods/delete", {
             method: "POST",
             body: JSON.stringify({ directoryName }),
           });
           await reloadModManagement();
-          setMessage(modsMessage, result.message || "模组已删除，重启服务端后生效。", "ok");
+          setMessage(modsMessage, preferServerMessage(result.message, t("mods.deletedRestart")), "ok");
         }
       } catch (error) {
         setMessage(modsMessage, error.message, "bad");
@@ -2037,7 +2341,7 @@ const PAGE = String.raw`<!doctype html>
     });
 
     openInstallSourceBtn.addEventListener("click", () => {
-      const sourceUrl = installModForm.elements.sourceUrl.value;
+      const sourceUrl = safeExternalUrl(installModForm.elements.sourceUrl.value);
       if (sourceUrl) window.open(sourceUrl, "_blank", "noopener,noreferrer");
     });
     cancelInstallModBtn.addEventListener("click", closeInstallModDialog);
@@ -2048,18 +2352,29 @@ const PAGE = String.raw`<!doctype html>
     installModLocalDialog.addEventListener("click", (event) => {
       if (event.target === installModLocalDialog) closeInstallModLocalDialog();
     });
+    cancelModConfigBtn.addEventListener("click", closeModConfigDialog);
+    modConfigDialog.addEventListener("click", (event) => {
+      if (event.target === modConfigDialog) closeModConfigDialog();
+    });
+    formatModConfigBtn.addEventListener("click", () => {
+      try {
+        modConfigForm.elements.text.value = formatJsonText(modConfigForm.elements.text.value);
+        setMessage(modConfigMessage, t("modConfig.formatted"), "ok");
+      } catch (error) {
+        setMessage(modConfigMessage, t("modConfig.jsonError", { message: error.message }), "bad");
+      }
+    });
     installModForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = installModForm.elements;
       const url = form.url.value.trim();
       if (!url) {
-        setMessage(installModMessage, "请粘贴 zip 下载 URL。", "bad");
+        setMessage(installModMessage, t("mods.needUrl"), "bad");
         return;
       }
 
-      const submitBtn = installModForm.querySelector('button[type="submit"]');
-      submitBtn.disabled = true;
-      setMessage(installModMessage, "正在下载并安装模组，完成前请不要关闭面板...");
+      setFormSubmitDisabled(installModForm, true);
+      setMessage(installModMessage, t("mods.installingUrl"));
       try {
         const result = await request("/api/mods/install", {
           method: "POST",
@@ -2072,12 +2387,45 @@ const PAGE = String.raw`<!doctype html>
         latestModSearchResults = [];
         await reloadModManagement();
         closeInstallModDialog();
-        const names = (result.installed || []).map((mod) => mod.name || mod.directoryName).join("，");
-        setMessage(modsMessage, (result.message || "模组已安装，重启服务端后生效。") + (names ? "\n已安装：" + names : ""), "ok");
+        const names = (result.installed || []).map((mod) => mod.name || mod.directoryName).join(", ");
+        setMessage(modsMessage, preferServerMessage(result.message, t("mods.installedRestart")) + (names ? t("mods.installedNames", { names }) : ""), "ok");
       } catch (error) {
         setMessage(installModMessage, error.message, "bad");
       } finally {
-        submitBtn.disabled = false;
+        setFormSubmitDisabled(installModForm, false);
+      }
+    });
+
+    modConfigForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = modConfigForm.elements;
+      const directoryName = form.directoryName.value;
+      const restartAfterSave = event.submitter?.dataset.restartAfterSave === "true";
+      let text;
+      try {
+        text = formatJsonText(form.text.value);
+      } catch (error) {
+        setMessage(modConfigMessage, t("modConfig.jsonError", { message: error.message }), "bad");
+        return;
+      }
+
+      setFormSubmitDisabled(modConfigForm, true);
+      setMessage(modConfigMessage, t("modConfig.saving"));
+      try {
+        const result = await request("/api/mods/config", {
+          method: "POST",
+          body: JSON.stringify({ directoryName, text }),
+        });
+        form.text.value = result.text || text;
+        await reloadModManagement();
+        setMessage(modsMessage, t("modConfig.savedList", { backup: result.backupName || "n/a" }), "ok");
+        if (!restartAfterSave || !(await restartServerAfterSave(modConfigMessage))) {
+          setMessage(modConfigMessage, t("modConfig.savedDialog"), "ok");
+        }
+      } catch (error) {
+        setMessage(modConfigMessage, error.message, "bad");
+      } finally {
+        setFormSubmitDisabled(modConfigForm, false);
       }
     });
 
@@ -2086,38 +2434,37 @@ const PAGE = String.raw`<!doctype html>
       const form = installModLocalForm.elements;
       const localZip = form.localZip.files && form.localZip.files[0];
       if (!localZip) {
-        setMessage(installModLocalMessage, "请选择本地 zip 文件。", "bad");
+        setMessage(installModLocalMessage, t("mods.needLocalZip"), "bad");
         return;
       }
       if (!/\.zip$/i.test(localZip.name)) {
-        setMessage(installModLocalMessage, "请选择 .zip 格式的本地模组压缩包。", "bad");
+        setMessage(installModLocalMessage, t("mods.needZipExt"), "bad");
         return;
       }
       if (localZip.size > modUploadMaxBytes) {
-        setMessage(installModLocalMessage, "本地 zip 文件超过 100 MB 限制。", "bad");
+        setMessage(installModLocalMessage, t("mods.localZipTooLarge"), "bad");
         return;
       }
 
-      const submitBtn = installModLocalForm.querySelector('button[type="submit"]');
-      submitBtn.disabled = true;
-      setMessage(installModLocalMessage, "正在上传并安装模组，完成前请不要关闭面板...");
+      setFormSubmitDisabled(installModLocalForm, true);
+      setMessage(installModLocalMessage, t("mods.uploadingLocal"));
       try {
         const result = await uploadModFile(localZip, form.displayName.value || localZip.name.replace(/\.zip$/i, ""));
         latestModSearchQuery = "";
         latestModSearchResults = [];
         await reloadModManagement();
         closeInstallModLocalDialog();
-        const names = (result.installed || []).map((mod) => mod.name || mod.directoryName).join("，");
-        setMessage(modsMessage, (result.message || "模组已安装，重启服务端后生效。") + (names ? "\n已安装：" + names : ""), "ok");
+        const names = (result.installed || []).map((mod) => mod.name || mod.directoryName).join(", ");
+        setMessage(modsMessage, preferServerMessage(result.message, t("mods.installedRestart")) + (names ? t("mods.installedNames", { names }) : ""), "ok");
       } catch (error) {
         setMessage(installModLocalMessage, error.message, "bad");
       } finally {
-        submitBtn.disabled = false;
+        setFormSubmitDisabled(installModLocalForm, false);
       }
     });
 
     document.querySelector("#refreshPlayersBtn").addEventListener("click", async () => {
-      setMessage(playersMessage, "刷新中...");
+      setMessage(playersMessage, t("players.refreshing"));
       try {
         await reloadPlayerManagement();
       } catch (error) {
@@ -2133,27 +2480,27 @@ const PAGE = String.raw`<!doctype html>
       try {
         if (action === "grant-admin") {
           const name = button.dataset.name;
-          if (!confirm("授予玩家管理员权限：" + name + "？")) return;
-          setMessage(playersMessage, "正在授予管理员...");
+          if (!confirm(t("players.confirmGrantAdmin", { name }))) return;
+          setMessage(playersMessage, t("players.grantingAdmin"));
           const result = await request("/api/players/grant-admin", {
             method: "POST",
             body: JSON.stringify({ name }),
           });
           await reloadPlayerManagement();
-          setMessage(playersMessage, result.message || "已授予管理员：" + name, "ok");
+          setMessage(playersMessage, preferServerMessage(result.message, t("players.grantedAdmin", { name })), "ok");
           return;
         }
 
         if (action === "delete-farmhand") {
           const name = button.dataset.name;
-          if (!confirm("删除离线角色会移除该角色和对应小屋：" + name + "？")) return;
-          setMessage(playersMessage, "正在删除离线角色...");
+          if (!confirm(t("players.confirmDeleteFarmhand", { name }))) return;
+          setMessage(playersMessage, t("players.deletingFarmhand"));
           const result = await request("/api/farmhands", {
             method: "DELETE",
             body: JSON.stringify({ name }),
           });
           await reloadPlayerManagement();
-          setMessage(playersMessage, result.message || "已删除离线角色：" + name, "ok");
+          setMessage(playersMessage, preferServerMessage(result.message, t("players.deletedFarmhand", { name })), "ok");
         }
       } catch (error) {
         setMessage(playersMessage, error.message, "bad");
@@ -2161,7 +2508,7 @@ const PAGE = String.raw`<!doctype html>
     });
 
     saveBackupPolicyBtn.addEventListener("click", async () => {
-      setMessage(savesMessage, "正在保存备份策略...");
+      setMessage(savesMessage, t("saves.savingPolicy"));
       try {
         const result = await request("/api/backups/policy", {
           method: "POST",
@@ -2175,7 +2522,7 @@ const PAGE = String.raw`<!doctype html>
         const prunedCount = result.pruned?.length || 0;
         setMessage(
           savesMessage,
-          prunedCount ? "备份策略已保存，并清理旧备份 " + prunedCount + " 份。" : "备份策略已保存。",
+          prunedCount ? t("saves.policySavedPruned", { count: prunedCount }) : t("saves.policySaved"),
           "ok",
         );
         renderBackupPolicy(data);
@@ -2185,21 +2532,21 @@ const PAGE = String.raw`<!doctype html>
     });
 
     document.querySelector("#refreshSavesBtn").addEventListener("click", async () => {
-      setMessage(savesMessage, "刷新中...");
+      setMessage(savesMessage, t("players.refreshing"));
       try {
         await reloadSaveManagement();
-        setMessage(savesMessage, "已刷新。", "ok");
+        setMessage(savesMessage, t("saves.refreshed"), "ok");
       } catch (error) {
         setMessage(savesMessage, error.message, "bad");
       }
     });
 
     document.querySelector("#createBackupBtn").addEventListener("click", async () => {
-      setMessage(savesMessage, "正在创建备份...");
+      setMessage(savesMessage, t("saves.creatingBackup"));
       try {
         const result = await request("/api/saves/backup", { method: "POST", body: "{}" });
         await reloadSaveManagement();
-        setMessage(savesMessage, "备份已创建：" + result.archive, "ok");
+        setMessage(savesMessage, t("saves.backupCreated", { archive: result.archive }), "ok");
       } catch (error) {
         setMessage(savesMessage, error.message, "bad");
       }
@@ -2208,17 +2555,17 @@ const PAGE = String.raw`<!doctype html>
     deleteSelectedBackupsBtn.addEventListener("click", async () => {
       const archives = selectedBackupArchives();
       if (!archives.length) {
-        setMessage(savesMessage, "请选择要删除的备份。", "bad");
+        setMessage(savesMessage, t("saves.selectBackup"), "bad");
         return;
       }
-      setMessage(savesMessage, "正在删除选中的备份...");
+      setMessage(savesMessage, t("saves.deletingSelected"));
       try {
         const result = await request("/api/backups/delete", {
           method: "POST",
           body: JSON.stringify({ archives }),
         });
         await reloadSaveManagement();
-        setMessage(savesMessage, "已删除备份：" + (result.deleted || []).join("，"), "ok");
+        setMessage(savesMessage, t("saves.deletedBackups", { archives: (result.deleted || []).join(", ") }), "ok");
       } catch (error) {
         setMessage(savesMessage, error.message, "bad");
       }
@@ -2243,15 +2590,15 @@ const PAGE = String.raw`<!doctype html>
       }
 
       submitBtn.disabled = true;
-      setMessage(createMapMessage, "正在执行真实创建流程，完成前不会显示成功。\n正在保存配置、备份、发送 newgame、等待新存档、自动选择新存档并重启服务端...");
+      setMessage(createMapMessage, t("createMap.running"));
       try {
         let result;
         try {
           result = await submit(false);
         } catch (error) {
           if (error.status !== 409) throw error;
-          if (!confirm(error.message + "\n\n仍然强制新建地图并重启？")) return;
-          setMessage(createMapMessage, "正在强制新建地图并重启服务端...");
+          if (!confirm(t("createMap.confirmForce", { message: error.message }))) return;
+          setMessage(createMapMessage, t("createMap.forceRunning"));
           result = await submit(true);
         }
 
@@ -2274,6 +2621,7 @@ const PAGE = String.raw`<!doctype html>
     editConfigForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = editConfigForm.elements;
+      const restartAfterSave = event.submitter?.dataset.restartAfterSave === "true";
       const payload = {
         saveName: form.saveName.value,
         farmName: form.farmName.value,
@@ -2284,9 +2632,8 @@ const PAGE = String.raw`<!doctype html>
         maxPlayers: form.maxPlayers.value,
         targetCabins: form.targetCabins.value,
       };
-      const submitBtn = editConfigForm.querySelector('button[type="submit"]');
-      submitBtn.disabled = true;
-      setMessage(editConfigMessage, "正在备份并保存配置...");
+      setFormSubmitDisabled(editConfigForm, true);
+      setMessage(editConfigMessage, t("saveConfig.saving"));
       try {
         const result = await request("/api/saves/config", {
           method: "POST",
@@ -2294,14 +2641,21 @@ const PAGE = String.raw`<!doctype html>
         });
         hasConfig = false;
         await loadAll();
+        const backupText = result.preEditBackup ? t("saves.preEditBackup", { backup: result.preEditBackup }) : "";
+        let restartText = result.restartRequired ? t("saves.restartRequired") : "";
+        if (restartAfterSave && await restartServerAfterSave(savesMessage)) {
+          restartText = t("saves.restartDoneSuffix");
+        }
         closeEditConfigDialog();
-        const backupText = result.preEditBackup ? "；编辑前备份：" + result.preEditBackup : "";
-        const restartText = result.restartRequired ? "；人数/小屋设置重启后生效" : "";
-        setMessage(savesMessage, "存档配置已保存：" + result.saveName + backupText + restartText, "ok");
+        setMessage(savesMessage, t("saves.configSaved", {
+          saveName: result.saveName,
+          backup: backupText,
+          restart: restartText,
+        }), "ok");
       } catch (error) {
         setMessage(editConfigMessage, error.message, "bad");
       } finally {
-        submitBtn.disabled = false;
+        setFormSubmitDisabled(editConfigForm, false);
       }
     });
 
@@ -2329,19 +2683,19 @@ const PAGE = String.raw`<!doctype html>
       try {
         if (action === "select-save") {
           const saveName = button.dataset.name;
-          if (!confirm("设置下次重启加载存档：" + saveName + "？")) return;
-          setMessage(savesMessage, "正在设置下次加载的存档...");
+          if (!confirm(t("saves.confirmSelect", { saveName }))) return;
+          setMessage(savesMessage, t("saves.selecting"));
           await request("/api/saves/select", {
             method: "POST",
             body: JSON.stringify({ saveName }),
           });
-          setMessage(savesMessage, "已设置。重启服务端后会加载：" + saveName, "ok");
+          setMessage(savesMessage, t("saves.selected", { saveName }), "ok");
           return;
         }
 
         if (action === "edit-config") {
           const saveName = button.dataset.name;
-          setMessage(savesMessage, "正在读取存档配置...");
+          setMessage(savesMessage, t("saves.readingConfig"));
           try {
             const result = await request("/api/saves/config?saveName=" + encodeURIComponent(saveName));
             openEditConfigDialog(saveName, result);
@@ -2362,25 +2716,29 @@ const PAGE = String.raw`<!doctype html>
             });
           }
 
-          setMessage(savesMessage, "正在备份并删除存档...");
+          setMessage(savesMessage, t("saves.deletingSave"));
           let result;
           try {
             result = await submit(false);
           } catch (error) {
             if (error.status !== 409) throw error;
-            if (!confirm(error.message + "\n\n仍然强制删除该存档？")) return;
-            setMessage(savesMessage, "正在强制备份并删除存档...");
+            if (!confirm(t("saves.confirmForceDelete", { message: error.message }))) return;
+            setMessage(savesMessage, t("saves.forceDeletingSave"));
             result = await submit(true);
           }
 
           hasConfig = false;
           await loadAll();
           const restartText = result.restarted
-            ? "；服务端已重启"
-            : (result.stoppedBecauseNoSaves ? "；已无剩余存档，服务端保持停止" : "");
+            ? t("saves.restartDoneSuffix")
+            : (result.stoppedBecauseNoSaves ? t("saves.noSavesStoppedSuffix") : "");
           setMessage(
             savesMessage,
-            "已删除存档：" + result.deleted + "；删除前备份：" + result.preDeleteBackup + restartText,
+            t("saves.deletedSave", {
+              deleted: result.deleted,
+              backup: result.preDeleteBackup,
+              restart: restartText,
+            }),
             "ok",
           );
           return;
@@ -2388,83 +2746,83 @@ const PAGE = String.raw`<!doctype html>
 
         if (action === "restore-backup") {
           const archive = button.dataset.archive;
-          if (!confirm("恢复会覆盖整个 saves 卷，恢复前会自动备份当前状态。继续恢复：" + archive + "？")) return;
-          setMessage(savesMessage, "正在恢复备份...");
+          if (!confirm(t("saves.confirmRestore", { archive }))) return;
+          setMessage(savesMessage, t("saves.restoring"));
           const result = await request("/api/backups/restore", {
             method: "POST",
             body: JSON.stringify({ archive }),
           });
           hasConfig = false;
           await loadAll();
-          setMessage(savesMessage, "已恢复：" + result.restored + "；恢复前备份：" + result.preRestoreBackup, "ok");
+          setMessage(savesMessage, t("saves.restored", {
+            archive: result.restored,
+            backup: result.preRestoreBackup,
+          }), "ok");
           return;
         }
 
         if (action === "delete-backup") {
           const archive = button.dataset.archive;
-          setMessage(savesMessage, "正在删除备份...");
+          setMessage(savesMessage, t("saves.deletingBackup"));
           const result = await request("/api/backups/delete", {
             method: "POST",
             body: JSON.stringify({ archives: [archive] }),
           });
           await reloadSaveManagement();
-          setMessage(savesMessage, "已删除：" + (result.deleted || [archive]).join("，"), "ok");
+          setMessage(savesMessage, t("saves.deleted", { archives: (result.deleted || [archive]).join(", ") }), "ok");
         }
       } catch (error) {
         setMessage(savesMessage, error.message, "bad");
       }
     });
 
-    document.querySelector("#refreshBtn").addEventListener("click", () => {
-      loadAll().catch((error) => setMessage(saveMessage, error.message, "bad"));
-    });
-
     startBtn.addEventListener("click", async () => {
-      setMessage(serverActionMessage, "正在启动服务端...");
+      setMessage(serverActionMessage, t("server.starting"));
       try {
         await request("/api/start", { method: "POST", body: "{}" });
         setTimeout(() => loadAll().catch(() => {}), 4000);
-        setMessage(serverActionMessage, "启动命令已完成。", "ok");
+        setMessage(serverActionMessage, t("server.startDone"), "ok");
       } catch (error) {
         setMessage(serverActionMessage, error.message, "bad");
       }
     });
 
     stopBtn.addEventListener("click", async () => {
-      setMessage(serverActionMessage, "正在检查停服条件...");
+      setMessage(serverActionMessage, t("server.checkingStop"));
       try {
         const status = await request("/api/status");
         renderStatus(status);
         const readiness = status.shutdownReadiness || {};
-        const prefix = "停服会执行 docker compose down，停止游戏相关容器以释放 CPU/内存；Docker volume、存档、配置和备份都会保留，Web 管理面板会继续运行。\n\n";
+        const prefix = t("server.stopPrefix");
+        const readinessText = shutdownReadinessMessage(readiness);
 
         if (readiness.mode === "safe-empty") {
-          if (!confirm(prefix + "在线人数为 0，可以直接停服。")) return;
+          if (!confirm(prefix + t("server.confirmSafeEmpty"))) return;
           await request("/api/stop", { method: "POST", body: JSON.stringify({ mode: "now" }) });
-          setMessage(serverActionMessage, "已停服，Docker 资源已释放，数据已保留。", "ok");
+          setMessage(serverActionMessage, t("server.stopped"), "ok");
           setTimeout(() => loadAll().catch(() => {}), 2000);
           return;
         }
 
         if (readiness.mode === "safe-saved") {
-          if (!confirm(prefix + "存档已完成，可以安全停止。\n\n" + (readiness.lastSaveLine || readiness.message))) return;
+          if (!confirm(prefix + t("server.confirmSafeSaved", { message: readiness.lastSaveLine || readinessText }))) return;
           await request("/api/stop", { method: "POST", body: JSON.stringify({ mode: "now" }) });
-          setMessage(serverActionMessage, "已停服，Docker 资源已释放，数据已保留。", "ok");
+          setMessage(serverActionMessage, t("server.stopped"), "ok");
           setTimeout(() => loadAll().catch(() => {}), 2000);
           return;
         }
 
         if (readiness.mode === "warn-unsaved") {
-          if (!confirm(prefix + readiness.message + "\n\n点“确定”后，面板会等待下一次 SaveGame.Save 完成，再自动停服。")) return;
+          if (!confirm(prefix + t("server.confirmWaitSave", { message: readinessText }))) return;
           const result = await request("/api/stop", { method: "POST", body: JSON.stringify({ mode: "after-save" }) });
-          setMessage(serverActionMessage, result.job?.message || "已开始等待下一次存档后自动停服。", "warn");
+          setMessage(serverActionMessage, preferServerMessage(result.job?.message, t("server.waitingNextSave")), "warn");
           setTimeout(() => loadAll().catch(() => {}), 2000);
           return;
         }
 
-        if (!confirm(prefix + readiness.message + "\n\n仍然立即停服？")) return;
+        if (!confirm(prefix + t("server.confirmForceStop", { message: readinessText }))) return;
         await request("/api/stop", { method: "POST", body: JSON.stringify({ mode: "now", force: true }) });
-        setMessage(serverActionMessage, "已按确认立即停服，数据已保留。", "ok");
+        setMessage(serverActionMessage, t("server.forceStopped"), "ok");
         setTimeout(() => loadAll().catch(() => {}), 2000);
       } catch (error) {
         setMessage(serverActionMessage, error.message, "bad");
@@ -2472,10 +2830,10 @@ const PAGE = String.raw`<!doctype html>
     });
 
     cancelAutoStopBtn.addEventListener("click", async () => {
-      setMessage(serverActionMessage, "正在取消自动停服...");
+      setMessage(serverActionMessage, t("server.cancelingAutoStop"));
       try {
         const result = await request("/api/stop/cancel", { method: "POST", body: "{}" });
-        setMessage(serverActionMessage, result.job?.message || "已取消自动停服。", "ok");
+        setMessage(serverActionMessage, preferServerMessage(result.job?.message, t("server.autoStopCanceled")), "ok");
         await loadAll();
       } catch (error) {
         setMessage(serverActionMessage, error.message, "bad");
@@ -2483,12 +2841,12 @@ const PAGE = String.raw`<!doctype html>
     });
 
     restartBtn.addEventListener("click", async () => {
-      if (!confirm("重启会断开当前在线玩家，确认继续？")) return;
-      setMessage(serverActionMessage, "正在重启服务端...");
+      if (!confirm(t("server.confirmRestart"))) return;
+      setMessage(serverActionMessage, t("server.restarting"));
       try {
         await request("/api/restart", { method: "POST", body: "{}" });
         setTimeout(() => loadAll().catch(() => {}), 4000);
-        setMessage(serverActionMessage, "重启命令已完成。", "ok");
+        setMessage(serverActionMessage, t("server.restartDone"), "ok");
       } catch (error) {
         setMessage(serverActionMessage, error.message, "bad");
       }
@@ -2509,9 +2867,9 @@ const PAGE = String.raw`<!doctype html>
       if (!text) return;
       try {
         await copyTextToClipboard(text);
-        copyLogsBtn.textContent = "已复制";
+        copyLogsBtn.textContent = t("logs.copied");
         setTimeout(() => {
-          copyLogsBtn.textContent = "复制日志";
+          copyLogsBtn.textContent = t("logs.copy");
         }, 1600);
       } catch (_) {
         const range = document.createRange();
@@ -2519,9 +2877,9 @@ const PAGE = String.raw`<!doctype html>
         const selection = window.getSelection();
         selection.removeAllRanges();
         selection.addRange(range);
-        copyLogsBtn.textContent = "已选中";
+        copyLogsBtn.textContent = t("logs.selected");
         setTimeout(() => {
-          copyLogsBtn.textContent = "复制日志";
+          copyLogsBtn.textContent = t("logs.copy");
         }, 1600);
       }
     });
@@ -2551,16 +2909,6 @@ const PAGE = String.raw`<!doctype html>
     });
 
     (async function boot() {
-      const params = new URLSearchParams(location.search);
-      const token = params.get("token");
-      if (token) {
-        history.replaceState(null, "", location.pathname);
-        const trimmedToken = token.trim();
-        try {
-          await request("/api/auth", { method: "POST", body: JSON.stringify({ token: trimmedToken }) });
-          activeAdminToken = trimmedToken;
-        } catch (_) {}
-      }
       try {
         await loadAll();
         startBackgroundPolling();

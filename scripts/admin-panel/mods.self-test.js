@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { createModService, __test } = require("./mods");
 const { PAGE } = require("./page");
+const { I18N } = require("./i18n");
 
 function assertThrowsMessage(fn, pattern) {
   assert.throws(fn, (error) => pattern.test(error.message));
@@ -21,6 +22,44 @@ async function pathExists(pathname) {
   }
 }
 
+function createZip(entries) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name, "utf8");
+    const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data || "");
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    localParts.push(local, name, data);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE((entry.externalAttributes || 0) >>> 0, 38);
+    central.writeUInt32LE(offset, 42);
+    centralParts.push(central, name);
+    offset += local.length + name.length + data.length;
+  }
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralDirectory.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...localParts, centralDirectory, eocd]);
+}
+
 async function main() {
   assert.equal(__test.intPositive("1915", "Nexus mod ID"), 1915);
   assert.equal(__test.intPositive(1915, "Nexus mod ID"), 1915);
@@ -33,12 +72,34 @@ async function main() {
   assert.equal(__test.formatWaitSeconds(1001), "2 秒");
   assert.equal(__test.isAllowedDownloadHost("supporter-files.nexus-cdn.com"), true);
   assert.equal(__test.isAllowedDownloadHost("evil-nexus-cdn.com"), false);
-  assert.match(PAGE, /使用缓存/);
-  assert.match(PAGE, /未再次请求 Nexus API/);
+  assert.match(I18N["zh-CN"]["nexus.cacheSuffix"], /使用缓存/);
+  assert.match(I18N["zh-CN"]["nexus.cachePrefix"], /未再次请求 Nexus API/);
+  assert.equal(I18N.en["mods.installLocal"], "Install local file");
+  assert.doesNotMatch(PAGE, /id="refreshBtn"/);
+  assert.doesNotMatch(PAGE, /querySelector\("#refreshBtn"\)/);
+  assert.doesNotMatch(PAGE, /URLSearchParams\(location\.search\)/);
+  assert.doesNotMatch(PAGE, /params\.get\("token"\)/);
+  assert.doesNotMatch(PAGE, /<\/script><script>/i);
+  assert.match(PAGE, /safeExternalUrl/);
+  assert.match(PAGE, /escapeHtml\(buttonText\)/);
+  assert.match(PAGE, /id="languageSelect"/);
+  assert.match(PAGE, /window\.SDV_I18N/);
+  assert.match(PAGE, /data-i18n="mods\.installLocal"/);
   assert.match(PAGE, /\.field-8 \{ grid-column: span 8; \}/);
-  assert.match(PAGE, /从本地安装/);
   assert.match(PAGE, /id="installModLocalDialog"/);
   assert.match(PAGE, /id="installModLocalForm"/);
+  assert.match(PAGE, /id="modConfigDialog"/);
+  assert.match(PAGE, /id="modConfigForm"/);
+  assert.match(PAGE, /data-action="edit-mod-config"/);
+  assert.match(PAGE, /\/api\/mods\/config/);
+  assert.match(PAGE, /id="saveConfigRestartBtn"/);
+  assert.match(PAGE, /id="saveEditConfigRestartBtn"/);
+  assert.match(PAGE, /id="saveModConfigRestartBtn"/);
+  assert.match(PAGE, /data-restart-after-save="true" data-i18n="action\.saveAndRestart"/);
+  assert.match(PAGE, /restartServerAfterSave/);
+  assert.match(PAGE, /setFormSubmitDisabled\(configForm, true\)/);
+  assert.match(PAGE, /setFormSubmitDisabled\(editConfigForm, true\)/);
+  assert.match(PAGE, /setFormSubmitDisabled\(modConfigForm, true\)/);
   assert.match(PAGE, /name="localZip" type="file"/);
   assert.match(PAGE, /\/api\/mods\/upload/);
   assert.match(PAGE, /\.management-panel \{/);
@@ -56,8 +117,8 @@ async function main() {
   assert.match(PAGE, /id="installedModsList" class="manage-list scroll-list"/);
   assert.match(PAGE, /id="modGuidanceList" class="manage-list"/);
   assert.match(PAGE, /id="nexusFilesList" class="manage-list scroll-list"/);
-  assert.match(PAGE, /<strong>最大玩家数<\/strong><input name="maxPlayers" type="number" min="1" max="10"/);
-  assert.match(PAGE, /<strong>目标小屋\/角色槽<\/strong><input name="targetCabins" type="number" min="1" max="9"/);
+  assert.match(PAGE, /data-i18n="config\.maxPlayers"><\/strong><input name="maxPlayers" type="number" min="1" max="10"/);
+  assert.match(PAGE, /data-i18n="saveConfig\.targetCabins"><\/strong><input name="targetCabins" type="number" min="1" max="9"/);
   assert.match(PAGE, /id="repairCabinsFromConfigBtn"/);
   assert.match(PAGE, /repairSaveCabinsFromForm\(saveName, form\.targetCabins\.value, editConfigMessage\)/);
   assertThrowsMessage(
@@ -166,6 +227,40 @@ async function main() {
       () => __test.assertInsideRoot(path.join(rootDir, "extract"), path.join(rootDir, "outside", "manifest.json"), "root error"),
       /root error/,
     );
+    assertThrowsMessage(
+      () => __test.assertSafeZipEntryName("../evil/manifest.json"),
+      /path traversal/,
+    );
+    assertThrowsMessage(
+      () => __test.assertSafeZipEntryName("/evil/manifest.json"),
+      /absolute path/,
+    );
+
+    await fsp.writeFile(path.join(rootDir, "safe.zip"), createZip([
+      { name: "Mod/manifest.json", data: "{}" },
+      { name: "Mod/config.json", data: "{}" },
+    ]));
+    const zipInfo = await __test.inspectZipArchive(path.join(rootDir, "safe.zip"));
+    assert.equal(zipInfo.entries, 2);
+    await fsp.writeFile(path.join(rootDir, "traversal.zip"), createZip([
+      { name: "../evil.txt", data: "bad" },
+    ]));
+    await assert.rejects(
+      () => __test.inspectZipArchive(path.join(rootDir, "traversal.zip")),
+      /path traversal/,
+    );
+    await fsp.writeFile(path.join(rootDir, "symlink.zip"), createZip([
+      { name: "Mod/link", data: "target", externalAttributes: 0o120777 << 16 },
+    ]));
+    await assert.rejects(
+      () => __test.inspectZipArchive(path.join(rootDir, "symlink.zip")),
+      /symbolic links/,
+    );
+    await fsp.writeFile(path.join(rootDir, "not-central.zip"), Buffer.from("PK\u0003\u0004"));
+    await assert.rejects(
+      () => __test.inspectZipArchive(path.join(rootDir, "not-central.zip")),
+      /too small|central directory/,
+    );
 
     const modsDir = path.join(rootDir, "data", "mods");
     await fsp.mkdir(path.join(modsDir, "VisibleMod"), { recursive: true });
@@ -173,6 +268,10 @@ async function main() {
       Name: "Visible Mod",
       UniqueID: "Example.Visible",
       Version: "1.0.0",
+    }));
+    await fsp.writeFile(path.join(modsDir, "VisibleMod", "config.json"), JSON.stringify({
+      Enabled: true,
+      Count: 2,
     }));
     await fsp.mkdir(path.join(modsDir, ".installing-leftover"), { recursive: true });
     await fsp.writeFile(path.join(modsDir, ".installing-leftover", "manifest.json"), JSON.stringify({
@@ -182,6 +281,37 @@ async function main() {
     }));
     const listed = await service.getModManagement();
     assert.deepEqual(listed.installed.map((mod) => mod.directoryName), ["VisibleMod"]);
+    assert.equal(listed.installed[0].hasConfig, true);
+    assert.equal(listed.installed[0].configSizeBytes > 0, true);
+
+    const config = await service.readModConfig({ directoryName: "VisibleMod" });
+    assert.equal(config.directoryName, "VisibleMod");
+    assert.match(config.text, /"Enabled":true|"Enabled": true/);
+    await assert.rejects(
+      () => service.saveModConfig({ directoryName: "../evil", text: "{}" }),
+      /目录名无效/,
+    );
+    await assert.rejects(
+      () => service.saveModConfig({ directoryName: "VisibleMod", text: "{bad json" }),
+      /not valid JSON/,
+    );
+    const savedConfig = await service.saveModConfig({
+      directoryName: "VisibleMod",
+      text: '{"Enabled":false,"Nested":{"Value":3}}',
+    });
+    assert.equal(savedConfig.restartRequired, true);
+    assert.match(savedConfig.backupName, /^VisibleMod\.config-\d{8}T\d{6}Z/);
+    assert.match(savedConfig.text, /"Enabled": false/);
+    assert.equal(await pathExists(path.join(rootDir, "backups", "mod-configs", savedConfig.backupName)), true);
+    assert.match(await fsp.readFile(path.join(modsDir, "VisibleMod", "config.json"), "utf8"), /"Value": 3/);
+
+    if (process.platform !== "win32") {
+      await fsp.symlink(rootDir, path.join(modsDir, "LinkedMod"), "dir");
+      await assert.rejects(
+        () => service.readModConfig({ directoryName: "LinkedMod" }),
+        /symbolic link/,
+      );
+    }
 
     const deleteResult = await service.deleteInstalledMod({ directoryName: "VisibleMod" });
     assert.equal(deleteResult.deleted, "VisibleMod");
@@ -211,10 +341,10 @@ async function main() {
     });
     const uploadResult = await uploadService.installModFromUpload({
       fileName: "uploaded.zip",
-      buffer: Buffer.from("PK\u0003\u0004"),
+      buffer: createZip([{ name: "UploadedMod/manifest.json", data: "{}" }]),
     });
     assert.equal(uploadResult.installedCount, 1);
-    assert.equal(uploadResult.bytes, 4);
+    assert.equal(uploadResult.bytes > 22, true);
     assert.equal(uploadResult.installed[0].directoryName, "Uploaded Mod");
     assert.equal(await pathExists(path.join(modsDir, "Uploaded Mod", "manifest.json")), true);
 
@@ -235,7 +365,7 @@ async function main() {
     });
     const jsoncUploadResult = await jsoncService.installModFromUpload({
       fileName: "jsonc.zip",
-      buffer: Buffer.from("PK\u0003\u0004"),
+      buffer: createZip([{ name: "JsoncMod/manifest.json", data: "{}" }]),
     });
     assert.equal(jsoncUploadResult.installed[0].directoryName, "Jsonc Mod");
 

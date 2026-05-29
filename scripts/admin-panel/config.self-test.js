@@ -82,6 +82,14 @@ async function main() {
       /上传请求格式无效/,
     );
 
+    const oversizedReq = (async function* () {
+      yield Buffer.alloc(8);
+    })();
+    oversizedReq.destroy = () => {};
+    await assert.rejects(
+      () => __test.readRequestBuffer(oversizedReq, { maxBytes: 4 }),
+      /请求体过大|too large/i,
+    );
     await fsp.mkdir(path.dirname(settingsFile), { recursive: true });
     await fsp.writeFile(envFile, [
       "GAME_PORT=\"24642\"",
@@ -90,9 +98,29 @@ async function main() {
       "API_PORT=\"8080\"",
       "SERVER_PASSWORD=\"old-password\"",
       "NEXUS_API_KEY=\"old-key\"",
+      "ADMIN_TOKEN=\"test-token\"",
       "UNKNOWN=\"kept\"",
       "",
     ].join("\n"));
+
+    const authorizedReq = { url: "/api/status?token=test-token", headers: { cookie: "sdv_admin_token=test-token" } };
+    assert.equal(await __test.isAuthorized(authorizedReq), true);
+    const headerReq = { url: "/api/status", headers: { "x-admin-token": "test-token" } };
+    assert.equal(await __test.isAuthorized(headerReq), true);
+    const queryOnlyReq = { url: "/api/status?token=test-token", headers: {} };
+    assert.equal(await __test.isAuthorized(queryOnlyReq), false);
+    assert.equal(__test.isLoopbackAdminHost("127.0.0.1"), true);
+    assert.equal(__test.isLoopbackAdminHost("localhost"), true);
+    assert.equal(__test.adminHostRequiresPublicHttpOptIn("0.0.0.0"), true);
+    assert.equal(__test.adminHostRequiresPublicHttpOptIn("192.168.1.50"), true);
+    assert.doesNotThrow(() => __test.assertAdminBindAllowed("127.0.0.1", {}));
+    assert.throws(
+      () => __test.assertAdminBindAllowed("0.0.0.0", {}),
+      /Refusing to run the admin panel over plain HTTP/,
+    );
+    assert.doesNotThrow(() => __test.assertAdminBindAllowed("0.0.0.0", { ADMIN_ALLOW_PUBLIC_HTTP: "true" }));
+    assert.match(__test.restoreBackupScript("saves-20260529-120000.tar.gz"), /tar -tzvf/);
+    assert.match(__test.restoreBackupScript("saves-20260529-120000.tar.gz"), /unsupported special file entries/);
 
     const beforeEnv = await readText(envFile);
     await assert.rejects(

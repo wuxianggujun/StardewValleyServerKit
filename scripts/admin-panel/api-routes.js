@@ -1,5 +1,56 @@
 "use strict";
 
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function firstHeaderValue(value) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return String(raw || "").split(",")[0].trim();
+}
+
+function effectiveRequestHost(req) {
+  return firstHeaderValue(req.headers["x-forwarded-host"]) || String(req.headers.host || "").trim();
+}
+
+function effectiveRequestProto(req) {
+  return firstHeaderValue(req.headers["x-forwarded-proto"]) ||
+    (req.socket?.encrypted ? "https" : "http");
+}
+
+function isHttpsRequest(req) {
+  return effectiveRequestProto(req).toLowerCase() === "https";
+}
+
+function adminCookieHeader(req, name, value, options = {}) {
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "SameSite=Lax",
+    "HttpOnly",
+  ];
+  if (options.maxAge != null) parts.push(`Max-Age=${options.maxAge}`);
+  if (isHttpsRequest(req)) parts.push("Secure");
+  return parts.join("; ");
+}
+
+function isSafeMutationRequest(req) {
+  if (!UNSAFE_METHODS.has(req.method)) return true;
+
+  const origin = String(req.headers.origin || "").trim();
+  if (origin) {
+    try {
+      const parsedOrigin = new URL(origin);
+      const host = effectiveRequestHost(req);
+      const proto = effectiveRequestProto(req).toLowerCase();
+      return parsedOrigin.host === host && parsedOrigin.protocol === `${proto}:`;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  const fetchSite = String(req.headers["sec-fetch-site"] || "").toLowerCase();
+  return !fetchSite || fetchSite === "same-origin" || fetchSite === "none";
+}
+
 function createApiHandler(deps) {
   const {
     ADMIN_COOKIE,
@@ -28,6 +79,8 @@ function createApiHandler(deps) {
     installModFromUpload,
     installModFromNexusFile,
     deleteInstalledMod,
+    readModConfig,
+    saveModConfig,
     selectSave,
     createNewGame,
     repairSaveCabins,
@@ -42,13 +95,18 @@ function createApiHandler(deps) {
   } = deps;
 
   return async function handleApi(req, res, pathname) {
+  if (!isSafeMutationRequest(req)) {
+    json(res, 403, { error: "Cross-origin admin request blocked." });
+    return;
+  }
+
   if (pathname === "/api/auth" && req.method === "POST") {
     const body = await readJsonBody(req);
     const env = await readEnv();
     const token = typeof body.token === "string" ? body.token.trim() : "";
     if (token && token === env.ADMIN_TOKEN) {
       res.writeHead(204, {
-        "Set-Cookie": `${ADMIN_COOKIE}=${encodeURIComponent(token)}; Path=/; SameSite=Lax; HttpOnly`,
+        "Set-Cookie": adminCookieHeader(req, ADMIN_COOKIE, token),
         "Cache-Control": "no-store",
       });
       res.end();
@@ -60,7 +118,7 @@ function createApiHandler(deps) {
 
   if (pathname === "/api/logout" && req.method === "POST") {
     res.writeHead(204, {
-      "Set-Cookie": `${ADMIN_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0`,
+      "Set-Cookie": adminCookieHeader(req, ADMIN_COOKIE, "", { maxAge: 0 }),
       "Cache-Control": "no-store",
     });
     res.end();
@@ -153,6 +211,15 @@ function createApiHandler(deps) {
     json(res, 200, await deleteInstalledMod(await readJsonBody(req)));
     return;
   }
+  if (pathname === "/api/mods/config" && req.method === "GET") {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    json(res, 200, await readModConfig({ directoryName: url.searchParams.get("directoryName") || "" }));
+    return;
+  }
+  if (pathname === "/api/mods/config" && req.method === "POST") {
+    json(res, 200, await saveModConfig(await readJsonBody(req)));
+    return;
+  }
   if (pathname === "/api/saves/select" && req.method === "POST") {
     json(res, 200, await selectSave(await readJsonBody(req)));
     return;
@@ -205,4 +272,11 @@ function createApiHandler(deps) {
   };
 }
 
-module.exports = { createApiHandler };
+module.exports = {
+  createApiHandler,
+  __test: {
+    adminCookieHeader,
+    isSafeMutationRequest,
+    isHttpsRequest,
+  },
+};

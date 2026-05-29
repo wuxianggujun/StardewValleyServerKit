@@ -16,6 +16,63 @@
 
 本项目不分发 Stardew Valley 游戏文件，也不绕过正版校验。使用者必须拥有正版游戏。
 
+## 支持范围
+
+当前版本 **只正式支持 Docker / Docker Compose 部署**。
+
+Windows、Linux 和 macOS 脚本都是围绕 Docker Compose 封装的运维入口；Web 管理面板里的
+启动、停服、重启、日志、备份、存档、Mod 和 VNC 辅助功能也依赖 Docker 容器与 Docker
+volume。项目暂不提供裸机 / 无 Docker 部署流程，也不承诺原生部署下的功能完整性。
+
+如果你是高级用户，仍然可以参考 JunimoServer、SMAPI 和 SteamCMD 的上游文档自行实验原生部署；
+但本仓库的 README、脚本、故障排查和自动化测试都以 Docker 部署为支持边界。
+
+## 功能总览
+
+从当前源码看，本项目主要提供这些能力：
+
+- 一键初始化和开服：Windows 入口是 `setup.ps1`，Linux / macOS 入口是
+  `scripts/sdv-server.sh`。脚本会生成 `.env`、初始化 `data/settings` 和
+  `data/mods`、生成 VNC / API / 管理令牌、拉取镜像、下载游戏文件并启动服务端。
+- Docker 无头服务编排：`docker-compose.yml` 编排 `server`、`steam-auth` 和可选
+  `discord-bot`，并持久化 Steam 会话、游戏文件、存档、设置和 SMAPI Mod。
+- Steam 下载双链路：优先通过 `steam-auth` 登录和下载；遇到 manifest `403`、
+  SteamClient 连接异常等情况时，可自动或手动切换到 SteamCMD 备用流程，并补齐
+  Steamworks SDK。
+- Web 管理面板：`scripts/admin-panel.js` 提供本地 HTTP 管理面板，使用
+  `ADMIN_TOKEN` 登录，包含概览、玩家、存档、模组、配置、日志等页面，并支持
+  简体中文 / English 运行时切换。
+- 运行状态管理：管理面板和脚本可启动、停止、重启、更新服务端，查看容器健康状态、
+  端口映射、资源占用、最近日志、邀请码、局域网候选 IP 和加入信息。
+- 安全停服：面板的“停服释放资源”会执行 `docker compose down`，保留 Docker
+  volumes、存档、配置和备份；在线玩家存在时会结合最近 `SaveGame.Save` 记录提示
+  立即停服、等待下一次保存后自动停服，或由管理员强制确认。
+- 开服配置管理：面板可写入 `.env` 和 `data/settings/server-settings.json`，
+  管理人数、端口、IP 直连、进服密码、API Key、管理员 Steam64 ID、Nexus API Key、
+  小屋策略、钱包模式和详细日志等运行配置。
+- 存档管理：面板可列出当前 saves volume 里的可加载存档，设置下次加载的存档，
+  创建新地图，编辑存档基础字段，删除单个存档，创建 / 恢复 / 删除备份，并配置自动备份
+  间隔和保留数量。
+- 小屋与角色修复：创建新地图或修复存档时，源码会按目标小屋数量补建小屋、清理小屋
+  落点障碍、修正小屋引用和农场角色 `UniqueMultiplayerID`，执行前会自动备份。
+- 玩家管理：面板通过 JunimoServer HTTP API 读取在线玩家、农场角色和登录验证状态，
+  可授予管理员、删除离线农场角色。当前服务端镜像没有 HTTP 踢出 / 封禁接口，所以面板
+  明确标记这些操作不可用。
+- Mod 管理：`data/mods/` 会挂载到容器 `/data/Mods`。面板可读取已安装 Mod 的
+  `manifest.json`，搜索 SMAPI 兼容列表，读取 Nexus 文件分组，从 Nexus / URL /
+  本地 zip 安装 Mod，删除 Mod，并编辑 `config.json`。
+- Mod 安装安全保护：后端只接受 HTTPS 下载，限制来源主机和文件大小，校验 zip 魔数，
+  拒绝符号链接，覆盖安装或删除前会把旧 Mod 移到 `backups/mods/`，修改配置前会备份到
+  `backups/mod-configs/`。
+- VNC / noVNC 辅助：Windows 脚本提供 noVNC 地址和原生 VNC 代理；跨平台脚本提供
+  输入检查、交互参数修复、分辨率恢复，以及 `host-auto` / `host-visibility`
+  两个 JunimoServer 主机托管命令。
+- 自动化自检：仓库包含管理面板语法检查、自测脚本、Mod 服务自测、授权自测和 noVNC
+  探针脚本；测试矩阵和长稳验证流程放在 `docs/` 目录。
+- 安全边界：源码会对日志中的 Steam 账号、密码、token、VNC 密码、API Key、
+  管理令牌和服务器密码做脱敏；`.env` 是本地私密配置，不应提交到 Git，也不建议把
+  `ADMIN_PORT` 直接暴露到公网。
+
 ## 快速开始
 
 ### Windows
@@ -63,7 +120,10 @@ Windows：
 .\setup.ps1 backup
 .\setup.ps1 join-info
 .\setup.ps1 admin
+.\setup.ps1 admin-public
 .\setup.ps1 admin-token-rotate
+.\setup.ps1 vnc-url
+.\setup.ps1 vnc-proxy
 .\setup.ps1 vnc-check
 .\setup.ps1 vnc-fix
 .\setup.ps1 vnc-resize
@@ -110,7 +170,11 @@ Linux / macOS：
 ./scripts/sdv-server.sh backup
 ./scripts/sdv-server.sh join-info
 ./scripts/sdv-server.sh admin
+./scripts/sdv-server.sh admin-public
 ./scripts/sdv-server.sh admin-service-install
+./scripts/sdv-server.sh admin-service-start
+./scripts/sdv-server.sh admin-service-stop
+./scripts/sdv-server.sh admin-service-restart
 ./scripts/sdv-server.sh admin-service-status
 ./scripts/sdv-server.sh admin-service-logs
 ./scripts/sdv-server.sh admin-token-rotate
@@ -177,10 +241,17 @@ sudo ./scripts/sdv-server.sh admin-service-logs
 systemd 模式默认监听 `127.0.0.1:8088`，再在 1Panel 里把
 `sdv.example.com` 反向代理到 `http://127.0.0.1:8088`。HTTPS 证书配置在
 1Panel 网站层，反代目标仍然使用 HTTP。首次启动会在 `.env` 中生成
-`ADMIN_TOKEN`，终端或 systemd 日志也会打印一次。管理面板可以查看
+`ADMIN_TOKEN`，面板登录时从 `.env` 复制该值；终端和 systemd 日志不会打印完整令牌。管理面板可以查看
 容器健康状态、加入地址、在线玩家名称、最近日志，保存农场地图、人数、小屋数量、
 端口、进服密码、管理员 Steam64 ID 等配置，管理当前 saves volume 里的存档和备份，
 并对玩家执行授予管理员、删除离线农场角色等操作。
+
+面板右上角可以切换简体中文 / English。前端文案集中在
+`scripts/admin-panel/i18n.js`，新增语言时按现有 key 补齐一份字典即可。
+
+安全默认值会拒绝把 Web 管理面板以明文 HTTP 直接监听到公网地址。推荐保持
+`ADMIN_HOST=127.0.0.1`，由 1Panel 或其他 HTTPS 反向代理访问。如果只在可信内网
+临时直连 `0.0.0.0`，需要显式设置 `ADMIN_ALLOW_PUBLIC_HTTP=true`。
 
 首次执行 `setup` 结束后，脚本会询问是否立即启动 Web 管理面板。选择 `y`
 会保持当前终端用于运行面板；跳过后也可以随时执行上面的 `admin` 命令再打开。
@@ -280,6 +351,7 @@ Web 管理面板建议通过 1Panel 站点反向代理访问，不直接开放 `
 - `API_KEY`：HTTP API 密钥。
 - `ADMIN_TOKEN`：Web 管理面板令牌。
 - `ADMIN_HOST` / `ADMIN_PORT`：Web 管理面板监听地址和端口。
+- `ADMIN_ALLOW_PUBLIC_HTTP`：是否允许管理面板明文 HTTP 监听非本机地址。默认关闭；公网建议走 HTTPS 反向代理。
 - `SERVER_PASSWORD`：玩家进服后的登录密码，留空表示关闭。
 - `GAME_PORT` / `QUERY_PORT`：游戏连接和查询端口。
 - `AUTO_BACKUP_ENABLED`：是否由 Web 管理面板定时导出 saves volume 备份。
@@ -310,6 +382,9 @@ Web 管理面板的“模组”页会读取 `manifest.json`，显示已安装 Mo
 下载 URL 后，面板会在后端下载、校验并安装到 `data/mods/`。覆盖安装同名 Mod 时，旧目录会先移动到
 `backups/mods/`。当前页面不会把 Steam Workshop 伪装成安装源；Stardew Valley 的主流 SMAPI Mod
 通常通过 Nexus Mods、作者页面或社区发布页分发。
+
+如果 Mod 已经生成 `config.json`，模组列表会显示“配置”按钮。面板会校验 JSON，保存前把旧配置备份到
+`backups/mod-configs/`，保存后需要重启服务端才会让 SMAPI 和 Mod 重新读取配置。
 
 建议一次只新增一个 Mod，并按照 [测试计划](docs/TEST_PLAN.md) 进行过夜、节日、地震和重启验证。
 
@@ -351,13 +426,32 @@ StardewValleyServerKit/
 ├── .env.example
 ├── setup.ps1
 ├── scripts/
+│   ├── admin-panel.js
+│   ├── vnc-proxy.js
 │   ├── sdv-server.ps1
-│   └── sdv-server.sh
+│   ├── sdv-server.sh
+│   └── admin-panel/
+│       ├── api-routes.js
+│       ├── i18n.js
+│       ├── mods.js
+│       ├── page.js
+│       ├── players.js
+│       ├── save-repair.js
+│       └── utils.js
 ├── docs/
+│   ├── AUTOMATED_TESTING.md
 │   ├── TEST_PLAN.md
 │   ├── OPERATIONS.md
+│   ├── STEAM_DOWNLOAD_FALLBACK.md
 │   ├── TROUBLESHOOTING.md
 │   └── assets/donation/
+├── data/
+│   ├── mods/
+│   └── settings/
+├── backups/
+├── logs/
+├── SECURITY.md
+├── CONTRIBUTING.md
 └── LICENSE
 ```
 

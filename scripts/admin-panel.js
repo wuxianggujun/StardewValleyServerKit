@@ -54,6 +54,9 @@ const NEW_GAME_SAVE_WAIT_TIMEOUT_MS = 120000;
 const NEW_GAME_SAVE_WAIT_POLL_MS = 3000;
 const JSON_BODY_MAX_BYTES = 1024 * 1024;
 const MOD_UPLOAD_BODY_MAX_BYTES = 110 * 1024 * 1024;
+const CHILD_OUTPUT_MAX_BYTES = 1024 * 1024;
+const CHILD_KILL_AFTER_TIMEOUT_MS = 5000;
+const INTERNAL_API_RESPONSE_MAX_BYTES = 1024 * 1024;
 const DEFAULT_AUTO_BACKUP_ENABLED = false;
 const DEFAULT_AUTO_BACKUP_INTERVAL_MINUTES = 360;
 const DEFAULT_BACKUP_RETENTION = 10;
@@ -61,6 +64,7 @@ const MIN_AUTO_BACKUP_INTERVAL_MINUTES = 15;
 const MAX_AUTO_BACKUP_INTERVAL_MINUTES = 10080;
 const MIN_BACKUP_RETENTION = 1;
 const MAX_BACKUP_RETENTION = 100;
+const ADMIN_ALLOW_PUBLIC_HTTP_KEY = "ADMIN_ALLOW_PUBLIC_HTTP";
 let pendingStopAfterSave = null;
 let autoBackupTimer = null;
 let autoBackupState = {
@@ -306,6 +310,8 @@ function commandExists(command) {
 
 function run(command, args, options = {}) {
   const timeoutMs = options.timeoutMs || 15000;
+  const maxOutputBytes = options.maxOutputBytes || CHILD_OUTPUT_MAX_BYTES;
+  const killAfterTimeoutMs = options.killAfterTimeoutMs || CHILD_KILL_AFTER_TIMEOUT_MS;
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: ROOT_DIR,
@@ -313,24 +319,74 @@ function run(command, args, options = {}) {
       windowsHide: true,
       shell: false,
     });
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let settled = false;
+    let timedOut = false;
+    let killTimer = null;
+
+    function pushOutput(chunks, chunk, state) {
+      if (state.bytes >= maxOutputBytes) {
+        state.truncated = true;
+        return state;
+      }
+      const remaining = maxOutputBytes - state.bytes;
+      if (chunk.length > remaining) {
+        chunks.push(chunk.subarray(0, remaining));
+        return { bytes: maxOutputBytes, truncated: true };
+      }
+      chunks.push(chunk);
+      return { bytes: state.bytes + chunk.length, truncated: state.truncated };
+    }
+
+    function outputText(chunks, truncated) {
+      const text = Buffer.concat(chunks).toString();
+      return truncated ? `${text}\n[output truncated]\n` : text;
+    }
+
+    function finish(result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      const stdout = outputText(stdoutChunks, stdoutTruncated);
+      let stderr = outputText(stderrChunks, stderrTruncated);
+      if (timedOut) {
+        stderr += `\nCommand timed out after ${timeoutMs} ms.\n`;
+      }
+      resolve({ ...result, stdout, stderr });
+    }
+
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+      }, killAfterTimeoutMs);
+      if (typeof killTimer.unref === "function") killTimer.unref();
     }, timeoutMs);
+    if (typeof timer.unref === "function") timer.unref();
+
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      const next = pushOutput(stdoutChunks, chunk, { bytes: stdoutBytes, truncated: stdoutTruncated });
+      stdoutBytes = next.bytes;
+      stdoutTruncated = next.truncated;
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      const next = pushOutput(stderrChunks, chunk, { bytes: stderrBytes, truncated: stderrTruncated });
+      stderrBytes = next.bytes;
+      stderrTruncated = next.truncated;
     });
     child.on("error", (error) => {
-      clearTimeout(timer);
-      resolve({ ok: false, code: -1, stdout, stderr: error.message });
+      stderrChunks.push(Buffer.from(error.message));
+      finish({ ok: false, code: -1 });
     });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ ok: code === 0, code, stdout, stderr });
+    child.on("close", (code, signal) => {
+      finish({ ok: !timedOut && code === 0, code: code ?? -1, signal });
     });
   });
 }
@@ -394,24 +450,58 @@ function parseCookies(req) {
   for (const part of header.split(";")) {
     const index = part.indexOf("=");
     if (index === -1) continue;
-    cookies[part.slice(0, index).trim()] = decodeURIComponent(part.slice(index + 1).trim());
+    try {
+      cookies[part.slice(0, index).trim()] = decodeURIComponent(part.slice(index + 1).trim());
+    } catch (_) {}
   }
   return cookies;
+}
+
+function normalizeAdminHost(host) {
+  return String(host || "").trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
+}
+
+function isLoopbackAdminHost(host) {
+  const normalized = normalizeAdminHost(host);
+  return normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "::ffff:127.0.0.1" ||
+    normalized.startsWith("127.");
+}
+
+function adminHostRequiresPublicHttpOptIn(host) {
+  const normalized = normalizeAdminHost(host);
+  return Boolean(normalized) && !isLoopbackAdminHost(normalized);
+}
+
+function isPublicHttpAdminAllowed(env = {}) {
+  return bool(env[ADMIN_ALLOW_PUBLIC_HTTP_KEY] || process.env[ADMIN_ALLOW_PUBLIC_HTTP_KEY]);
+}
+
+function assertAdminBindAllowed(host, env = {}) {
+  if (!adminHostRequiresPublicHttpOptIn(host) || isPublicHttpAdminAllowed(env)) return;
+  throw new Error(
+    `Refusing to run the admin panel over plain HTTP on public bind address ${host}. ` +
+    "Use ADMIN_HOST=127.0.0.1 behind an HTTPS reverse proxy, or set " +
+    `${ADMIN_ALLOW_PUBLIC_HTTP_KEY}=true only on a trusted private network.`,
+  );
 }
 
 async function isAuthorized(req) {
   const env = await readEnv();
   const expected = env.ADMIN_TOKEN || "";
   if (!expected) return false;
-  const url = new URL(req.url, "http://127.0.0.1");
   const token =
     req.headers["x-admin-token"] ||
-    url.searchParams.get("token") ||
     parseCookies(req)[ADMIN_COOKIE] ||
     "";
   const actual = Array.isArray(token) ? token[0] : token;
   if (!actual || actual.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+}
+
+function requestTooLargeError() {
+  return apiError(413, "请求体过大。");
 }
 
 async function readJsonBody(req, options = {}) {
@@ -421,7 +511,7 @@ async function readJsonBody(req, options = {}) {
   for await (const chunk of req) {
     totalBytes += chunk.length;
     if (totalBytes > maxBytes) {
-      const error = apiError(413, "请求体过大。");
+      const error = requestTooLargeError();
       req.destroy(error);
       throw error;
     }
@@ -438,7 +528,7 @@ async function readRequestBuffer(req, options = {}) {
   for await (const chunk of req) {
     totalBytes += chunk.length;
     if (totalBytes > maxBytes) {
-      const error = apiError(413, "请求体过大。");
+      const error = requestTooLargeError();
       req.destroy(error);
       throw error;
     }
@@ -564,8 +654,16 @@ async function serverApiRequest(method, pathname, body, options = {}) {
       },
       (res) => {
         let body = "";
+        let responseBytes = 0;
+        const responseMaxBytes = options.responseMaxBytes || INTERNAL_API_RESPONSE_MAX_BYTES;
         res.setEncoding("utf8");
         res.on("data", (chunk) => {
+          responseBytes += Buffer.byteLength(chunk);
+          if (responseBytes > responseMaxBytes) {
+            req.destroy(new Error("HTTP API response is too large."));
+            res.destroy();
+            return;
+          }
           body += chunk;
         });
         res.on("end", () => {
@@ -1984,6 +2082,33 @@ async function createSavesBackup(note = "Created from admin panel.", options = {
   };
 }
 
+function restoreBackupScript(archive) {
+  return `set -eu
+tar -tzf /backup/${archive} > /tmp/archive-files
+if grep -Eq '(^/|(^|/)\\.\\.(/|$))' /tmp/archive-files; then
+  echo 'Backup archive contains unsafe paths.'
+  exit 1
+fi
+tar -tzvf /backup/${archive} > /tmp/archive-entries
+if awk '{ type = substr($1, 1, 1); if (type != "-" && type != "d") bad = 1 } END { exit bad }' /tmp/archive-entries; then
+  :
+else
+  echo 'Backup archive contains unsupported special file entries.'
+  exit 1
+fi
+rm -rf /restore-check
+mkdir -p /restore-check
+tar -xzf /backup/${archive} -C /restore-check
+cd /restore-check
+if find . \\( -type l -o -type p -o -type b -o -type c -o -type s \\) -print -quit | grep -q .; then
+  echo 'Backup archive contains unsupported special file entries.'
+  exit 1
+fi
+find /saves -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+cp -a /restore-check/. /saves/
+chown -R 1000:1000 /saves 2>/dev/null || true`;
+}
+
 async function restoreBackup(payload) {
   const archive = validateBackupArchive(payload.archive);
 
@@ -1998,15 +2123,7 @@ async function restoreBackup(payload) {
     throw new Error(await sanitize(down.stderr || down.stdout || "docker compose down failed"));
   }
 
-  const script = `set -eu
-tar -tzf /backup/${archive} > /tmp/archive-files
-if grep -Eq '(^/|(^|/)\\.\\.(/|$))' /tmp/archive-files; then
-  echo 'Backup archive contains unsafe paths.'
-  exit 1
-fi
-find /saves -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-tar -xzf /backup/${archive} -C /saves
-chown -R 1000:1000 /saves 2>/dev/null || true`;
+  const script = restoreBackupScript(archive);
 
   try {
     const restore = await docker(
@@ -2176,6 +2293,8 @@ const handleApi = createApiHandler({
   installModFromUpload: modService.installModFromUpload,
   installModFromNexusFile: modService.installModFromNexusFile,
   deleteInstalledMod: modService.deleteInstalledMod,
+  readModConfig: modService.readModConfig,
+  saveModConfig: modService.saveModConfig,
   selectSave,
   createNewGame,
   repairSaveCabins,
@@ -2198,6 +2317,7 @@ async function main() {
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error("ADMIN_PORT must be between 1 and 65535.");
   }
+  assertAdminBindAllowed(host, env);
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -2234,7 +2354,11 @@ async function main() {
     } else {
       console.log(`Admin panel: http://${host}:${port}`);
     }
-    console.log(`ADMIN_TOKEN: ${freshEnv.ADMIN_TOKEN}`);
+    if (freshEnv.ADMIN_TOKEN) {
+      console.log("ADMIN_TOKEN is configured. Enter the token from .env on the login page; it is not printed to logs.");
+    } else {
+      console.log("ADMIN_TOKEN is missing. Login is disabled until .env contains ADMIN_TOKEN.");
+    }
     if (process.env.INVOCATION_ID || process.env.JOURNAL_STREAM) {
       console.log("Admin panel is running under systemd.");
     } else {
@@ -2255,12 +2379,21 @@ module.exports = {
     parseEnv,
     patchEnvText,
     parseMultipartUpload,
+    readJsonBody,
+    readRequestBuffer,
     uploadPayloadFromJson,
+    isAuthorized,
     runtimeEnvValues,
     saveConfig,
     applySaveMaintenanceSettings,
     getConfig,
     readEnv,
     readSettings,
+    normalizeAdminHost,
+    isLoopbackAdminHost,
+    adminHostRequiresPublicHttpOptIn,
+    isPublicHttpAdminAllowed,
+    assertAdminBindAllowed,
+    restoreBackupScript,
   },
 };

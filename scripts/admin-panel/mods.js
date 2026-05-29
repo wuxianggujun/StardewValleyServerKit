@@ -5,6 +5,7 @@ const fsp = require("node:fs/promises");
 const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const SMAPI_MODS_URL = "https://smapi.io/mods";
 const NEXUS_API_BASE = "https://api.nexusmods.com/v1";
@@ -18,6 +19,12 @@ const SMAPI_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SMAPI_FETCH_MAX_BYTES = 30 * 1024 * 1024;
 const MOD_DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024;
 const MOD_DOWNLOAD_TIMEOUT_MS = 60000;
+const MOD_CONFIG_MAX_BYTES = 1024 * 1024;
+const ZIP_MAX_ENTRIES = 2000;
+const ZIP_MAX_DEPTH = 16;
+const ZIP_MAX_UNCOMPRESSED_BYTES = 300 * 1024 * 1024;
+const ZIP_CENTRAL_DIRECTORY_MAX_BYTES = 8 * 1024 * 1024;
+const ZIP_EOCD_MAX_SEARCH_BYTES = 22 + 0xffff;
 const MAX_REDIRECTS = 5;
 const DOWNLOAD_HOSTS = [
   "nexusmods.com",
@@ -450,6 +457,7 @@ async function listInstalledMods(state) {
     const modDir = path.join(state.modsDir, directoryName);
     const manifest = await readModManifest(modDir);
     const stat = await fsp.stat(modDir);
+    const config = await configFileStat(path.join(modDir, "config.json"));
 
     mods.push({
       directoryName,
@@ -463,6 +471,9 @@ async function listInstalledMods(state) {
       updateKeys: normalizeUpdateKeys(manifest?.UpdateKeys),
       hasManifest: Boolean(manifest && !manifest.parseError),
       manifestError: manifest?.parseError || "",
+      hasConfig: config.exists,
+      configSizeBytes: config.sizeBytes,
+      configUpdatedAt: config.updatedAt,
       updatedAt: stat.mtime.toISOString(),
     });
   }
@@ -749,8 +760,44 @@ function resolveInstalledModDirectory(state, directoryName) {
   return { name, target };
 }
 
+async function resolveExistingInstalledModDirectory(state, directoryName) {
+  const resolved = resolveInstalledModDirectory(state, directoryName);
+  const rootReal = await fsp.realpath(state.modsDir);
+  const stat = await fsp.lstat(resolved.target).catch((error) => {
+    if (error.code === "ENOENT") {
+      throw new Error(`Mod directory does not exist: ${resolved.name}`);
+    }
+    throw error;
+  });
+  if (stat.isSymbolicLink()) {
+    throw new Error("Mod directory must not be a symbolic link.");
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`Mod target is not a directory: ${resolved.name}`);
+  }
+  const targetReal = await fsp.realpath(resolved.target);
+  assertInsideRoot(rootReal, targetReal, "Mod directory must stay inside data/mods.");
+  return resolved;
+}
+
 function formatBackupTimestamp() {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z");
+}
+
+function tempFileFor(filePath) {
+  const suffix = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  return path.join(path.dirname(filePath), `.${path.basename(filePath)}.${suffix}.tmp`);
+}
+
+async function writeTextAtomic(filePath, text) {
+  await fsp.mkdir(path.dirname(filePath), { recursive: true });
+  const tempFile = tempFileFor(filePath);
+  try {
+    await fsp.writeFile(tempFile, text, "utf8");
+    await fsp.rename(tempFile, filePath);
+  } finally {
+    await fsp.rm(tempFile, { force: true }).catch(() => {});
+  }
 }
 
 async function existingPath(pathname) {
@@ -780,6 +827,83 @@ async function backupExistingTarget(state, target, directoryName) {
   throw new Error("无法为已有模组目录生成备份名称。");
 }
 
+async function configFileStat(configPath) {
+  try {
+    const stat = await fsp.stat(configPath);
+    if (!stat.isFile()) {
+      return { exists: false, sizeBytes: 0, updatedAt: "" };
+    }
+    return {
+      exists: true,
+      sizeBytes: stat.size,
+      updatedAt: stat.mtime.toISOString(),
+    };
+  } catch (error) {
+    if (error.code === "ENOENT") return { exists: false, sizeBytes: 0, updatedAt: "" };
+    throw error;
+  }
+}
+
+function resolveInstalledModConfigPath(state, directoryName) {
+  const resolved = resolveInstalledModDirectory(state, directoryName);
+  return {
+    ...resolved,
+    configPath: path.join(resolved.target, "config.json"),
+  };
+}
+
+async function resolveExistingInstalledModConfigPath(state, directoryName) {
+  const resolved = await resolveExistingInstalledModDirectory(state, directoryName);
+  return {
+    ...resolved,
+    configPath: path.join(resolved.target, "config.json"),
+  };
+}
+
+async function assertRegularConfigFile(configPath, directoryName) {
+  const stat = await fsp.lstat(configPath).catch((error) => {
+    if (error.code === "ENOENT") {
+      throw new Error(`Mod ${directoryName} does not have config.json yet. Start the server once so the mod can generate it.`);
+    }
+    throw error;
+  });
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error("config.json must be a regular file directly inside the mod directory.");
+  }
+  if (stat.size > MOD_CONFIG_MAX_BYTES) {
+    throw new Error("config.json is larger than 1 MB. Edit it on the server manually.");
+  }
+  return stat;
+}
+
+function normalizeModConfigText(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(stripBom(String(text || "")));
+  } catch (error) {
+    throw new Error(`config.json is not valid JSON: ${error.message}`);
+  }
+  return `${JSON.stringify(parsed, null, 2)}\n`;
+}
+
+async function backupExistingConfig(state, configPath, directoryName) {
+  if (!(await existingPath(configPath))) return "";
+
+  await fsp.mkdir(state.modConfigBackupDir, { recursive: true });
+  const timestamp = formatBackupTimestamp();
+  const safeName = safeDirectoryName(directoryName, "mod");
+  for (let index = 0; index < 100; index += 1) {
+    const suffix = index ? `-${index}` : "";
+    const backupName = `${safeName}.config-${timestamp}${suffix}.json`;
+    const backupPath = path.join(state.modConfigBackupDir, backupName);
+    if (await existingPath(backupPath)) continue;
+    await fsp.copyFile(configPath, backupPath);
+    return backupName;
+  }
+
+  throw new Error("Could not create a backup name for the mod config.");
+}
+
 async function assertZipMagic(zipPath) {
   const handle = await fsp.open(zipPath, "r");
   try {
@@ -788,6 +912,124 @@ async function assertZipMagic(zipPath) {
     if (bytesRead < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) {
       throw new Error("下载文件不是有效的 zip 压缩包。");
     }
+  } finally {
+    await handle.close();
+  }
+}
+
+function zipModeFromExternalAttributes(externalAttributes) {
+  return (externalAttributes >>> 16) & 0xffff;
+}
+
+function assertSafeZipEntryName(name) {
+  const normalized = String(name || "").replace(/\\/g, "/");
+  if (!normalized || normalized.includes("\0")) {
+    throw new Error("Zip archive contains an invalid entry name.");
+  }
+  if (normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) {
+    throw new Error("Zip archive contains an absolute path.");
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.includes("..")) {
+    throw new Error("Zip archive contains a path traversal entry.");
+  }
+  if (parts.length > ZIP_MAX_DEPTH) {
+    throw new Error("Zip archive contains entries nested too deeply.");
+  }
+}
+
+async function inspectZipArchive(zipPath) {
+  const stat = await fsp.stat(zipPath);
+  if (stat.size < 22) {
+    throw new Error("Zip archive is too small to be valid.");
+  }
+  const tailLength = Math.min(stat.size, ZIP_EOCD_MAX_SEARCH_BYTES);
+  const handle = await fsp.open(zipPath, "r");
+  try {
+    const tail = Buffer.alloc(tailLength);
+    await handle.read(tail, 0, tailLength, stat.size - tailLength);
+
+    let eocdOffset = -1;
+    for (let index = tail.length - 22; index >= 0; index -= 1) {
+      if (tail.readUInt32LE(index) === 0x06054b50) {
+        eocdOffset = index;
+        break;
+      }
+    }
+    if (eocdOffset === -1) {
+      throw new Error("Zip archive central directory was not found.");
+    }
+
+    const diskNumber = tail.readUInt16LE(eocdOffset + 4);
+    const centralDirectoryDisk = tail.readUInt16LE(eocdOffset + 6);
+    const entriesOnDisk = tail.readUInt16LE(eocdOffset + 8);
+    const totalEntries = tail.readUInt16LE(eocdOffset + 10);
+    const centralDirectorySize = tail.readUInt32LE(eocdOffset + 12);
+    const centralDirectoryOffset = tail.readUInt32LE(eocdOffset + 16);
+    if (diskNumber !== 0 || centralDirectoryDisk !== 0 || entriesOnDisk !== totalEntries) {
+      throw new Error("Multi-disk zip archives are not supported.");
+    }
+    if (
+      totalEntries === 0xffff ||
+      centralDirectorySize === 0xffffffff ||
+      centralDirectoryOffset === 0xffffffff
+    ) {
+      throw new Error("Zip64 mod archives are not supported by the web installer.");
+    }
+    if (totalEntries > ZIP_MAX_ENTRIES) {
+      throw new Error(`Zip archive contains too many entries: ${totalEntries}.`);
+    }
+    if (centralDirectorySize > ZIP_CENTRAL_DIRECTORY_MAX_BYTES) {
+      throw new Error("Zip central directory is too large.");
+    }
+    if (centralDirectoryOffset + centralDirectorySize > stat.size) {
+      throw new Error("Zip central directory points outside the archive.");
+    }
+
+    const centralDirectory = Buffer.alloc(centralDirectorySize);
+    await handle.read(centralDirectory, 0, centralDirectorySize, centralDirectoryOffset);
+    let offset = 0;
+    let uncompressedBytes = 0;
+    for (let index = 0; index < totalEntries; index += 1) {
+      if (offset + 46 > centralDirectory.length || centralDirectory.readUInt32LE(offset) !== 0x02014b50) {
+        throw new Error("Zip central directory is malformed.");
+      }
+
+      const compressedSize = centralDirectory.readUInt32LE(offset + 20);
+      const uncompressedSize = centralDirectory.readUInt32LE(offset + 24);
+      const fileNameLength = centralDirectory.readUInt16LE(offset + 28);
+      const extraLength = centralDirectory.readUInt16LE(offset + 30);
+      const commentLength = centralDirectory.readUInt16LE(offset + 32);
+      const entryDisk = centralDirectory.readUInt16LE(offset + 34);
+      const externalAttributes = centralDirectory.readUInt32LE(offset + 38);
+      const nameStart = offset + 46;
+      const nextOffset = nameStart + fileNameLength + extraLength + commentLength;
+      if (nextOffset > centralDirectory.length) {
+        throw new Error("Zip central directory entry is truncated.");
+      }
+      if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff) {
+        throw new Error("Zip64 mod archives are not supported by the web installer.");
+      }
+      if (entryDisk !== 0) {
+        throw new Error("Multi-disk zip archives are not supported.");
+      }
+
+      const entryName = centralDirectory.slice(nameStart, nameStart + fileNameLength).toString("utf8");
+      assertSafeZipEntryName(entryName);
+      const mode = zipModeFromExternalAttributes(externalAttributes);
+      if ((mode & 0o170000) === 0o120000) {
+        throw new Error("Zip archive contains symbolic links.");
+      }
+      if (!entryName.endsWith("/")) {
+        uncompressedBytes += uncompressedSize;
+        if (uncompressedBytes > ZIP_MAX_UNCOMPRESSED_BYTES) {
+          throw new Error("Zip archive expands beyond the 300 MB safety limit.");
+        }
+      }
+      offset = nextOffset;
+    }
+
+    return { entries: totalEntries, uncompressedBytes };
   } finally {
     await handle.close();
   }
@@ -908,6 +1150,7 @@ async function installModArchive(state, options) {
   try {
     await ensureModsDir(state);
     await assertZipMagic(zipPath);
+    await inspectZipArchive(zipPath);
     await unzipArchive(state, tempDir);
 
     const manifests = await findManifestFiles(extractDir);
@@ -1016,7 +1259,7 @@ async function installModFromUpload(state, payload) {
 
 async function deleteInstalledMod(state, payload) {
   await ensureModsDir(state);
-  const { name, target } = resolveInstalledModDirectory(state, payload?.directoryName);
+  const { name, target } = await resolveExistingInstalledModDirectory(state, payload?.directoryName);
   const stat = await fsp.stat(target).catch((error) => {
     if (error.code === "ENOENT") throw new Error(`模组目录不存在：${name}`);
     throw error;
@@ -1032,6 +1275,40 @@ async function deleteInstalledMod(state, payload) {
     restartRequired: true,
     message: `已删除模组 ${name}，删除前备份：${backupName}，重启服务端后生效。`,
     allInstalled: await listInstalledMods(state),
+  };
+}
+
+async function readModConfig(state, payload) {
+  await ensureModsDir(state);
+  const { name, configPath } = await resolveExistingInstalledModConfigPath(state, payload?.directoryName);
+  const stat = await assertRegularConfigFile(configPath, name);
+  const text = await fsp.readFile(configPath, "utf8");
+  return {
+    directoryName: name,
+    fileName: "config.json",
+    text,
+    sizeBytes: stat.size,
+    updatedAt: stat.mtime.toISOString(),
+  };
+}
+
+async function saveModConfig(state, payload) {
+  await ensureModsDir(state);
+  const { name, configPath } = await resolveExistingInstalledModConfigPath(state, payload?.directoryName);
+  await assertRegularConfigFile(configPath, name);
+  const text = normalizeModConfigText(payload?.text);
+  const backupName = await backupExistingConfig(state, configPath, name);
+  await writeTextAtomic(configPath, text);
+  const stat = await fsp.stat(configPath);
+  return {
+    directoryName: name,
+    fileName: "config.json",
+    text,
+    backupName,
+    sizeBytes: stat.size,
+    updatedAt: stat.mtime.toISOString(),
+    restartRequired: true,
+    message: "Mod config saved. Restart the server for changes to take effect.",
   };
 }
 
@@ -1066,6 +1343,7 @@ function createModService(options) {
     rootDir,
     modsDir: path.join(rootDir, "data", "mods"),
     modBackupDir: path.join(rootDir, "backups", "mods"),
+    modConfigBackupDir: path.join(rootDir, "backups", "mod-configs"),
     dockerCommand: options.docker || null,
     readEnvValue: options.readEnv || (async () => ({})),
     nexusRequestJson: options.nexusRequestJson || requestJson,
@@ -1088,6 +1366,8 @@ function createModService(options) {
     installModFromUpload: (payload) => installModFromUpload(state, payload),
     installModFromNexusFile: (payload) => installModFromNexusFile(state, payload),
     deleteInstalledMod: (payload) => deleteInstalledMod(state, payload),
+    readModConfig: (payload) => readModConfig(state, payload),
+    saveModConfig: (payload) => saveModConfig(state, payload),
   };
 }
 
@@ -1101,12 +1381,15 @@ module.exports = {
     isAllowedDownloadHost,
     shouldSkipModDirectory,
     assertInsideRoot,
+    assertSafeZipEntryName,
+    inspectZipArchive,
     stripJsonComments,
     uploadedArchiveFromPayload,
     nexusFileGroup,
     nexusRetryDelayMs,
     normalizeNexusFile,
     normalizeNexusApiError,
+    normalizeModConfigText,
     parseRetryAfterMs,
     pickRecommendedNexusFile,
   },
