@@ -273,6 +273,15 @@ async function main() {
       Enabled: true,
       Count: 2,
     }));
+    await fsp.mkdir(path.join(modsDir, "smapi", "NestedMod"), { recursive: true });
+    await fsp.writeFile(path.join(modsDir, "smapi", "NestedMod", "manifest.json"), JSON.stringify({
+      Name: "Nested Mod",
+      UniqueID: "Example.Nested",
+      Version: "1.0.0",
+    }));
+    await fsp.writeFile(path.join(modsDir, "smapi", "NestedMod", "config.json"), JSON.stringify({
+      Enabled: true,
+    }));
     await fsp.mkdir(path.join(modsDir, ".installing-leftover"), { recursive: true });
     await fsp.writeFile(path.join(modsDir, ".installing-leftover", "manifest.json"), JSON.stringify({
       Name: "Staging Mod",
@@ -280,13 +289,16 @@ async function main() {
       Version: "1.0.0",
     }));
     const listed = await service.getModManagement();
-    assert.deepEqual(listed.installed.map((mod) => mod.directoryName), ["VisibleMod"]);
-    assert.equal(listed.installed[0].hasConfig, true);
-    assert.equal(listed.installed[0].configSizeBytes > 0, true);
+    assert.deepEqual(listed.installed.map((mod) => mod.directoryName), ["smapi/NestedMod", "VisibleMod"]);
+    assert.equal(listed.installed.every((mod) => mod.hasConfig), true);
+    assert.equal(listed.installed.every((mod) => mod.configSizeBytes > 0), true);
 
     const config = await service.readModConfig({ directoryName: "VisibleMod" });
     assert.equal(config.directoryName, "VisibleMod");
     assert.match(config.text, /"Enabled":true|"Enabled": true/);
+    const nestedConfig = await service.readModConfig({ directoryName: "smapi/NestedMod" });
+    assert.equal(nestedConfig.directoryName, "smapi/NestedMod");
+    assert.match(nestedConfig.text, /"Enabled":true|"Enabled": true/);
     await assert.rejects(
       () => service.saveModConfig({ directoryName: "../evil", text: "{}" }),
       /目录名无效/,
@@ -304,6 +316,13 @@ async function main() {
     assert.match(savedConfig.text, /"Enabled": false/);
     assert.equal(await pathExists(path.join(rootDir, "backups", "mod-configs", savedConfig.backupName)), true);
     assert.match(await fsp.readFile(path.join(modsDir, "VisibleMod", "config.json"), "utf8"), /"Value": 3/);
+    const savedNestedConfig = await service.saveModConfig({
+      directoryName: "smapi/NestedMod",
+      text: '{"Enabled":false}',
+    });
+    assert.equal(savedNestedConfig.directoryName, "smapi/NestedMod");
+    assert.match(savedNestedConfig.backupName, /^smapi_NestedMod\.config-\d{8}T\d{6}Z/);
+    assert.match(await fsp.readFile(path.join(modsDir, "smapi", "NestedMod", "config.json"), "utf8"), /"Enabled": false/);
 
     if (process.platform !== "win32") {
       await fsp.symlink(rootDir, path.join(modsDir, "LinkedMod"), "dir");

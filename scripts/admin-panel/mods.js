@@ -442,19 +442,69 @@ async function readModManifest(modDir) {
 }
 
 function shouldSkipModDirectory(directoryName) {
-  return String(directoryName || "").startsWith(".");
+  const name = String(directoryName || "");
+  return name.startsWith(".") || name === "__MACOSX";
+}
+
+function modRelativePath(rootDir, targetDir) {
+  const relative = path.relative(path.resolve(rootDir), path.resolve(targetDir)).replace(/\\/g, "/");
+  return relative === "." ? "" : relative;
+}
+
+function normalizeInstalledModDirectoryName(value) {
+  const normalized = String(value || "").trim().replace(/\\/g, "/");
+  if (
+    !normalized ||
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:/.test(normalized) ||
+    normalized.includes("\0") ||
+    normalized.includes("//")
+  ) {
+    throw new Error("模组目录名无效。");
+  }
+
+  const parts = normalized.split("/");
+  if (parts.length > 20 || parts.some((part) => !part || part === "." || part === "..")) {
+    throw new Error("模组目录名无效。");
+  }
+  return parts.join("/");
+}
+
+async function findInstalledModDirectories(state) {
+  const root = path.resolve(state.modsDir);
+  const mods = [];
+  const stack = [{ dir: root, depth: 0 }];
+
+  while (stack.length) {
+    const { dir, depth } = stack.pop();
+    if (depth > 20) continue;
+
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    if (entries.some((entry) => entry.isFile() && entry.name.toLowerCase() === "manifest.json")) {
+      const directoryName = modRelativePath(root, dir);
+      if (directoryName) mods.push({ directoryName, modDir: dir });
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || shouldSkipModDirectory(entry.name)) continue;
+      stack.push({ dir: path.join(dir, entry.name), depth: depth + 1 });
+    }
+
+    if (mods.length > 500) {
+      throw new Error("data/mods 下识别到的 Mod 过多，请清理后再刷新。");
+    }
+  }
+
+  return mods;
 }
 
 async function listInstalledMods(state) {
   await fsp.mkdir(state.modsDir, { recursive: true });
-  const entries = await fsp.readdir(state.modsDir, { withFileTypes: true });
+  const entries = await findInstalledModDirectories(state);
   const mods = [];
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const directoryName = entry.name;
-    if (shouldSkipModDirectory(directoryName)) continue;
-    const modDir = path.join(state.modsDir, directoryName);
+    const { directoryName, modDir } = entry;
     const manifest = await readModManifest(modDir);
     const stat = await fsp.stat(modDir);
     const config = await configFileStat(path.join(modDir, "config.json"));
@@ -478,7 +528,10 @@ async function listInstalledMods(state) {
     });
   }
 
-  mods.sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN"));
+  mods.sort((a, b) => (
+    a.name.localeCompare(b.name, "zh-Hans-CN") ||
+    a.directoryName.localeCompare(b.directoryName, "zh-Hans-CN")
+  ));
   return mods;
 }
 
@@ -747,12 +800,9 @@ function safeDirectoryName(value, fallback) {
 }
 
 function resolveInstalledModDirectory(state, directoryName) {
-  const name = String(directoryName || "").trim();
-  if (!name || name !== path.basename(name) || name.includes("/") || name.includes("\\")) {
-    throw new Error("模组目录名无效。");
-  }
+  const name = normalizeInstalledModDirectoryName(directoryName);
   const root = path.resolve(state.modsDir);
-  const target = path.resolve(root, name);
+  const target = path.resolve(root, ...name.split("/"));
   const relative = path.relative(root, target);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("模组目录必须位于 data/mods 下。");
@@ -815,9 +865,10 @@ async function backupExistingTarget(state, target, directoryName) {
 
   await fsp.mkdir(state.modBackupDir, { recursive: true });
   const timestamp = formatBackupTimestamp();
+  const safeName = safeDirectoryName(directoryName, "mod");
   for (let index = 0; index < 100; index += 1) {
     const suffix = index ? `-${index}` : "";
-    const backupName = `${directoryName}.bak-${timestamp}${suffix}`;
+    const backupName = `${safeName}.bak-${timestamp}${suffix}`;
     const backupPath = path.join(state.modBackupDir, backupName);
     if (await existingPath(backupPath)) continue;
     await fsp.rename(target, backupPath);
