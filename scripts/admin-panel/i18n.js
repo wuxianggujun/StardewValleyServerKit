@@ -6,6 +6,7 @@ const I18N = {
     "language.zhCN": "简体中文",
     "language.en": "English",
     "app.subtitle": "管理面板，配置保存后通常需要重启服务端。",
+    "app.githubProject": "GitHub 项目",
 
     "action.startServer": "启动服务端",
     "action.stopServer": "停服释放资源",
@@ -416,6 +417,7 @@ const I18N = {
     "language.zhCN": "简体中文",
     "language.en": "English",
     "app.subtitle": "Admin panel. Changes usually require a server restart.",
+    "app.githubProject": "GitHub project",
 
     "action.startServer": "Start server",
     "action.stopServer": "Stop and free resources",
