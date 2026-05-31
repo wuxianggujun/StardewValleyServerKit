@@ -16,7 +16,7 @@ services:
     tty: true
     ports:
       - "${VNC_PORT:-5800}:5800"
-      - "${API_PORT:-8080}:8080"
+      - "${API_PORT:-8080}:${API_PORT:-8080}"
       - "${GAME_PORT:-24642}:24642/udp"
       - "${QUERY_PORT:-27015}:27015/udp"
     cap_add:
@@ -78,7 +78,7 @@ services:
       - discord
     environment:
       DISCORD_BOT_TOKEN: "${DISCORD_BOT_TOKEN:-}"
-      API_URL: "http://server:8080"
+      API_URL: "http://server:${API_PORT:-8080}"
       UPDATE_INTERVAL_MS: "${DISCORD_UPDATE_INTERVAL_MS:-30000}"
       DISCORD_BOT_NICKNAME: "${DISCORD_BOT_NICKNAME:-}"
       DISCORD_CHAT_CHANNEL_ID: "${DISCORD_CHAT_CHANNEL_ID:-}"

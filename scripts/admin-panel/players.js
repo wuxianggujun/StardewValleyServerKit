@@ -67,6 +67,7 @@ function buildPlayerManagement(apiPlayers, apiFarmhands, apiAuth, recentPlayers 
     farmhands,
     farmhandSource,
     farmhandSourceSave: farmhandSource === "save" ? (options.fallbackSaveName || "") : "",
+    apiDiagnostic: options.apiDiagnostic || null,
     recentPlayers,
     auth: normalizeAuthStatus(apiAuth),
     capabilities: {
@@ -91,7 +92,20 @@ function hasFarmhandList(response) {
   return Array.isArray(response?.farmhands) && response.farmhands.length > 0;
 }
 
-function createPlayerService({ serverApiJson, serverApiRequest, apiError, readFallbackFarmhands }) {
+function createPlayerService({ serverApiJson, serverApiRequest, apiError, readFallbackFarmhands, readApiDiagnostic }) {
+  async function serverApiRequestWithDiagnostic(method, pathname) {
+    try {
+      return await serverApiRequest(method, pathname);
+    } catch (error) {
+      const shouldExplainApiState = error?.status === 401 || error?.status === 503;
+      if (shouldExplainApiState && readApiDiagnostic) {
+        const diagnostic = await readApiDiagnostic().catch(() => null);
+        if (diagnostic?.message) throw apiError(error.status, diagnostic.message);
+      }
+      throw error;
+    }
+  }
+
   return {
     async getPlayerManagement(recentPlayers = []) {
       const [apiPlayers, apiFarmhands, apiAuth] = await Promise.all([
@@ -102,15 +116,19 @@ function createPlayerService({ serverApiJson, serverApiRequest, apiError, readFa
       const fallback = !hasFarmhandList(apiFarmhands) && readFallbackFarmhands
         ? await readFallbackFarmhands().catch(() => null)
         : null;
+      const apiDiagnostic = !(apiPlayers || apiFarmhands || apiAuth) && readApiDiagnostic
+        ? await readApiDiagnostic().catch(() => null)
+        : null;
       return buildPlayerManagement(apiPlayers, apiFarmhands, apiAuth, recentPlayers, {
         fallbackFarmhands: fallback?.farmhands || [],
         fallbackSaveName: fallback?.saveName || "",
+        apiDiagnostic,
       });
     },
 
     async grantAdminRole(payload) {
       const name = validatePlayerName(payload.name);
-      const response = await serverApiRequest("POST", `/roles/admin?name=${encodeURIComponent(name)}`);
+      const response = await serverApiRequestWithDiagnostic("POST", `/roles/admin?name=${encodeURIComponent(name)}`);
       const result = ensureApiSuccess(response, "Grant admin", apiError);
       return {
         name,
@@ -121,7 +139,7 @@ function createPlayerService({ serverApiJson, serverApiRequest, apiError, readFa
 
     async deleteFarmhand(payload) {
       const name = validatePlayerName(payload.name);
-      const response = await serverApiRequest("DELETE", `/farmhands?name=${encodeURIComponent(name)}`);
+      const response = await serverApiRequestWithDiagnostic("DELETE", `/farmhands?name=${encodeURIComponent(name)}`);
       const result = ensureApiSuccess(response, "Delete farmhand", apiError);
       return {
         name,

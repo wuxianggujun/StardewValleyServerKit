@@ -68,6 +68,7 @@ function createApiHandler(deps) {
     getConfig,
     saveConfig,
     restartStack,
+    repairServerApi,
     startStack,
     requestStopStack,
     cancelStopAfterSaveJob,
@@ -165,6 +166,10 @@ function createApiHandler(deps) {
   }
   if (pathname === "/api/restart" && req.method === "POST") {
     json(res, 200, await restartStack());
+    return;
+  }
+  if (pathname === "/api/server-api/repair" && req.method === "POST") {
+    json(res, 200, await repairServerApi());
     return;
   }
   if (pathname === "/api/start" && req.method === "POST") {

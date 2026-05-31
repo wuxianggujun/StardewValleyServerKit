@@ -666,6 +666,7 @@ const PAGE = String.raw`<!doctype html>
             <h2 data-i18n="players.title"></h2>
             <div class="toolbar">
               <button id="refreshPlayersBtn" type="button" data-i18n="players.refresh"></button>
+              <button id="repairServerApiBtn" type="button" data-i18n="players.repairApi"></button>
             </div>
           </div>
           <div class="notice" data-i18n="players.notice"></div>
@@ -1054,6 +1055,7 @@ const PAGE = String.raw`<!doctype html>
     const cancelInstallModBtn = document.querySelector("#cancelInstallModBtn");
     const cancelInstallModLocalBtn = document.querySelector("#cancelInstallModLocalBtn");
     const playersMessage = document.querySelector("#playersMessage");
+    const repairServerApiBtn = document.querySelector("#repairServerApiBtn");
     const onlinePlayersList = document.querySelector("#onlinePlayersList");
     const farmhandsList = document.querySelector("#farmhandsList");
     const playerManagerPanel = document.querySelector("#playerManagerPanel");
@@ -1757,10 +1759,11 @@ const PAGE = String.raw`<!doctype html>
       latestPlayerManagement = data;
       const unsupported = data.unsupportedMessage || t("players.unsupported");
       const hasSaveFallback = data.farmhandSource === "save" && data.farmhands?.length;
+      const diagnosticMessage = data.apiDiagnostic?.message || "";
       const apiHint = hasSaveFallback
-        ? t("players.apiDisconnectedFarmhandsFallback", {
+        ? ((diagnosticMessage ? diagnosticMessage + " " : "") + t("players.apiDisconnectedFarmhandsFallback", {
             saveName: data.farmhandSourceSave || t("saves.unknown"),
-          })
+          }))
         : (data.apiAvailable
           ? (data.auth?.enabled
             ? t("players.apiProtected", {
@@ -1768,7 +1771,7 @@ const PAGE = String.raw`<!doctype html>
                 pending: data.auth.pendingCount,
               })
             : t("players.apiConnected"))
-          : t("players.apiDisconnected"));
+          : (diagnosticMessage || t("players.apiDisconnected")));
       setMessage(playersMessage, apiHint, hasSaveFallback ? "warn" : (data.apiAvailable ? "ok" : "bad"));
 
       if (data.onlinePlayers?.length) {
@@ -2524,6 +2527,21 @@ const PAGE = String.raw`<!doctype html>
         await reloadPlayerManagement();
       } catch (error) {
         setMessage(playersMessage, error.message, "bad");
+      }
+    });
+
+    repairServerApiBtn.addEventListener("click", async () => {
+      if (!confirm(t("players.confirmRepairApi"))) return;
+      repairServerApiBtn.disabled = true;
+      setMessage(playersMessage, t("players.repairingApi"));
+      try {
+        const result = await request("/api/server-api/repair", { method: "POST" });
+        await reloadPlayerManagement();
+        setMessage(playersMessage, preferServerMessage(result.message, t("players.repairedApi")), "ok");
+      } catch (error) {
+        setMessage(playersMessage, error.message, "bad");
+      } finally {
+        repairServerApiBtn.disabled = false;
       }
     });
 

@@ -738,7 +738,160 @@ const playerService = createPlayerService({
   serverApiRequest,
   apiError,
   readFallbackFarmhands: readFarmhandsFromLatestSave,
+  readApiDiagnostic: getServerApiDiagnostic,
 });
+
+function apiPortFromEnv(env) {
+  const port = Number(env.API_PORT || 8080);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+}
+
+async function serverApiProbe(pathname, options = {}) {
+  const env = await readEnv();
+  const port = apiPortFromEnv(env);
+  if (!port) {
+    return { ok: false, statusCode: 0, error: "HTTP API 端口无效。" };
+  }
+
+  const headers = {};
+  if (options.auth !== false && env.API_KEY) {
+    headers.Authorization = `Bearer ${env.API_KEY}`;
+  }
+
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: pathname,
+        method: "GET",
+        headers,
+        timeout: 2500,
+      },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          if (body.length < 4096) body += chunk;
+        });
+        res.on("end", () => {
+          const statusCode = res.statusCode || 0;
+          let parsed = null;
+          if (body) {
+            try {
+              parsed = JSON.parse(body);
+            } catch (_) {}
+          }
+          resolve({
+            ok: statusCode >= 200 && statusCode < 300,
+            statusCode,
+            error: parsed?.error || parsed?.message || (statusCode ? `HTTP ${statusCode}` : ""),
+          });
+        });
+      },
+    );
+    req.on("timeout", () => req.destroy(new Error("API request timed out.")));
+    req.on("error", (error) => resolve({ ok: false, statusCode: 0, error: error.message || String(error) }));
+    req.end();
+  });
+}
+
+function dockerEnvObject(envJson) {
+  try {
+    const items = JSON.parse(envJson || "[]");
+    return Object.fromEntries((Array.isArray(items) ? items : [])
+      .map((item) => {
+        const index = String(item).indexOf("=");
+        return index === -1 ? [String(item), ""] : [String(item).slice(0, index), String(item).slice(index + 1)];
+      }));
+  } catch (_) {
+    return {};
+  }
+}
+
+async function inspectServerApiRuntimeEnv(projectEnv) {
+  const result = await docker(
+    ["inspect", "-f", "{{.State.Running}}\t{{json .Config.Env}}", "sdv-server"],
+    { timeoutMs: 8000 },
+  );
+  if (!result.ok) {
+    return {
+      exists: false,
+      running: false,
+      error: await sanitize(result.stderr || result.stdout || "sdv-server 容器不存在。"),
+    };
+  }
+  const [runningText, envJson = "[]"] = result.stdout.trim().split("\t");
+  const containerEnv = dockerEnvObject(envJson);
+  return {
+    exists: true,
+    running: runningText === "true",
+    apiEnabled: containerEnv.API_ENABLED || "",
+    apiPort: containerEnv.API_PORT || "",
+    apiKeySet: Boolean(containerEnv.API_KEY),
+    apiKeyMatches: String(containerEnv.API_KEY || "") === String(projectEnv.API_KEY || ""),
+    apiPortMatches: String(containerEnv.API_PORT || "8080") === String(projectEnv.API_PORT || "8080"),
+    apiEnabledMatches: String(containerEnv.API_ENABLED || "true") === String(projectEnv.API_ENABLED || "true"),
+  };
+}
+
+function apiDiagnosticMessage(env, runtime, healthProbe, statusProbe) {
+  if (env.API_ENABLED === "false") {
+    return "HTTP API 在 .env 中被关闭：API_ENABLED=false。";
+  }
+  if (!apiPortFromEnv(env)) {
+    return "HTTP API 端口无效，请在配置页保存 1-65535 范围内的 API_PORT。";
+  }
+  if (!env.API_KEY) {
+    return "HTTP API_KEY 为空；面板会自动补齐，但需要重启游戏服务端让容器读取新密钥。";
+  }
+  if (!runtime.exists) {
+    return `sdv-server 容器不存在或无法检查：${runtime.error || "docker inspect 失败"}`;
+  }
+  if (!runtime.running) {
+    return "sdv-server 容器没有运行，请先启动游戏服务端。";
+  }
+  if (runtime.apiEnabled === "false") {
+    return "sdv-server 容器内 API_ENABLED=false；需要用当前 .env 重建游戏容器。";
+  }
+  if (!runtime.apiEnabledMatches || !runtime.apiPortMatches || !runtime.apiKeyMatches) {
+    return "sdv-server 容器内 API 配置与当前 .env 不一致；通常是只重启了 sdv-admin.service，没有重建游戏容器。请重启游戏服务端。";
+  }
+  if (statusProbe.statusCode === 401) {
+    return "HTTP API 已启动，但 API_KEY 授权失败；当前 .env 和运行中容器的密钥不一致，需要重启游戏服务端。";
+  }
+  if (healthProbe.ok && !statusProbe.ok) {
+    return `HTTP API 健康检查可用，但受保护接口失败：${statusProbe.error || "未知错误"}`;
+  }
+  return `无法连接服务端 HTTP API：${healthProbe.error || statusProbe.error || "连接失败"}`;
+}
+
+async function getServerApiDiagnostic() {
+  const env = await readEnv();
+  const runtime = await inspectServerApiRuntimeEnv(env).catch((error) => ({
+    exists: false,
+    running: false,
+    error: error.message || String(error),
+  }));
+  const [healthProbe, statusProbe] = await Promise.all([
+    serverApiProbe("/health", { auth: false }).catch((error) => ({ ok: false, statusCode: 0, error: error.message })),
+    serverApiProbe("/status", { auth: true }).catch((error) => ({ ok: false, statusCode: 0, error: error.message })),
+  ]);
+  return {
+    available: Boolean(statusProbe.ok),
+    message: statusProbe.ok ? "服务端 HTTP API 已连接。" : apiDiagnosticMessage(env, runtime, healthProbe, statusProbe),
+    env: {
+      apiEnabled: env.API_ENABLED !== "false",
+      apiPort: apiPortFromEnv(env) || 0,
+      apiKeySet: Boolean(env.API_KEY),
+    },
+    container: runtime,
+    probes: {
+      health: healthProbe,
+      status: statusProbe,
+    },
+  };
+}
 
 async function savesVolumeExists() {
   const inspect = await docker(["volume", "inspect", SAVES_VOLUME], { timeoutMs: 8000 });
@@ -1361,12 +1514,16 @@ async function getStatus() {
     serverApiJson("/farmhands").catch(() => null),
     serverApiJson("/auth").catch(() => null),
   ]);
+  const apiDiagnostic = !(apiStatus || apiPlayers || apiFarmhands || apiAuth)
+    ? await getServerApiDiagnostic().catch(() => null)
+    : null;
   const fallbackFarmhands = hasFarmhandList(apiFarmhands)
     ? null
     : await readFarmhandsFromLatestSave().catch(() => null);
   const playerManagement = buildPlayerManagement(apiPlayers, apiFarmhands, apiAuth, signals.players, {
     fallbackFarmhands: fallbackFarmhands?.farmhands || [],
     fallbackSaveName: fallbackFarmhands?.saveName || "",
+    apiDiagnostic,
   });
   const shutdownReadiness = buildShutdownReadiness(playerManagement, signals, apiStatus);
   const containers = parseTableLines(ps.stdout).map((line) => {
@@ -1416,6 +1573,7 @@ async function getStatus() {
         }))
       : signals.players,
     playerManagement,
+    serverApi: apiDiagnostic,
     shutdownReadiness,
     shutdownJob: getStopAfterSaveJob(),
     recentSignals: signals.logs.split(/\r?\n/).filter(Boolean).slice(-260),
@@ -1576,6 +1734,40 @@ async function restartStack() {
     restartVerified: true,
     previousStackState,
     stackState,
+  };
+}
+
+async function repairServerApi() {
+  const env = await readEnv();
+  const patches = {};
+  if (env.API_ENABLED === "false") patches.API_ENABLED = "true";
+  if (!env.API_KEY) patches.API_KEY = newSecret(32);
+  if (!apiPortFromEnv(env)) patches.API_PORT = "8080";
+  if (Object.keys(patches).length) await setEnvValues(patches);
+
+  const before = await getServerApiDiagnostic().catch(() => null);
+  if (before?.available) {
+    return {
+      repaired: false,
+      restarted: false,
+      message: "服务端 HTTP API 已可用，无需修复。",
+      before,
+      after: before,
+    };
+  }
+
+  const restart = await restartStack();
+  const after = await getServerApiDiagnostic();
+  if (!after.available) {
+    throw apiError(503, after.message || "HTTP API 修复后仍不可用。");
+  }
+  return {
+    repaired: true,
+    restarted: true,
+    message: "已修复 HTTP API 配置并重启游戏服务端。",
+    before,
+    after,
+    restart,
   };
 }
 
@@ -2391,6 +2583,7 @@ const handleApi = createApiHandler({
   getConfig,
   saveConfig,
   restartStack,
+  repairServerApi,
   startStack,
   requestStopStack,
   cancelStopAfterSaveJob,

@@ -27,6 +27,29 @@ async function main() {
   assert.match(writes[0].headers["Set-Cookie"], /SameSite=Lax/);
   assert.match(writes[0].headers["Set-Cookie"], /HttpOnly/);
   assert.doesNotMatch(writes[0].headers["Set-Cookie"], /Secure/);
+
+  let repairCalled = false;
+  const repairResponses = [];
+  const repairHandler = createApiHandler({
+    ADMIN_COOKIE: "sdv_admin_token",
+    readJsonBody: async () => ({}),
+    readEnv: async () => ({}),
+    isAuthorized: async () => true,
+    json: (_res, status, body) => repairResponses.push({ status, body }),
+    repairServerApi: async () => {
+      repairCalled = true;
+      return { repaired: true, restarted: true };
+    },
+  });
+  await repairHandler({
+    method: "POST",
+    url: "/api/server-api/repair",
+    headers: { host: "example.com", origin: "http://example.com" },
+    socket: {},
+  }, {}, "/api/server-api/repair");
+  assert.equal(repairCalled, true);
+  assert.deepEqual(repairResponses[0], { status: 200, body: { repaired: true, restarted: true } });
+
   assert.match(
     apiTest.adminCookieHeader({
       headers: { host: "example.com", "x-forwarded-proto": "https" },

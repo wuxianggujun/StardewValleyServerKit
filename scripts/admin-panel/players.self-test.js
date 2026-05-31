@@ -57,6 +57,33 @@ async function main() {
   assert.equal(fromService.farmhandSource, "save");
   assert.equal(fromService.farmhands[0].name, "Alice");
 
+  let diagnosticCalls = 0;
+  const diagnosticService = createPlayerService({
+    serverApiJson: async () => null,
+    serverApiRequest: async () => {
+      const error = new Error("Cannot connect");
+      error.status = 503;
+      throw error;
+    },
+    apiError: (status, message) => {
+      const error = new Error(message);
+      error.status = status;
+      return error;
+    },
+    readFallbackFarmhands: async () => null,
+    readApiDiagnostic: async () => {
+      diagnosticCalls += 1;
+      return { message: "API runtime config does not match .env." };
+    },
+  });
+  const diagnosed = await diagnosticService.getPlayerManagement();
+  assert.equal(diagnosed.apiDiagnostic.message, "API runtime config does not match .env.");
+  await assert.rejects(
+    () => diagnosticService.deleteFarmhand({ name: "Alice" }),
+    /API runtime config does not match \.env\./,
+  );
+  assert.equal(diagnosticCalls, 2);
+
   console.log("players.self-test ok");
 }
 
