@@ -4,8 +4,7 @@ services:
   init-game-mods:
     image: busybox:1.36
     user: "0:0"
-    entrypoint: ["sh", "-lc"]
-    command: "mkdir -p /data/game/Mods && touch /data/game/Mods/SVSK_PLACEHOLDER.txt"
+    entrypoint: ["sh", "-c", "mkdir -p /data/game/Mods && touch /data/game/Mods/SVSK_PLACEHOLDER.txt"]
     volumes:
       - game-data:/data/game
     restart: "no"
