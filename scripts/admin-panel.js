@@ -416,6 +416,25 @@ async function compose(args, options = {}) {
   return docker(["compose", "--env-file", ENV_FILE, ...args], options);
 }
 
+async function ensureGameModsDirectory() {
+  const script = "mkdir -p /data/game/Mods && touch /data/game/Mods/SVSK_PLACEHOLDER.txt";
+  const env = await readEnv();
+  const image = `sdvd/server:${env.IMAGE_VERSION || "preview"}`;
+  const result = await docker(
+    ["run", "--rm", "--entrypoint", "sh", "-v", "stardew-valley-server-kit_game-data:/data/game", image, "-lc", script],
+    { timeoutMs: 120000 },
+  );
+  if (!result.ok) {
+    throw new Error(await sanitize(result.stderr || result.stdout || "failed to prepare /data/game/Mods"));
+  }
+  return result;
+}
+
+async function composeUpDetached(options = {}) {
+  await ensureGameModsDirectory();
+  return compose(["up", "-d"], options);
+}
+
 async function sanitize(text) {
   const env = await readEnv();
   let next = stripAnsi(text || "");
@@ -986,7 +1005,7 @@ async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAt
       );
     }
 
-    const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+    const up = await composeUpDetached({ timeoutMs: 120000 });
     if (!up.ok) {
       throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
     }
@@ -1007,7 +1026,7 @@ async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAt
       steps,
     };
   } catch (error) {
-    await compose(["up", "-d"], { timeoutMs: 120000 }).catch(() => {});
+    await composeUpDetached({ timeoutMs: 120000 }).catch(() => {});
     throw error;
   }
 }
@@ -1519,7 +1538,7 @@ async function restartStack() {
   if (!down.ok) {
     throw new Error(await sanitize(down.stderr || down.stdout || "docker compose down failed"));
   }
-  const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+  const up = await composeUpDetached({ timeoutMs: 120000 });
   if (!up.ok) {
     throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
   }
@@ -1534,7 +1553,7 @@ async function restartStack() {
 }
 
 async function startStack() {
-  const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+  const up = await composeUpDetached({ timeoutMs: 120000 });
   if (!up.ok) {
     throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
   }
@@ -1824,7 +1843,7 @@ async function waitForSmapiCommandPipe(timeoutMs = SMAPI_COMMAND_PIPE_TIMEOUT_MS
 async function ensureServerReadyForSmapiCommand() {
   const wasRunning = await isServerContainerRunning();
   if (!wasRunning) {
-    const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+    const up = await composeUpDetached({ timeoutMs: 120000 });
     if (!up.ok) {
       throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
     }
@@ -1903,7 +1922,7 @@ async function createNewGame(payload) {
 
   if (!wasRunning && !hasExistingSaves) {
     const newGameStartedAtMs = Date.now();
-    const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+    const up = await composeUpDetached({ timeoutMs: 120000 });
     if (!up.ok) {
       throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
     }
@@ -1946,7 +1965,7 @@ async function createNewGame(payload) {
   }
   addOperationStep(steps, "已停止服务端", "准备重启并执行官方新建流程。");
   const newGameStartedAtMs = Date.now();
-  const upForCreate = await compose(["up", "-d"], { timeoutMs: 120000 });
+  const upForCreate = await composeUpDetached({ timeoutMs: 120000 });
   if (!upForCreate.ok) {
     throw new Error(await sanitize(upForCreate.stderr || upForCreate.stdout || "docker compose up failed"));
   }
@@ -2004,7 +2023,7 @@ async function repairSaveCabins(payload) {
     const cabinPatch = await patchSaveCabins(saveName, targetCabins);
 
     if (wasRunning) {
-      const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+      const up = await composeUpDetached({ timeoutMs: 120000 });
       if (!up.ok) {
         throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
       }
@@ -2020,7 +2039,7 @@ async function repairSaveCabins(payload) {
     };
   } catch (error) {
     if (wasRunning) {
-      await compose(["up", "-d"], { timeoutMs: 120000 }).catch(() => {});
+      await composeUpDetached({ timeoutMs: 120000 }).catch(() => {});
     }
     throw error;
   }
@@ -2081,7 +2100,7 @@ rm -rf -- "$target"`;
 
     const shouldRestart = wasRunning && remainingSaveCount > 0;
     if (shouldRestart) {
-      const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+      const up = await composeUpDetached({ timeoutMs: 120000 });
       if (!up.ok) {
         throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
       }
@@ -2097,7 +2116,7 @@ rm -rf -- "$target"`;
     };
   } catch (error) {
     if (wasRunning) {
-      await compose(["up", "-d"], { timeoutMs: 120000 }).catch(() => {});
+      await composeUpDetached({ timeoutMs: 120000 }).catch(() => {});
     }
     throw error;
   }
@@ -2197,12 +2216,12 @@ async function restoreBackup(payload) {
       throw new Error(await sanitize(restore.stderr || restore.stdout || "Backup restore failed."));
     }
 
-    const up = await compose(["up", "-d"], { timeoutMs: 120000 });
+    const up = await composeUpDetached({ timeoutMs: 120000 });
     if (!up.ok) {
       throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
     }
   } catch (error) {
-    await compose(["up", "-d"], { timeoutMs: 120000 }).catch(() => {});
+    await composeUpDetached({ timeoutMs: 120000 }).catch(() => {});
     throw error;
   }
 

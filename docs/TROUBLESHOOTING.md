@@ -490,6 +490,18 @@ docker port sdv-server
 - 管理面板“运行状态”长期显示 `sdv-server=restarting / unhealthy`。
 - 发生在安装、升级或修改 Mod 配置并重启之后。
 - 玩家无法加入，邀请代码和当前农场信息可能都是 `n/a`。
+- 日志显示 `cp: cannot stat '/data/game/Mods/*': No such file or directory`。
+
+这里有两个不同的 Mod 路径：
+
+- `data/mods`：宿主机目录，会挂载成容器里的 `/data/Mods`。这是玩家和管理面板使用的
+  SMAPI Mod 目录。
+- `/data/game/Mods`：Docker `game-data` 卷里的游戏安装目录。它不是让你手动放 Mod 的地方，
+  但镜像启动脚本会读取这个路径来应用 SMAPI 运行时覆盖。
+
+如果 `/data/game/Mods` 不存在或完全为空，镜像脚本里的 `cp /data/game/Mods/* ...`
+会因为空 glob 失败，导致 `app` 服务退出。新版管理面板会在每次启动/重启前自动创建
+`/data/game/Mods/SVSK_PLACEHOLDER.txt`，这个普通文本文件会被 SMAPI 忽略。
 
 处理：
 
