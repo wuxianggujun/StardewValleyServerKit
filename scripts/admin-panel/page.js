@@ -2092,7 +2092,10 @@ const PAGE = String.raw`<!doctype html>
       renderServerActions(data);
       const health = document.querySelector("#healthList");
       health.innerHTML = data.health.length ? data.health.map((item) => {
-        const kind = item.health === "healthy" || item.status === "running" ? "ok" : "bad";
+        const hasHealth = item.health && item.health !== "none";
+        const kind = hasHealth
+          ? (item.health === "healthy" ? "ok" : "bad")
+          : (item.status === "running" ? "ok" : "bad");
         return row(item.name, pill((item.status || "unknown") + " / " + (item.health || "none"), kind));
       }).join("") : row("Docker", pill(data.dockerAvailable ? t("overview.dockerStopped") : t("overview.unavailable"), data.dockerAvailable ? "warn" : "bad"));
 

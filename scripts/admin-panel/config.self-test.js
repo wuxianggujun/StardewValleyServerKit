@@ -121,6 +121,29 @@ async function main() {
     assert.doesNotThrow(() => __test.assertAdminBindAllowed("0.0.0.0", { ADMIN_ALLOW_PUBLIC_HTTP: "true" }));
     assert.match(__test.restoreBackupScript("saves-20260529-120000.tar.gz"), /tar -tzvf/);
     assert.match(__test.restoreBackupScript("saves-20260529-120000.tar.gz"), /unsupported special file entries/);
+    assert.equal(__test.containerReady({ status: "running", health: "healthy" }), true);
+    assert.equal(__test.containerReady({ status: "running", health: "none" }), true);
+    assert.equal(__test.containerReady({ status: "running", health: "unhealthy" }), false);
+    assert.equal(__test.containerReady({ status: "restarting", health: "unhealthy" }), false);
+    assert.equal(__test.stackRestartVerified({
+      ok: true,
+      containers: [
+        { name: "sdv-server", status: "running", health: "healthy" },
+        { name: "sdv-steam-auth", status: "running", health: "healthy" },
+      ],
+    }), true);
+    assert.equal(__test.stackRestartVerified({
+      ok: true,
+      containers: [
+        { name: "sdv-server", status: "running", health: "unhealthy" },
+        { name: "sdv-steam-auth", status: "running", health: "healthy" },
+      ],
+    }), false);
+    assert.match(__test.stackStateSummary({
+      ok: true,
+      containers: [{ name: "sdv-server", status: "restarting", health: "unhealthy" }],
+    }), /sdv-server=restarting\/unhealthy/);
+    assert.equal(__test.tailLogText("a\nb\nc\n", 2, 100), "b\nc");
 
     const beforeEnv = await readText(envFile);
     await assert.rejects(

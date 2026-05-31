@@ -483,6 +483,45 @@ docker port sdv-server
 恢复存档会覆盖当前数据，属于高风险操作。当前脚本只提供备份命令，
 不自动恢复，避免误覆盖。
 
+## 安装 Mod 后一直 restarting / unhealthy
+
+现象：
+
+- 管理面板“运行状态”长期显示 `sdv-server=restarting / unhealthy`。
+- 发生在安装、升级或修改 Mod 配置并重启之后。
+- 玩家无法加入，邀请代码和当前农场信息可能都是 `n/a`。
+
+处理：
+
+1. 先查看最近日志，找到第一条 SMAPI 红色异常或依赖缺失提示。
+
+```bash
+cd /opt/stardew/StardewValleyServerKit || exit 1
+docker compose --env-file .env logs --tail 300 --no-color server steam-auth
+```
+
+2. 如果日志指向刚安装的 Mod，把该 Mod 临时移到备份目录，不要删除。
+
+```bash
+stamp="$(date +%Y%m%d-%H%M%S)"
+mkdir -p "backups/mods/manual-quarantine-$stamp"
+mv "data/mods/最近安装的Mod目录名" "backups/mods/manual-quarantine-$stamp/"
+```
+
+3. 重启并等待容器变为 `running / healthy`。
+
+```bash
+docker compose --env-file .env down
+docker compose --env-file .env up -d
+docker compose --env-file .env ps
+```
+
+4. 如果移除后恢复，按该 Mod 页面说明补齐前置依赖，并确认它支持当前
+   Stardew Valley / SMAPI 版本后再安装。
+
+不要反复点击重启。`unless-stopped` 会让崩溃的容器持续重启，重复操作只会覆盖
+最近日志，反而更难定位第一条异常。
+
 ## Mod 依赖缺失
 
 现象：

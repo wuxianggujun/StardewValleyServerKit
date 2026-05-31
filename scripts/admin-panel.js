@@ -64,6 +64,11 @@ const MIN_AUTO_BACKUP_INTERVAL_MINUTES = 15;
 const MAX_AUTO_BACKUP_INTERVAL_MINUTES = 10080;
 const MIN_BACKUP_RETENTION = 1;
 const MAX_BACKUP_RETENTION = 100;
+const STACK_READY_TIMEOUT_MS = positiveIntEnv("SDV_ADMIN_STACK_READY_TIMEOUT_SECONDS", 240) * 1000;
+const STACK_READY_POLL_MS = 3000;
+const STACK_FAILURE_LOG_LINES = 180;
+const STACK_FAILURE_LOG_MAX_CHARS = 7000;
+const STACK_REQUIRED_CONTAINERS = ["sdv-server", "sdv-steam-auth"];
 const ADMIN_ALLOW_PUBLIC_HTTP_KEY = "ADMIN_ALLOW_PUBLIC_HTTP";
 let pendingStopAfterSave = null;
 let autoBackupTimer = null;
@@ -111,6 +116,11 @@ const DEFAULT_SETTINGS = {
 
 function cloneDefaultSettings() {
   return JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+}
+
+function positiveIntEnv(name, fallback) {
+  const parsed = Number.parseInt(process.env[name] || "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function newSecret(bytes = 32) {
@@ -1513,11 +1523,11 @@ async function restartStack() {
   if (!up.ok) {
     throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
   }
-  const stackState = await inspectStackState();
+  const stackState = await waitForStackReady("重启");
   return {
     message: "Server stack restarted.",
     restarted: true,
-    restartVerified: stackRestartVerified(stackState),
+    restartVerified: true,
     previousStackState,
     stackState,
   };
@@ -1528,11 +1538,11 @@ async function startStack() {
   if (!up.ok) {
     throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
   }
-  const stackState = await inspectStackState();
+  const stackState = await waitForStackReady("启动");
   return {
     message: "Server stack started.",
     started: true,
-    startVerified: stackRestartVerified(stackState),
+    startVerified: true,
     stackState,
   };
 }
@@ -1735,8 +1745,61 @@ async function inspectStackState() {
   };
 }
 
+function containerReady(container) {
+  if (!container || container.status !== "running") return false;
+  const health = container.health || "none";
+  return health === "healthy" || health === "none";
+}
+
 function stackRestartVerified(state) {
-  return Boolean(state?.containers?.some((container) => container.name === "sdv-server" && container.status === "running"));
+  if (!state?.ok) return false;
+  const byName = new Map((state.containers || []).map((container) => [container.name, container]));
+  return STACK_REQUIRED_CONTAINERS.every((name) => containerReady(byName.get(name)));
+}
+
+function stackStateSummary(state) {
+  if (!state?.ok) return `容器状态读取失败：${state?.error || "unknown error"}`;
+  if (!state.containers?.length) return "没有找到 sdv-server / sdv-steam-auth 容器";
+  return state.containers
+    .map((container) => `${container.name || "unknown"}=${container.status || "unknown"}/${container.health || "none"}`)
+    .join(", ");
+}
+
+function tailLogText(text, maxLines = STACK_FAILURE_LOG_LINES, maxChars = STACK_FAILURE_LOG_MAX_CHARS) {
+  const lines = stripAnsi(String(text || ""))
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(-maxLines);
+  const tail = lines.join("\n");
+  return tail.length > maxChars ? tail.slice(-maxChars) : tail;
+}
+
+async function stackStartupFailureMessage(action, state) {
+  const parts = [
+    `服务端${action}后没有进入健康状态。`,
+    `当前容器状态：${stackStateSummary(state)}。`,
+    "这通常表示 SMAPI/游戏进程启动失败，常见原因是刚安装的 Mod 不兼容、缺少前置依赖或 Mod 配置错误。",
+  ];
+  const logs = await latestLogs().catch((error) => ({ logs: error.message || String(error) }));
+  const logTail = tailLogText(logs.logs);
+  if (logTail) {
+    parts.push(`最近日志：\n${logTail}`);
+  }
+  return parts.join("\n");
+}
+
+async function waitForStackReady(action, options = {}) {
+  const timeoutMs = options.timeoutMs || STACK_READY_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  let state = await inspectStackState();
+
+  while (Date.now() < deadline) {
+    if (stackRestartVerified(state)) return state;
+    await delay(STACK_READY_POLL_MS);
+    state = await inspectStackState();
+  }
+
+  throw new Error(await stackStartupFailureMessage(action, state));
 }
 
 async function waitForSmapiCommandPipe(timeoutMs = SMAPI_COMMAND_PIPE_TIMEOUT_MS) {
@@ -2395,5 +2458,9 @@ module.exports = {
     isPublicHttpAdminAllowed,
     assertAdminBindAllowed,
     restoreBackupScript,
+    containerReady,
+    stackRestartVerified,
+    stackStateSummary,
+    tailLogText,
   },
 };
