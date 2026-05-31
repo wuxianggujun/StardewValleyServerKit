@@ -421,7 +421,7 @@ async function ensureGameModsDirectory() {
   const env = await readEnv();
   const image = `sdvd/server:${env.IMAGE_VERSION || "preview"}`;
   const result = await docker(
-    ["run", "--rm", "--entrypoint", "sh", "-v", "stardew-valley-server-kit_game-data:/data/game", image, "-lc", script],
+    ["run", "--rm", "--user", "0:0", "--entrypoint", "sh", "-v", "stardew-valley-server-kit_game-data:/data/game", image, "-lc", script],
     { timeoutMs: 120000 },
   );
   if (!result.ok) {

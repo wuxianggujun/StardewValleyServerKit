@@ -1,6 +1,15 @@
 name: stardew-valley-server-kit
 
 services:
+  init-game-mods:
+    image: sdvd/server:${IMAGE_VERSION:-preview}
+    user: "0:0"
+    entrypoint: ["sh", "-lc"]
+    command: "mkdir -p /data/game/Mods && touch /data/game/Mods/SVSK_PLACEHOLDER.txt"
+    volumes:
+      - game-data:/data/game
+    restart: "no"
+
   server:
     image: sdvd/server:${IMAGE_VERSION:-preview}
     container_name: sdv-server
@@ -38,6 +47,8 @@ services:
       FORCE_NEW_DEBUG_GAME: "${FORCE_NEW_DEBUG_GAME:-false}"
       VERBOSE_LOGGING: "${VERBOSE_LOGGING:-false}"
     depends_on:
+      init-game-mods:
+        condition: service_completed_successfully
       steam-auth:
         condition: service_healthy
     restart: unless-stopped

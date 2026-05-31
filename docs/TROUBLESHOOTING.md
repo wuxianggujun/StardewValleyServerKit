@@ -501,7 +501,8 @@ docker port sdv-server
 
 如果 `/data/game/Mods` 不存在或完全为空，镜像脚本里的 `cp /data/game/Mods/* ...`
 会因为空 glob 失败，导致 `app` 服务退出。新版管理面板会在每次启动/重启前自动创建
-`/data/game/Mods/SVSK_PLACEHOLDER.txt`，这个普通文本文件会被 SMAPI 忽略。
+`/data/game/Mods/SVSK_PLACEHOLDER.txt`，`docker-compose.yml` 里的 `init-game-mods`
+一次性服务也会在每次 `docker compose up` 前创建它。这个普通文本文件会被 SMAPI 忽略。
 
 处理：
 
