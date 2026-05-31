@@ -418,10 +418,8 @@ async function compose(args, options = {}) {
 
 async function ensureGameModsDirectory() {
   const script = "mkdir -p /data/game/Mods && touch /data/game/Mods/SVSK_PLACEHOLDER.txt";
-  const env = await readEnv();
-  const image = `sdvd/server:${env.IMAGE_VERSION || "preview"}`;
   const result = await docker(
-    ["run", "--rm", "--user", "0:0", "--entrypoint", "sh", "-v", "stardew-valley-server-kit_game-data:/data/game", image, "-lc", script],
+    ["run", "--rm", "--user", "0:0", "-v", "stardew-valley-server-kit_game-data:/data/game", "busybox:1.36", "sh", "-lc", script],
     { timeoutMs: 120000 },
   );
   if (!result.ok) {

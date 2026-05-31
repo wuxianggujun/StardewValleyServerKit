@@ -2,7 +2,7 @@ name: stardew-valley-server-kit
 
 services:
   init-game-mods:
-    image: sdvd/server:${IMAGE_VERSION:-preview}
+    image: busybox:1.36
     user: "0:0"
     entrypoint: ["sh", "-lc"]
     command: "mkdir -p /data/game/Mods && touch /data/game/Mods/SVSK_PLACEHOLDER.txt"
