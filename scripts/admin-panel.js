@@ -9,10 +9,10 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { createModService } = require("./admin-panel/mods");
-const { decodeXmlText, patchCabinsXml, extractSaveConfig, applySaveConfigEdits } = require("./admin-panel/save-repair");
+const { decodeXmlText, patchCabinsXml, extractSaveConfig, applySaveConfigEdits, extractFarmhands } = require("./admin-panel/save-repair");
 const { PAGE } = require("./admin-panel/page");
 const { createApiHandler } = require("./admin-panel/api-routes");
-const { createPlayerService, buildPlayerManagement } = require("./admin-panel/players");
+const { createPlayerService, buildPlayerManagement, hasFarmhandList } = require("./admin-panel/players");
 const {
   SAVE_NAME_PATTERN,
   BACKUP_ARCHIVE_PATTERN,
@@ -733,7 +733,12 @@ async function serverApiJson(pathname) {
   return serverApiRequest("GET", pathname, null, { optional: true });
 }
 
-const playerService = createPlayerService({ serverApiJson, serverApiRequest, apiError });
+const playerService = createPlayerService({
+  serverApiJson,
+  serverApiRequest,
+  apiError,
+  readFallbackFarmhands: readFarmhandsFromLatestSave,
+});
 
 async function savesVolumeExists() {
   const inspect = await docker(["volume", "inspect", SAVES_VOLUME], { timeoutMs: 8000 });
@@ -1138,6 +1143,24 @@ async function readSaveConfigFromVolume(payload) {
   }
 }
 
+async function readFarmhandsFromLatestSave() {
+  const { saves } = await listSaves();
+  const save = saves[0];
+  if (!save) return { saveName: "", farmhands: [] };
+
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "sdv-farmhands-"));
+  try {
+    await copySaveFileFromVolume(save.name, tempDir);
+    const xml = await fsp.readFile(path.join(tempDir, "save.xml"), "utf8");
+    return {
+      saveName: save.name,
+      farmhands: extractFarmhands(xml),
+    };
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function writeSaveConfigToVolume(payload) {
   const saveName = validateSaveName(payload.saveName);
   const { saves } = await listSaves();
@@ -1338,7 +1361,13 @@ async function getStatus() {
     serverApiJson("/farmhands").catch(() => null),
     serverApiJson("/auth").catch(() => null),
   ]);
-  const playerManagement = buildPlayerManagement(apiPlayers, apiFarmhands, apiAuth, signals.players);
+  const fallbackFarmhands = hasFarmhandList(apiFarmhands)
+    ? null
+    : await readFarmhandsFromLatestSave().catch(() => null);
+  const playerManagement = buildPlayerManagement(apiPlayers, apiFarmhands, apiAuth, signals.players, {
+    fallbackFarmhands: fallbackFarmhands?.farmhands || [],
+    fallbackSaveName: fallbackFarmhands?.saveName || "",
+  });
   const shutdownReadiness = buildShutdownReadiness(playerManagement, signals, apiStatus);
   const containers = parseTableLines(ps.stdout).map((line) => {
     const [name, status, portText] = line.split("\t");

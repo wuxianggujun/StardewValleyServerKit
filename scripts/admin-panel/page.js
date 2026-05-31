@@ -479,6 +479,7 @@ const PAGE = String.raw`<!doctype html>
     }
     .message.bad { color: var(--red); }
     .message.ok { color: var(--green); }
+    .message.warn { color: var(--amber); }
     .modal {
       position: fixed;
       inset: 0;
@@ -1755,15 +1756,20 @@ const PAGE = String.raw`<!doctype html>
     function renderPlayerManagement(data) {
       latestPlayerManagement = data;
       const unsupported = data.unsupportedMessage || t("players.unsupported");
-      const apiHint = data.apiAvailable
-        ? (data.auth?.enabled
-          ? t("players.apiProtected", {
-              authenticated: data.auth.authenticatedCount,
-              pending: data.auth.pendingCount,
-            })
-          : t("players.apiConnected"))
-        : t("players.apiDisconnected");
-      setMessage(playersMessage, apiHint, data.apiAvailable ? "ok" : "bad");
+      const hasSaveFallback = data.farmhandSource === "save" && data.farmhands?.length;
+      const apiHint = hasSaveFallback
+        ? t("players.apiDisconnectedFarmhandsFallback", {
+            saveName: data.farmhandSourceSave || t("saves.unknown"),
+          })
+        : (data.apiAvailable
+          ? (data.auth?.enabled
+            ? t("players.apiProtected", {
+                authenticated: data.auth.authenticatedCount,
+                pending: data.auth.pendingCount,
+              })
+            : t("players.apiConnected"))
+          : t("players.apiDisconnected"));
+      setMessage(playersMessage, apiHint, hasSaveFallback ? "warn" : (data.apiAvailable ? "ok" : "bad"));
 
       if (data.onlinePlayers?.length) {
         onlinePlayersList.innerHTML = data.onlinePlayers.map((player) => (
@@ -1798,16 +1804,22 @@ const PAGE = String.raw`<!doctype html>
       if (data.farmhands?.length) {
         farmhandsList.innerHTML = data.farmhands.map((farmhand) => {
           const name = farmhand.name || t("players.unnamedFarmhand");
-          const canDelete = farmhand.name && !farmhand.isOnline;
+          const canDelete = data.capabilities?.deleteFarmhand && farmhand.name && !farmhand.isOnline;
           const deleteTitle = farmhand.isOnline
             ? t("players.onlineCannotDelete")
-            : (farmhand.name ? t("players.deleteOfflineTitle") : t("players.unnamedCannotDelete"));
+            : (!data.capabilities?.deleteFarmhand
+              ? t("players.deleteRequiresApi")
+              : (farmhand.name ? t("players.deleteOfflineTitle") : t("players.unnamedCannotDelete")));
+          const sourceText = data.farmhandSource === "save"
+            ? " · " + t("players.farmhandSourceSave", { saveName: data.farmhandSourceSave || t("saves.unknown") })
+            : "";
           return (
             '<div class="manage-item">' +
               '<div><strong>' + escapeHtml(name) + '</strong>' +
                 '<span class="hint">ID：' + escapeHtml(farmhand.id || "n/a") +
                 ' · ' + escapeHtml(farmhand.isCustomized ? t("players.customized") : t("players.notCustomized")) +
-                ' · ' + escapeHtml(farmhand.isOnline ? t("players.onlineState") : t("players.offlineState")) + '</span></div>' +
+                ' · ' + escapeHtml(farmhand.isOnline ? t("players.onlineState") : t("players.offlineState")) +
+                escapeHtml(sourceText) + '</span></div>' +
               '<div class="manage-actions">' +
                 '<button class="danger" ' +
                   (canDelete ? 'data-action="delete-farmhand" data-name="' + escapeHtml(farmhand.name) + '"' : "disabled") +

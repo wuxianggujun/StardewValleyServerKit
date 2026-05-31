@@ -479,6 +479,46 @@ function findFarmerBlocks(xml) {
   return blocks;
 }
 
+function uniqueFarmhands(farmhands) {
+  const seen = new Set();
+  return farmhands.filter((farmhand) => {
+    const key = farmhand.id ? `id:${farmhand.id}` : `name:${String(farmhand.name || "").toLowerCase()}`;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function farmhandSummaryFromFarmer(farmerXml, fallbackId = "") {
+  return {
+    id: firstUniqueMultiplayerId(farmerXml) || fallbackId || "",
+    name: xmlTagValue(farmerXml, "name") || "",
+    isCustomized: xmlTagValue(farmerXml, "isCustomized") === "true",
+  };
+}
+
+function extractFarmhands(xml) {
+  const section = findTopLevelFarmhandsSection(xml);
+  if (section && !section.selfClosing) {
+    const farmhands = findFarmerBlocks(section.text)
+      .map((farmer) => farmhandSummaryFromFarmer(farmer.text))
+      .filter((farmhand) => farmhand.id || farmhand.name);
+    if (farmhands.length) return uniqueFarmhands(farmhands);
+  }
+
+  const cabinFarmhands = findBuildingBlocks(xml)
+    .filter((building) => isCabinBuildingBlock(building.text))
+    .map((building) => {
+      const embedded = cabinEmbeddedFarmerBlock(building.text);
+      const reference = xmlTagValue(building.text, "farmhandReference") || firstUniqueMultiplayerId(building.text) || "";
+      return embedded
+        ? farmhandSummaryFromFarmer(embedded, reference)
+        : { id: reference, name: "", isCustomized: false };
+    })
+    .filter((farmhand) => farmhand.id || farmhand.name);
+  return uniqueFarmhands(cabinFarmhands);
+}
+
 function cabinEmbeddedFarmerBlock(cabinBlock) {
   const match = String(cabinBlock || "").match(/<farmhand\b[^>]*>\s*(<Farmer\b[^>]*>[\s\S]*?<\/Farmer>)\s*<\/farmhand>/);
   return match ? match[1] : null;
@@ -764,4 +804,4 @@ function applySaveConfigEdits(xml, edits) {
   return result;
 }
 
-module.exports = { decodeXmlText, patchCabinsXml, extractSaveConfig, applySaveConfigEdits };
+module.exports = { decodeXmlText, patchCabinsXml, extractSaveConfig, applySaveConfigEdits, extractFarmhands };

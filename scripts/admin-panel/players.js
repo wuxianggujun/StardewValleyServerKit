@@ -54,19 +54,24 @@ function normalizeAuthStatus(response) {
   };
 }
 
-function buildPlayerManagement(apiPlayers, apiFarmhands, apiAuth, recentPlayers = []) {
+function buildPlayerManagement(apiPlayers, apiFarmhands, apiAuth, recentPlayers = [], options = {}) {
   const onlinePlayers = normalizeApiPlayers(apiPlayers);
-  const farmhands = normalizeFarmhands(apiFarmhands, onlinePlayers);
+  const apiFarmhandList = normalizeFarmhands(apiFarmhands, onlinePlayers);
+  const fallbackFarmhandList = normalizeFarmhands({ farmhands: options.fallbackFarmhands || [] }, onlinePlayers);
+  const farmhands = apiFarmhandList.length ? apiFarmhandList : fallbackFarmhandList;
+  const farmhandSource = apiFarmhandList.length ? "api" : (fallbackFarmhandList.length ? "save" : "none");
   const apiAvailable = Boolean(apiPlayers || apiFarmhands || apiAuth);
   return {
     apiAvailable,
     onlinePlayers,
     farmhands,
+    farmhandSource,
+    farmhandSourceSave: farmhandSource === "save" ? (options.fallbackSaveName || "") : "",
     recentPlayers,
     auth: normalizeAuthStatus(apiAuth),
     capabilities: {
       grantAdmin: Boolean(apiPlayers),
-      deleteFarmhand: Boolean(apiFarmhands),
+      deleteFarmhand: farmhandSource === "api" && Boolean(apiFarmhands),
       kick: false,
       ban: false,
     },
@@ -82,7 +87,11 @@ function ensureApiSuccess(response, actionLabel, apiError) {
   return response || {};
 }
 
-function createPlayerService({ serverApiJson, serverApiRequest, apiError }) {
+function hasFarmhandList(response) {
+  return Array.isArray(response?.farmhands) && response.farmhands.length > 0;
+}
+
+function createPlayerService({ serverApiJson, serverApiRequest, apiError, readFallbackFarmhands }) {
   return {
     async getPlayerManagement(recentPlayers = []) {
       const [apiPlayers, apiFarmhands, apiAuth] = await Promise.all([
@@ -90,7 +99,13 @@ function createPlayerService({ serverApiJson, serverApiRequest, apiError }) {
         serverApiJson("/farmhands").catch(() => null),
         serverApiJson("/auth").catch(() => null),
       ]);
-      return buildPlayerManagement(apiPlayers, apiFarmhands, apiAuth, recentPlayers);
+      const fallback = !hasFarmhandList(apiFarmhands) && readFallbackFarmhands
+        ? await readFallbackFarmhands().catch(() => null)
+        : null;
+      return buildPlayerManagement(apiPlayers, apiFarmhands, apiAuth, recentPlayers, {
+        fallbackFarmhands: fallback?.farmhands || [],
+        fallbackSaveName: fallback?.saveName || "",
+      });
     },
 
     async grantAdminRole(payload) {
@@ -128,6 +143,7 @@ module.exports = {
   normalizeApiPlayers,
   normalizeFarmhands,
   normalizeAuthStatus,
+  hasFarmhandList,
   buildPlayerManagement,
   createPlayerService,
 };
