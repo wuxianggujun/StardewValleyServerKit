@@ -319,6 +319,19 @@ async function main() {
     assert.equal(loadedReport.skipped.length > 0, true);
     assert.equal(loadedReport.errors.length > 0, true);
 
+    const advisoryReport = __test.buildModLoadReport([
+      "sdv-server  | [SMAPI] Loaded 1 mod:",
+      "sdv-server  | [SMAPI]    Visible Mod 1.0.0 by Local | Example.Visible",
+      "sdv-server  | [03:02:43 ERROR SMAPI]    Patched game code",
+      "sdv-server  | [03:02:43 ERROR SMAPI]       Visible Mod",
+      "sdv-server  | [03:02:43 ERROR SMAPI]    Bypassed safety checks",
+      "sdv-server  | [03:02:43 ERROR SMAPI]       Visible Mod",
+    ].join("\n"), listed.installed);
+    assert.equal(advisoryReport.errors.length, 0);
+    assert.equal(advisoryReport.skipped.length, 0);
+    assert.equal(advisoryReport.problemMods.some((mod) => mod.directoryName === "VisibleMod"), false);
+    assert.equal(advisoryReport.byDirectory.VisibleMod.state, "loaded");
+
     const config = await service.readModConfig({ directoryName: "VisibleMod" });
     assert.equal(config.directoryName, "VisibleMod");
     assert.match(config.text, /"Enabled":true|"Enabled": true/);

@@ -651,6 +651,18 @@ function uniqueLogLines(lines, maxItems) {
   return result;
 }
 
+function isSpecificModProblemLine(line) {
+  const cleaned = cleanSmapiLogLine(line);
+  if (!cleaned) return false;
+  return (
+    /\bfailed\s+(?:loading|to\s+load|to\s+initialize)\b/i.test(cleaned) ||
+    /\bcould\s+not\s+be\s+(?:added|loaded|initialized)\b/i.test(cleaned) ||
+    /\b(?:missing\s+dependency|requires\s+.+not\s+installed)\b/i.test(cleaned) ||
+    /\b(?:invalid|missing)\s+manifest\b/i.test(cleaned) ||
+    /\bbecause\b.*\b(?:missing|empty\s+folder|invalid|failed|requires|not\s+installed)\b/i.test(cleaned)
+  );
+}
+
 function buildModLoadReport(logText, installed = []) {
   const lines = stripAnsi(logText)
     .split(/\r?\n/)
@@ -659,8 +671,9 @@ function buildModLoadReport(logText, installed = []) {
     .slice(-1200);
   const smapiDetected = lines.some((line) => /\bSMAPI\b|\bLoaded\s+\d+\s+mods?\b|\bSkipped\s+mods?\b/i.test(line));
   const { loadedSummaryCount, loadedLines, skippedLines } = collectSmapiLoadLines(lines);
+  const smapiErrorFailure = /\b(?:failed|exception|crash|could not|missing dependency|requires .* not installed|invalid|empty folder|skipped mods?)\b/i;
   const errorLines = uniqueLogLines(lines.filter((line) => (
-    /\bERROR\s+SMAPI\b/i.test(line) ||
+    (/\bERROR\s+SMAPI\b/i.test(line) && smapiErrorFailure.test(line)) ||
     /\bSMAPI\b.*\b(error|exception|failed|crash)\b/i.test(line) ||
     /\b(mod|manifest|content pack|content patcher|dependency)\b.*\b(error|exception|failed|missing|invalid)\b/i.test(line)
   )), 24);
@@ -668,7 +681,7 @@ function buildModLoadReport(logText, installed = []) {
     /\bWARN\s+SMAPI\b/i.test(line) ||
     /\b(missing dependency|requires .* not installed|no update keys|skipped)\b/i.test(line)
   )), 24);
-  const skipped = uniqueLogLines([...skippedLines, ...lines.filter((line) => (
+  const skipped = uniqueLogLines([...skippedLines.filter(isSpecificModProblemLine), ...lines.filter((line) => (
     /\bSkipped\s+mods?\b/i.test(line) ||
     /\bcould not be added to your game\b/i.test(line) ||
     /\brequires .* not installed\b/i.test(line) ||
@@ -676,7 +689,10 @@ function buildModLoadReport(logText, installed = []) {
   ))], 24);
 
   const loadedTextLines = uniqueLogLines(loadedLines, 80);
-  const problemLines = [...skipped, ...errorLines, ...warningLines];
+  const problemLines = uniqueLogLines([
+    ...skippedLines,
+    ...lines,
+  ].filter(isSpecificModProblemLine), 80);
   const byDirectory = {};
   const confirmedLoaded = [];
   const problemMods = [];
