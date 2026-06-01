@@ -26,6 +26,7 @@ const ZIP_MAX_UNCOMPRESSED_BYTES = 300 * 1024 * 1024;
 const ZIP_CENTRAL_DIRECTORY_MAX_BYTES = 8 * 1024 * 1024;
 const ZIP_EOCD_MAX_SEARCH_BYTES = 22 + 0xffff;
 const MAX_REDIRECTS = 5;
+const SMAPI_LOG_ANALYSIS_MAX_LINES = 5000;
 const DOWNLOAD_HOSTS = [
   "nexusmods.com",
   "nexus-cdn.com",
@@ -38,6 +39,15 @@ const PROTECTED_MOD_UNIQUE_IDS = new Set([
   "junimohost.server",
   "svsk.crashguard",
 ]);
+const CONTAINER_MOD_VISIBILITY_SCRIPT = [
+  "printf 'modsRoot='; test -d /data/Mods && echo yes || echo no",
+  "printf 'userRoot='; test -d /data/Mods/user && echo yes || echo no",
+  "printf 'gameModsRoot='; test -d /data/game/Mods && echo yes || echo no",
+  "printf 'section=userManifests\\n'",
+  "find /data/Mods/user -type f -name manifest.json 2>/dev/null | sed 's#^/data/Mods/user/##' | sort | head -n 500 || true",
+  "printf 'section=modsManifests\\n'",
+  "find /data/Mods -type f -name manifest.json 2>/dev/null | sed 's#^/data/Mods/##' | sort | head -n 500 || true",
+].join("; ");
 
 function stripBom(text) {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
@@ -47,6 +57,10 @@ function cleanText(value, maxLength, fallback = "") {
   const next = String(value || "").trim();
   if (!next) return fallback;
   return next.slice(0, maxLength);
+}
+
+function cleanOutputLine(value, maxLength = 240) {
+  return cleanText(stripAnsi(value).replace(/[\r\n]+/g, " "), maxLength, "");
 }
 
 function normalizeModIdentity(value) {
@@ -632,6 +646,108 @@ function modNeedles(mod) {
   return [...new Set(needles)];
 }
 
+function parseContainerModVisibilityOutput(output) {
+  const roots = {
+    modsRoot: false,
+    userRoot: false,
+    gameModsRoot: false,
+  };
+  const sections = {
+    userManifests: [],
+    modsManifests: [],
+  };
+  let section = "";
+
+  for (const rawLine of stripAnsi(output).split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const rootMatch = line.match(/^(modsRoot|userRoot|gameModsRoot)=(yes|no)$/);
+    if (rootMatch) {
+      roots[rootMatch[1]] = rootMatch[2] === "yes";
+      continue;
+    }
+    const sectionMatch = line.match(/^section=(userManifests|modsManifests)$/);
+    if (sectionMatch) {
+      section = sectionMatch[1];
+      continue;
+    }
+    if (section && sections[section].length < 500) {
+      sections[section].push(cleanText(line.replace(/\\/g, "/"), 240, ""));
+    }
+  }
+
+  return { roots, ...sections };
+}
+
+async function inspectContainerModVisibility(state, installed = []) {
+  if (!state.dockerCommand) {
+    return {
+      available: false,
+      status: "unavailable",
+      message: "Docker inspection is not configured.",
+      roots: {},
+      expectedInstalledCount: installed.length,
+      seenInstalledCount: 0,
+      missingInstalled: [],
+      userManifests: [],
+      modsManifests: [],
+    };
+  }
+
+  const result = await state.dockerCommand(
+    ["exec", "sdv-server", "sh", "-lc", CONTAINER_MOD_VISIBILITY_SCRIPT],
+    { timeoutMs: 8000, maxOutputBytes: 256 * 1024 },
+  );
+  if (!result.ok) {
+    return {
+      available: false,
+      status: "not-running",
+      message: cleanOutputLine(result.stderr || result.stdout, 500) || "sdv-server container is not running.",
+      roots: {},
+      expectedInstalledCount: installed.length,
+      seenInstalledCount: 0,
+      missingInstalled: [],
+      userManifests: [],
+      modsManifests: [],
+    };
+  }
+
+  const parsed = parseContainerModVisibilityOutput(result.stdout || "");
+  const userManifestDirs = parsed.userManifests
+    .map((entry) => entry.replace(/\/manifest\.json$/i, ""))
+    .filter(Boolean);
+  const userManifestSet = new Set(userManifestDirs.map((entry) => entry.toLowerCase()));
+  const missingInstalled = installed
+    .filter((mod) => !userManifestSet.has(String(mod.directoryName || "").replace(/\\/g, "/").toLowerCase()))
+    .map((mod) => ({
+      directoryName: mod.directoryName,
+      name: mod.name,
+      protected: Boolean(mod.protected),
+    }));
+  const seenInstalledCount = Math.max(0, installed.length - missingInstalled.length);
+  let status = "ok";
+  let message = "容器内 /data/Mods/user 可以看到宿主机 data/mods 中的 Mod manifest。";
+  if (!parsed.roots.modsRoot || !parsed.roots.userRoot) {
+    status = "mount-missing";
+    message = "容器内缺少 /data/Mods 或 /data/Mods/user，SMAPI 无法看到用户 Mod 挂载目录。";
+  } else if (missingInstalled.length) {
+    status = "missing-installed";
+    message = `容器内 /data/Mods/user 未看到 ${missingInstalled.length} 个已安装 Mod 的 manifest。`;
+  }
+
+  return {
+    available: true,
+    status,
+    message,
+    roots: parsed.roots,
+    expectedInstalledCount: installed.length,
+    seenInstalledCount,
+    missingInstalled,
+    userManifests: parsed.userManifests,
+    modsManifests: parsed.modsManifests,
+  };
+}
+
 function stripComposeLogPrefix(line) {
   return String(line || "").replace(/^[A-Za-z0-9_.-]+(?:-\d+)?\s+\|\s*/, "");
 }
@@ -781,9 +897,10 @@ function buildModLoadReport(logText, installed = []) {
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
     .filter(Boolean)
-    .slice(-1200);
+    .slice(-SMAPI_LOG_ANALYSIS_MAX_LINES);
   const smapiDetected = lines.some((line) => /\bSMAPI\b|\bLoaded\s+\d+\s+mods?\b|\bSkipped\s+mods?\b/i.test(line));
   const { loadedSummaryCount, loadedLines, skippedLines } = collectSmapiLoadLines(lines);
+  const smapiStartupSummaryFound = loadedSummaryCount != null;
   const smapiErrorFailure = /\b(?:failed|exception|crash|could not|missing dependency|requires .* not installed|invalid|empty folder|skipped mods?)\b/i;
   const errorLines = uniqueLogLines(lines.filter((line) => (
     !isSpecificModWarningLine(line) && (
@@ -809,6 +926,7 @@ function buildModLoadReport(logText, installed = []) {
     ...lines,
   ].filter(isSpecificModProblemLine), 80);
   const runtimeWarningLines = uniqueLogLines(lines.filter(isSpecificModWarningLine), 80);
+  const startupSummaryMissing = lines.length > 0 && smapiDetected && !smapiStartupSummaryFound;
   const emptyFolderEntries = uniqueLogLines([
     ...skippedLines,
     ...lines,
@@ -831,8 +949,10 @@ function buildModLoadReport(logText, installed = []) {
     const problemEvidence = pickMatchingLine(problemLines, needles);
     const warningEvidence = pickMatchingLine(runtimeWarningLines, needles);
     let state = "unconfirmed";
-    let severity = smapiDetected ? "warn" : "unknown";
-    let reason = smapiDetected ? "not-seen-in-log" : "log-unavailable";
+    let severity = smapiDetected && !startupSummaryMissing ? "warn" : "unknown";
+    let reason = smapiDetected
+      ? (startupSummaryMissing ? "startup-summary-missing" : "not-seen-in-log")
+      : "log-unavailable";
     let evidence = "";
     if (!mod.hasManifest) {
       state = "problem";
@@ -876,8 +996,13 @@ function buildModLoadReport(logText, installed = []) {
 
   return {
     source: "recent-smapi-logs",
+    analysisWindowLines: lines.length,
+    analysisMaxLines: SMAPI_LOG_ANALYSIS_MAX_LINES,
     logAvailable: lines.length > 0,
     smapiDetected,
+    smapiStartupSummaryFound,
+    startupSummaryMissing,
+    logWindowMissedStartup: startupSummaryMissing && installed.length > 0 && !errorLines.length && !skipped.length,
     installedCount: installed.length,
     loadedSummaryCount,
     loadedNames: loadedTextLines,
@@ -1734,12 +1859,27 @@ async function getModManagement(state, options = {}) {
     listInstalledMods(state),
     findModDirectoryIssues(state),
   ]);
-  const loadReport = buildModLoadReport(options.logText || "", installed);
+  const [loadReport, containerVisibility] = await Promise.all([
+    Promise.resolve(buildModLoadReport(options.logText || "", installed)),
+    inspectContainerModVisibility(state, installed).catch((error) => ({
+      available: false,
+      status: "error",
+      message: error.message || String(error),
+      roots: {},
+      expectedInstalledCount: installed.length,
+      seenInstalledCount: 0,
+      missingInstalled: [],
+      userManifests: [],
+      modsManifests: [],
+    })),
+  ]);
   loadReport.directoryIssues = directoryIssues;
   return {
     modsDir: path.relative(state.rootDir, state.modsDir).replace(/\\/g, "/"),
+    containerModsDir: "/data/Mods/user",
     installed,
     directoryIssues,
+    containerVisibility,
     loadReport,
     sources: {
       primary: "SMAPI / Nexus Mods",
@@ -1819,5 +1959,6 @@ module.exports = {
     pickRecommendedNexusFile,
     buildModLoadReport,
     collectSmapiLoadLines,
+    parseContainerModVisibilityOutput,
   },
 };

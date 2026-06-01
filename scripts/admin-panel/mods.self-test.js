@@ -78,6 +78,8 @@ async function main() {
   assert.equal(I18N.en["mods.installLocal"], "Install local file");
   assert.equal(I18N.en["mods.diagnose"], "Load check");
   assert.equal(I18N["zh-CN"]["mods.loadWarning"], "运行警告");
+  assert.equal(I18N["zh-CN"]["mods.loadUnconfirmed"], "日志未确认");
+  assert.match(I18N["zh-CN"]["mods.guideLoad"], /不等于加载失败/);
   assert.match(I18N["zh-CN"]["mods.diagnosed"], /Steam Auth 状态/);
   assert.doesNotMatch(PAGE, /id="refreshBtn"/);
   assert.doesNotMatch(PAGE, /querySelector\("#refreshBtn"\)/);
@@ -94,6 +96,8 @@ async function main() {
   assert.match(PAGE, /data-i18n="mods\.installLocal"/);
   assert.match(PAGE, /id="diagnoseModsBtn"/);
   assert.match(PAGE, /id="modLoadSummary"/);
+  assert.match(PAGE, /containerVisibility/);
+  assert.match(PAGE, /logWindowMissedStartup/);
   assert.match(PAGE, /\/api\/diagnostics/);
   assert.match(PAGE, /Steam Auth:/);
   assert.match(PAGE, /report\.steamAuth/);
@@ -322,6 +326,8 @@ async function main() {
     ].join("\n"), listed.installed);
     assert.equal(loadedReport.loadedSummaryCount, 3);
     assert.equal(loadedReport.smapiDetected, true);
+    assert.equal(loadedReport.smapiStartupSummaryFound, true);
+    assert.equal(loadedReport.startupSummaryMissing, false);
     assert.equal(loadedReport.confirmedLoaded.some((mod) => mod.directoryName === "VisibleMod"), true);
     assert.equal(loadedReport.problemMods.some((mod) => mod.directoryName === "smapi/NestedMod"), true);
     assert.equal(loadedReport.byDirectory["smapi/NestedMod"].severity, "error");
@@ -377,6 +383,31 @@ async function main() {
     assert.equal(assetErrorReport.byDirectory.VisibleMod.severity, "warn");
     assert.equal(assetErrorReport.byDirectory.VisibleMod.reason, "runtime-warning");
     assert.equal(assetErrorReport.warningMods.some((mod) => mod.directoryName === "VisibleMod"), true);
+
+    const missedStartupReport = __test.buildModLoadReport([
+      "sdv-server  | [03:02:48 TRACE Visible Mod] Accessed mod-provided API (GenericModConfigMenu.Framework.Api) for Generic Mod Config Menu.",
+      "sdv-server  | [03:02:49 INFO SMAPI] Console Commands are ready.",
+    ].join("\n"), listed.installed);
+    assert.equal(missedStartupReport.smapiDetected, true);
+    assert.equal(missedStartupReport.smapiStartupSummaryFound, false);
+    assert.equal(missedStartupReport.startupSummaryMissing, true);
+    assert.equal(missedStartupReport.logWindowMissedStartup, true);
+    assert.equal(missedStartupReport.byDirectory.VisibleMod.reason, "startup-summary-missing");
+    assert.equal(missedStartupReport.byDirectory.VisibleMod.severity, "unknown");
+
+    const visibility = __test.parseContainerModVisibilityOutput([
+      "modsRoot=yes",
+      "userRoot=yes",
+      "gameModsRoot=yes",
+      "section=userManifests",
+      "VisibleMod/manifest.json",
+      "smapi/NestedMod/manifest.json",
+      "section=modsManifests",
+      "SVSKCrashGuard/manifest.json",
+      "user/VisibleMod/manifest.json",
+    ].join("\n"));
+    assert.equal(visibility.roots.userRoot, true);
+    assert.deepEqual(visibility.userManifests, ["VisibleMod/manifest.json", "smapi/NestedMod/manifest.json"]);
 
     const manifestReport = __test.buildModLoadReport("", [{
       directoryName: "BrokenManifest",

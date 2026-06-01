@@ -597,7 +597,52 @@ docker compose --env-file .env ps
 - `运行警告`：Mod 已加载，但运行时有警告，例如无头环境里音频资源初始化失败。
   这类警告不等于 Mod 加载失败。
 - `异常`：SMAPI 明确提示缺少前置依赖、manifest 错误、被跳过或加载失败。
-- `未确认`：最近日志没有看到该 Mod，可能是刚重启、日志滚动或 SMAPI 没走到加载阶段。
+- `日志未确认`：最近日志没有覆盖启动时的 `Loaded ... mods` 摘要，不能证明该 Mod
+  加载失败。通常需要重启游戏容器，让 SMAPI 重新打印启动加载日志。
+
+诊断还会检查宿主机 `data/mods` 是否真的挂载进容器 `/data/Mods/user`。
+如果容器内看不到这些 `manifest.json`，游戏里就不会有自定义 Mod 效果。
+
+服务器上可以用下面命令手动复核三层状态：
+
+```bash
+cd /opt/stardew/StardewValleyServerKit || exit 1
+
+echo "===== host data/mods ====="
+find data/mods -maxdepth 6 -type f -iname manifest.json 2>/dev/null \
+  | sed 's#^data/mods/##' \
+  | sort
+
+echo
+echo "===== container /data/Mods/user ====="
+docker exec sdv-server sh -lc '
+find /data/Mods/user -maxdepth 6 -type f -iname manifest.json 2>/dev/null |
+  sed "s#^/data/Mods/user/##" |
+  sort
+'
+
+echo
+echo "===== recent SMAPI load evidence ====="
+docker compose --env-file .env logs --tail 5000 --no-color server |
+  grep -E "Loaded [0-9]+ mods|Skipped mods|ERROR SMAPI|WARN SMAPI|/data/Mods/user|Mods/user" |
+  tail -n 220
+```
+
+如果前两段列表一致，但第三段没有 `Loaded ... mods`，一般只是最近日志没覆盖启动阶段。
+此时重启游戏服务端后再检测：
+
+```bash
+docker compose --env-file .env down
+docker compose --env-file .env up -d
+sleep 45
+docker compose --env-file .env ps
+docker compose --env-file .env logs --tail 5000 --no-color server |
+  grep -E "Loaded [0-9]+ mods|Skipped mods|ERROR SMAPI|WARN SMAPI|SVSK Crash Guard|/data/Mods/user|Mods/user" |
+  tail -n 220
+```
+
+注意：`sudo systemctl restart sdv-admin.service` 只重启 Web 管理面板，
+不会让 SMAPI 重新扫描或加载 Mod。
 
 如果诊断里显示 `Steam Auth 尚未登录`，先在服务器项目目录执行：
 

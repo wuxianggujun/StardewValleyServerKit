@@ -68,6 +68,8 @@ const STACK_READY_TIMEOUT_MS = positiveIntEnv("SDV_ADMIN_STACK_READY_TIMEOUT_SEC
 const STACK_READY_POLL_MS = 3000;
 const STACK_FAILURE_LOG_LINES = 180;
 const STACK_FAILURE_LOG_MAX_CHARS = 7000;
+const LATEST_LOG_LINES = 5000;
+const LATEST_LOG_MAX_BYTES = 4 * 1024 * 1024;
 const STACK_REQUIRED_CONTAINERS = ["sdv-server", "sdv-steam-auth"];
 const DOCKER_INSPECT_API_FORMAT = '{{.State.Running}}{{printf "\\t"}}{{json .Config.Env}}{{printf "\\t"}}{{json .Mounts}}';
 const ADMIN_ALLOW_PUBLIC_HTTP_KEY = "ADMIN_ALLOW_PUBLIC_HTTP";
@@ -2033,8 +2035,13 @@ function isSafeForImmediateRestart(readiness) {
   return ["safe-empty", "safe-saved"].includes(readiness?.mode);
 }
 
-async function latestLogs() {
-  const logs = await compose(["logs", "--tail", "1200", "--no-color", "server", "steam-auth"], { timeoutMs: 12000 });
+async function latestLogs(options = {}) {
+  const tail = Number.parseInt(options.tail || LATEST_LOG_LINES, 10);
+  const safeTail = Number.isFinite(tail) && tail > 0 ? Math.min(tail, 20000) : LATEST_LOG_LINES;
+  const logs = await compose(
+    ["logs", "--tail", String(safeTail), "--no-color", "server", "steam-auth"],
+    { timeoutMs: 20000, maxOutputBytes: LATEST_LOG_MAX_BYTES },
+  );
   return { logs: await sanitize(logs.stdout || logs.stderr || "") };
 }
 
@@ -2313,6 +2320,13 @@ function diagnosticSummary(apiDiagnostic, modManagement, stackState, steamAuthDi
   if (loadReport.directoryIssues?.length || modManagement?.directoryIssues?.length) {
     issues.push("data/mods 下存在空目录或异常目录；SMAPI 会跳过这些目录。");
   }
+  const containerVisibility = modManagement?.containerVisibility;
+  if (containerVisibility?.available && containerVisibility.status !== "ok") {
+    issues.push(containerVisibility.message || "容器内用户 Mod 挂载目录需要检查。");
+  }
+  if (loadReport.logWindowMissedStartup) {
+    issues.push("最近日志没有覆盖 SMAPI 启动加载摘要；这不能证明 Mod 加载失败，请重启游戏容器后重新检测。");
+  }
   if (steamAuthDiagnostic && steamAuthDiagnostic.status !== "ok") {
     issues.push(steamAuthDiagnostic.message || "Steam Auth 需要处理。");
   }
@@ -2356,8 +2370,10 @@ async function getDiagnosticReport() {
     steamAuth,
     mods: {
       modsDir: modManagement.modsDir || "data/mods",
+      containerModsDir: modManagement.containerModsDir || "/data/Mods/user",
       installedCount: modManagement.installed?.length || 0,
       directoryIssues: modManagement.directoryIssues || [],
+      containerVisibility: modManagement.containerVisibility || null,
       installed: (modManagement.installed || []).map((mod) => ({
         directoryName: mod.directoryName,
         name: mod.name,
