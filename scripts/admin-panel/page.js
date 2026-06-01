@@ -1281,6 +1281,7 @@ const PAGE = String.raw`<!doctype html>
       const loadReport = report.mods?.loadReport || {};
       const steamAuth = report.steamAuth || {};
       const steamAuthLog = steamAuth.logReport || {};
+      const gameCrash = report.gameCrash || {};
       const lines = [
         "StardewValleyServerKit diagnostics",
         "Generated: " + (report.generatedAt || ""),
@@ -1310,6 +1311,21 @@ const PAGE = String.raw`<!doctype html>
         (steamAuth.issues || []).join("\n") || "none",
         "recentErrors:",
         (steamAuthLog.recentErrors || []).join("\n") || "none",
+        "",
+        "Game crash:",
+        "status=" + (gameCrash.status || "unknown"),
+        "message=" + (gameCrash.message || "n/a"),
+        "newDayDisconnectCrash=" + Boolean(gameCrash.newDayDisconnectCrash),
+        "newDaySyncCrash=" + Boolean(gameCrash.newDaySyncCrash),
+        "keyIds=" + ((gameCrash.keyIds || []).join(",") || "none"),
+        "repeatCount=" + (gameCrash.repeatCount || 0),
+        "timestamp=" + (gameCrash.timestamp || "n/a"),
+        "issues:",
+        (gameCrash.issues || []).join("\n") || "none",
+        "recommendations:",
+        (gameCrash.recommendations || []).join("\n") || "none",
+        "recentErrors:",
+        (gameCrash.recentErrors || []).join("\n") || "none",
         "",
         "Stack:",
         JSON.stringify(report.stack || {}, null, 2),

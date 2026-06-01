@@ -429,6 +429,46 @@ docker port sdv-server
 4. 用测试存档复现。
 5. 对照 `TEST_PLAN.md` 检查特殊日期。
 
+## 过夜时报 `LidgrenServer.playerDisconnected`
+
+现象：
+
+- 日志重复出现 `Error on new day`。
+- 同时出现 `KeyNotFoundException: The given key '...' was not present in the dictionary`。
+- 堆栈包含 `StardewValley.Network.LidgrenServer.playerDisconnected`、
+  `NetSynchronizer.barrier("new day")` 或 `_newDayTask failed`。
+
+这类日志表示游戏本体在新一天多人同步阶段处理某个断线玩家 ID 时崩溃。
+它不是 Web 管理面板崩溃，也不等同于某个 Mod 的 `manifest.json` 加载失败。
+常见触发因素是过夜时玩家断线、联机状态残留、农场手/小屋引用不一致，
+或者新增 Mod 在过夜阶段改变多人/保存流程。
+
+先做低风险恢复：
+
+```bash
+cd /opt/stardew/StardewValleyServerKit || exit 1
+docker compose --env-file .env down
+docker compose --env-file .env up -d
+docker compose --env-file .env ps
+```
+
+这一步只清掉游戏进程内存里的残留联机状态，不会删除存档、Mod 或 Docker volume。
+如果重启后能正常进入，先让所有玩家在稳定网络下完成一次过夜保存。
+
+如果每次过夜仍复现：
+
+1. 在 Web 管理面板执行“一键诊断”，确认 `Game crash` 区块识别到
+   `newDayDisconnectCrash=true`。
+2. 确认没有玩家在线。
+3. 在“存档管理”里先创建备份。
+4. 打开当前存档的“配置”，按当前目标小屋/角色槽执行“修复小屋”。
+   该功能会修正小屋引用、农场角色 `UniqueMultiplayerID` 和缺失的角色槽。
+5. 再重启服务端并测试一次过夜。
+
+如果崩溃是在新增或更新 Mod 后才出现，先不要删除真实存档。
+把最近新增的 Mod 临时移到 `backups/mods/manual-quarantine-*`，
+重启并完成一次过夜验证。确认稳定后，再按一次一个 Mod 的方式恢复。
+
 ## 地震或节日后异常
 
 重点记录：

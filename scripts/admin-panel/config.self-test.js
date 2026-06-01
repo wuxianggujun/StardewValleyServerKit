@@ -184,6 +184,29 @@ async function main() {
     );
     assert.equal(summaryWithSteam.status, "needs-attention");
     assert.match(summaryWithSteam.issues.join("\n"), /Steam Auth 尚未登录/);
+    const newDayCrashLog = [
+      "[10:31:41 ERROR game] An error occurred in the base update loop: System.Exception: Error on new day:",
+      "System.Collections.Generic.KeyNotFoundException: The given key '-3064972570627944779' was not present in the dictionary.",
+      "   at StardewValley.Network.LidgrenServer.playerDisconnected(Int64 disconnectee)",
+      "   at StardewValley.Network.LidgrenServer.receiveMessages()",
+      "   at StardewValley.NetSynchronizer.barrier(String name)",
+      "[10:31:41 ERROR game] _newDayTask failed with an exception:",
+    ].join("\n");
+    const gameCrashReport = __test.buildGameCrashReport(newDayCrashLog);
+    assert.equal(gameCrashReport.status, "needs-attention");
+    assert.equal(gameCrashReport.newDayDisconnectCrash, true);
+    assert.deepEqual(gameCrashReport.keyIds, ["-3064972570627944779"]);
+    assert.match(gameCrashReport.message, /新一天同步/);
+    assert.match(gameCrashReport.recommendations.join("\n"), /小屋和农场手引用/);
+    const summaryWithCrash = __test.diagnosticSummary(
+      { available: true },
+      { loadReport: {} },
+      { ok: true },
+      { status: "ok" },
+      gameCrashReport,
+    );
+    assert.equal(summaryWithCrash.status, "needs-attention");
+    assert.match(summaryWithCrash.message, /新一天同步/);
 
     const beforeEnv = await readText(envFile);
     await assert.rejects(

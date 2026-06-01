@@ -2145,8 +2145,66 @@ function buildSteamAuthDiagnostic(logText, stackState) {
   };
 }
 
-function diagnosticSummary(apiDiagnostic, modManagement, stackState, steamAuthDiagnostic) {
+function buildGameCrashReport(logText) {
+  const rawLines = stripAnsi(logText || "")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(-1600);
+  const text = rawLines.join("\n");
+  const keyIds = Array.from(text.matchAll(/The given key '(-?\d+)' was not present in the dictionary/gi))
+    .map((match) => match[1]);
+  const uniqueKeyIds = [...new Set(keyIds)];
+  const newDayDisconnectCrash =
+    /Error on new day/i.test(text) &&
+    /KeyNotFoundException/i.test(text) &&
+    /LidgrenServer\.playerDisconnected/i.test(text);
+  const newDaySyncCrash =
+    newDayDisconnectCrash ||
+    (
+      /_newDayTask failed/i.test(text) &&
+      /NetSynchronizer\.barrier/i.test(text) &&
+      /KeyNotFoundException/i.test(text)
+    );
+  const firstCrashLine = rawLines.find((line) => /Error on new day|_newDayTask failed/i.test(line)) || "";
+  const timestamp = firstCrashLine.match(/\[(\d{2}:\d{2}:\d{2})\s+ERROR game\]/i)?.[1] || "";
   const issues = [];
+  const recommendations = [];
+
+  if (newDayDisconnectCrash) {
+    const idText = uniqueKeyIds.length ? `，异常玩家 ID：${uniqueKeyIds.join(", ")}` : "";
+    issues.push(`游戏本体在新一天同步时处理断线玩家失败${idText}。这通常是联机断线状态、农场手/小屋引用或过夜阶段 Mod 逻辑让多人状态字典不一致。`);
+    recommendations.push("先确认没有玩家在线，然后完全重启游戏容器，清掉内存里的残留联机状态。");
+    recommendations.push("如果重启后过夜仍复现，先备份存档，再在“存档配置/小屋修复”里修复当前存档的小屋和农场手引用。");
+    recommendations.push("如果问题是在新增或更新 Mod 后开始出现，停服后临时移走最近变更的 Mod，按一次一个 Mod 的方式恢复验证。");
+  } else if (newDaySyncCrash) {
+    issues.push("游戏本体在新一天同步阶段崩溃。日志没有完整指向断线玩家处理，但已经进入过夜同步失败状态。");
+    recommendations.push("先确认无人在线并重启游戏容器；若复现，备份后检查当前存档的小屋/农场手引用和最近安装的 Mod。");
+  }
+
+  const recentErrors = uniqueDiagnosticLines(rawLines.filter((line) => (
+    /Error on new day|_newDayTask failed|KeyNotFoundException|LidgrenServer\.playerDisconnected|NetSynchronizer\.barrier|Game1\._newDayAfterFade/i.test(line)
+  )), 30);
+
+  return {
+    status: issues.length ? "needs-attention" : "ok",
+    ok: issues.length === 0,
+    message: issues[0] || "未发现游戏本体新一天崩溃。",
+    issues,
+    recommendations,
+    newDayDisconnectCrash,
+    newDaySyncCrash,
+    keyIds: uniqueKeyIds,
+    repeatCount: keyIds.length,
+    timestamp,
+    recentErrors,
+  };
+}
+
+function diagnosticSummary(apiDiagnostic, modManagement, stackState, steamAuthDiagnostic, gameCrashDiagnostic) {
+  const issues = [];
+  if (gameCrashDiagnostic && gameCrashDiagnostic.status !== "ok") {
+    issues.push(gameCrashDiagnostic.message || "游戏本体运行日志包含崩溃。");
+  }
   if (apiDiagnostic && !apiDiagnostic.available) {
     issues.push(apiDiagnostic.message || "服务端 HTTP API 不可用。");
   }
@@ -2192,10 +2250,11 @@ async function getDiagnosticReport() {
   ]);
   const logTail = tailLogText(logText, 220, 9000);
   const steamAuth = buildSteamAuthDiagnostic(logText, stackState);
+  const gameCrash = buildGameCrashReport(logText);
 
   return {
     generatedAt: new Date().toISOString(),
-    summary: diagnosticSummary(apiDiagnostic, modManagement, stackState, steamAuth),
+    summary: diagnosticSummary(apiDiagnostic, modManagement, stackState, steamAuth, gameCrash),
     env: publicEnvSnapshot(env),
     stack: {
       inspect: stackState,
@@ -2227,6 +2286,7 @@ async function getDiagnosticReport() {
       maxPlayers: status.runtime?.maxPlayers ?? null,
       inviteCode: status.join?.inviteCode || "n/a",
     },
+    gameCrash,
     logs: {
       tail: logTail,
     },
@@ -2991,6 +3051,7 @@ module.exports = {
     tailLogText,
     buildSteamAuthLogReport,
     buildSteamAuthDiagnostic,
+    buildGameCrashReport,
     diagnosticSummary,
     DOCKER_INSPECT_API_FORMAT,
   },
