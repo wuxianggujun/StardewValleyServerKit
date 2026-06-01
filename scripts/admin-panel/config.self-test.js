@@ -146,6 +146,44 @@ async function main() {
     assert.equal(__test.tailLogText("a\nb\nc\n", 2, 100), "b\nc");
     assert.match(__test.DOCKER_INSPECT_API_FORMAT, /printf "\\t"/);
     assert.match(__test.DOCKER_INSPECT_API_FORMAT, /json \.Mounts/);
+    const steamLoginReport = __test.buildSteamAuthLogReport([
+      "sdv-steam-auth  | [SteamService] HTTP API listening on port 3001",
+      "sdv-steam-auth  | [SteamService] No saved session - run 'setup' first",
+    ].join("\n"));
+    assert.equal(steamLoginReport.status, "needs-login");
+    assert.equal(steamLoginReport.notLoggedIn, true);
+    assert.match(steamLoginReport.message, /Steam Auth 尚未登录/);
+    assert.match(steamLoginReport.setupCommand, /\.\/setup\.sh login/);
+    const steamForbiddenReport = __test.buildSteamAuthLogReport("download failed: Steam manifest HTTP 403 Forbidden");
+    assert.equal(steamForbiddenReport.manifestForbidden, true);
+    assert.equal(steamForbiddenReport.fallbackRecommended, true);
+    assert.match(steamForbiddenReport.issues.join("\n"), /steamcmd-download/);
+    const scopedSteamReport = __test.buildSteamAuthLogReport([
+      "sdv-server  | ERROR unrelated Docker failure",
+      "sdv-steam-auth  | [SteamService] No saved session - run 'setup' first",
+    ].join("\n"));
+    assert.equal(scopedSteamReport.recentErrors.some((line) => /unrelated Docker failure/.test(line)), false);
+    assert.equal(scopedSteamReport.notLoggedIn, true);
+    const dockerOnlySteamReport = __test.buildSteamAuthLogReport("error during connect: Docker pipe is not available");
+    assert.equal(dockerOnlySteamReport.recentErrors.length, 0);
+    const steamGuardReport = __test.buildSteamAuthLogReport("This computer has not been authenticated. Steam Guard code:");
+    assert.equal(steamGuardReport.guardRequired, true);
+    assert.equal(steamGuardReport.status, "needs-login");
+    const steamDiagnostic = __test.buildSteamAuthDiagnostic("No saved session - run setup first", {
+      ok: true,
+      containers: [{ name: "sdv-steam-auth", status: "running", health: "healthy" }],
+    });
+    assert.equal(steamDiagnostic.status, "needs-login");
+    assert.equal(steamDiagnostic.ok, false);
+    assert.match(steamDiagnostic.message, /Steam Auth 尚未登录/);
+    const summaryWithSteam = __test.diagnosticSummary(
+      { available: true },
+      { loadReport: {} },
+      { ok: true },
+      steamDiagnostic,
+    );
+    assert.equal(summaryWithSteam.status, "needs-attention");
+    assert.match(summaryWithSteam.issues.join("\n"), /Steam Auth 尚未登录/);
 
     const beforeEnv = await readText(envFile);
     await assert.rejects(

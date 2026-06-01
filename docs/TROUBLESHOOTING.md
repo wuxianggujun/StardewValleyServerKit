@@ -535,6 +535,35 @@ docker compose --env-file .env ps
 不要反复点击重启。`unless-stopped` 会让崩溃的容器持续重启，重复操作只会覆盖
 最近日志，反而更难定位第一条异常。
 
+管理面板的“模组”页可以直接点“加载检测”。新版诊断会把结果分成：
+
+- `已加载`：SMAPI 日志确认该 Mod 已加载。
+- `运行警告`：Mod 已加载，但运行时有警告，例如无头环境里音频资源初始化失败。
+  这类警告不等于 Mod 加载失败。
+- `异常`：SMAPI 明确提示缺少前置依赖、manifest 错误、被跳过或加载失败。
+- `未确认`：最近日志没有看到该 Mod，可能是刚重启、日志滚动或 SMAPI 没走到加载阶段。
+
+如果诊断里显示 `Steam Auth 尚未登录`，先在服务器项目目录执行：
+
+```bash
+cd /opt/stardew/StardewValleyServerKit || exit 1
+./setup.sh login
+```
+
+底层等价命令是：
+
+```bash
+docker compose --env-file .env run --rm -it steam-auth login
+```
+
+如果同时看到 `Steam Guard`，验证码必须输入到运行登录命令的服务器终端，
+不要发到聊天、Issue 或截图里。若诊断提示 manifest/CDN `403 Forbidden`，
+改用 SteamCMD 备用下载：
+
+```bash
+./setup.sh steamcmd-download
+```
+
 ## Mod 依赖缺失
 
 现象：

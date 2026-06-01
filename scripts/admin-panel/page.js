@@ -172,6 +172,8 @@ const PAGE = String.raw`<!doctype html>
       color: var(--muted);
       font-size: 12px;
     }
+    .hint.warn { color: var(--amber); }
+    .hint.bad { color: var(--red); }
     .status-list, .kv-list, .players {
       display: grid;
       gap: 8px;
@@ -1207,7 +1209,8 @@ const PAGE = String.raw`<!doctype html>
     function loadReportStateText(report) {
       if (!report?.logAvailable || !report?.smapiDetected) return t("mods.loadNoLogs");
       if (report.errors?.length || report.problemMods?.length || report.skipped?.length) return t("mods.loadNeedsAttention");
-      if (report.unconfirmedInstalled?.length) return t("mods.loadPartial");
+      if (report.warningMods?.length || report.runtimeWarnings?.length) return t("mods.loadWarnings");
+      if (report.unconfirmedInstalled?.length || report.directoryIssues?.length) return t("mods.loadPartial");
       return t("mods.loadHealthy");
     }
 
@@ -1219,7 +1222,7 @@ const PAGE = String.raw`<!doctype html>
         : String(loadedSummary);
       const stateKind = (!report?.logAvailable || !report?.smapiDetected || report.errors?.length || report.problemMods?.length || report.skipped?.length)
         ? "bad"
-        : (report.unconfirmedInstalled?.length ? "warn" : "ok");
+        : ((report.warningMods?.length || report.runtimeWarnings?.length || report.unconfirmedInstalled?.length || report.directoryIssues?.length) ? "warn" : "ok");
       modLoadSummary.innerHTML = [
         metricHtml(t("mods.metricInstalled"), installedCount, ""),
         metricHtml(t("mods.metricLoaded"), loadedText, loadedSummary == null ? "warn" : "ok"),
@@ -1228,21 +1231,56 @@ const PAGE = String.raw`<!doctype html>
       ].join("");
     }
 
+    function modLoadReasonText(item) {
+      const reason = item?.reason || "";
+      const map = {
+        "loaded": t("mods.reasonLoaded"),
+        "runtime-warning": t("mods.reasonRuntimeWarning"),
+        "missing-dependency": t("mods.reasonMissingDependency"),
+        "manifest-error": t("mods.reasonManifestError"),
+        "empty-folder": t("mods.reasonEmptyFolder"),
+        "skipped": t("mods.reasonSkipped"),
+        "load-failed": t("mods.reasonLoadFailed"),
+        "runtime-error": t("mods.reasonRuntimeError"),
+        "not-seen-in-log": t("mods.reasonNotSeen"),
+        "log-unavailable": t("mods.reasonNoLogs"),
+      };
+      return map[reason] || reason || "";
+    }
+
     function modLoadPill(report, mod) {
       const item = report?.byDirectory?.[mod.directoryName];
       if (!report?.logAvailable || !report?.smapiDetected) return "";
       if (!item) return "";
       if (item.state === "loaded") {
-        return ' <span class="pill ok" title="' + escapeHtml(item.evidence || "") + '">' + escapeHtml(t("mods.loadConfirmed")) + '</span>';
+        const pillClass = item.severity === "warn" ? "warn" : "ok";
+        const text = item.severity === "warn" ? t("mods.loadWarning") : t("mods.loadConfirmed");
+        return ' <span class="pill ' + pillClass + '" title="' + escapeHtml(item.evidence || "") + '">' + escapeHtml(text) + '</span>';
+      }
+      if (item.state === "warning") {
+        return ' <span class="pill warn" title="' + escapeHtml(item.evidence || "") + '">' + escapeHtml(t("mods.loadWarning")) + '</span>';
       }
       if (item.state === "problem") {
         return ' <span class="pill bad" title="' + escapeHtml(item.evidence || "") + '">' + escapeHtml(t("mods.loadProblem")) + '</span>';
       }
-      return ' <span class="pill warn">' + escapeHtml(t("mods.loadUnconfirmed")) + '</span>';
+      return ' <span class="pill warn" title="' + escapeHtml(modLoadReasonText(item)) + '">' + escapeHtml(t("mods.loadUnconfirmed")) + '</span>';
+    }
+
+    function modLoadDetailHtml(report, mod) {
+      const item = report?.byDirectory?.[mod.directoryName];
+      if (!item) return "";
+      const reason = modLoadReasonText(item);
+      const evidence = item.evidence || "";
+      if (!reason && !evidence) return "";
+      const cls = item.severity === "error" ? "bad" : (item.severity === "warn" ? "warn" : "");
+      const text = [reason, evidence].filter(Boolean).join("：");
+      return '<span class="hint ' + cls + '">' + escapeHtml(text) + '</span>';
     }
 
     function diagnosticsText(report) {
       const loadReport = report.mods?.loadReport || {};
+      const steamAuth = report.steamAuth || {};
+      const steamAuthLog = steamAuth.logReport || {};
       const lines = [
         "StardewValleyServerKit diagnostics",
         "Generated: " + (report.generatedAt || ""),
@@ -1261,6 +1299,18 @@ const PAGE = String.raw`<!doctype html>
         "Server API:",
         JSON.stringify(report.serverApi || {}, null, 2),
         "",
+        "Steam Auth:",
+        "status=" + (steamAuth.status || "unknown"),
+        "message=" + (steamAuth.message || "n/a"),
+        "setupCommand=" + (steamAuthLog.setupCommand || "./setup.sh login"),
+        "fallbackRecommended=" + Boolean(steamAuthLog.fallbackRecommended),
+        "guardRequired=" + Boolean(steamAuthLog.guardRequired),
+        "manifestForbidden=" + Boolean(steamAuthLog.manifestForbidden),
+        "issues:",
+        (steamAuth.issues || []).join("\n") || "none",
+        "recentErrors:",
+        (steamAuthLog.recentErrors || []).join("\n") || "none",
+        "",
         "Stack:",
         JSON.stringify(report.stack || {}, null, 2),
         "",
@@ -1269,11 +1319,20 @@ const PAGE = String.raw`<!doctype html>
         "installedCount=" + (report.mods?.installedCount || 0),
         "loadedSummaryCount=" + (loadReport.loadedSummaryCount ?? "unknown"),
         "unconfirmedInstalled=" + (loadReport.unconfirmedInstalled?.length || 0),
+        "warningMods=" + (loadReport.warningMods?.length || 0),
         "problemMods=" + (loadReport.problemMods?.length || 0),
+        "directoryIssues=" + (loadReport.directoryIssues?.length || report.mods?.directoryIssues?.length || 0),
         "smapiErrors=" + (loadReport.errors?.length || 0),
         "",
+        "Mod load details:",
+        Object.values(loadReport.byDirectory || {}).map((item) => (
+          String(item.directoryName || "unknown") + ": " +
+            String(item.state || "unknown") + "/" + String(item.severity || "unknown") + " " +
+            String(item.reason || "") + (item.evidence ? " | " + item.evidence : "")
+        )).join("\n") || "none",
+        "",
         "Recent SMAPI problems:",
-        [...(loadReport.errors || []), ...(loadReport.skipped || []), ...(loadReport.warnings || [])].slice(0, 40).join("\n") || "none",
+        [...(loadReport.errors || []), ...(loadReport.skipped || []), ...(loadReport.warnings || []), ...(loadReport.runtimeWarnings || [])].slice(0, 40).join("\n") || "none",
         "",
         "Recent logs:",
         report.logs?.tail || "",
@@ -1853,6 +1912,7 @@ const PAGE = String.raw`<!doctype html>
             ' · ' + escapeHtml(t("mods.dll", { dll: mod.entryDll || "n/a" })) +
             ' · ' + escapeHtml(t("mods.updated", { time: formatDateTime(mod.updatedAt) })) + '</span>' +
             '<span class="hint">' + escapeHtml(t("mods.config", { text: mod.hasConfig ? ("config.json · " + formatDateTime(mod.configUpdatedAt)) : t("mods.configMissing") })) + '</span>' +
+            modLoadDetailHtml(loadReport, mod) +
             (mod.updateKeys?.length ? '<span class="hint">UpdateKeys：' + escapeHtml(mod.updateKeys.join(", ")) + '</span>' : '') +
             (mod.hasManifest ? '' : '<span class="hint bad">' + escapeHtml(t("mods.manifestFailed", { error: mod.manifestError || t("mods.unknownError") })) + '</span>') +
           '</div>' +
@@ -1873,6 +1933,7 @@ const PAGE = String.raw`<!doctype html>
           loaded: loadReport.loadedSummaryCount == null ? t("mods.loadUnknown") : loadReport.loadedSummaryCount,
           errors: loadReport.errors?.length || 0,
           skipped: loadReport.skipped?.length || 0,
+          warnings: loadReport.warningMods?.length || loadReport.runtimeWarnings?.length || 0,
         })) + '</span></div></div>',
         '<div class="manage-item"><div><strong>' + escapeHtml(t("mods.guideBackupTitle")) + '</strong><span class="hint">' + escapeHtml(t("mods.guideBackup")) + '</span></div></div>',
         '<div class="manage-item"><div><strong>' + escapeHtml(t("mods.guideRestartTitle")) + '</strong><span class="hint">' + escapeHtml(t("mods.guideRestart")) + '</span></div></div>',
@@ -2410,6 +2471,8 @@ const PAGE = String.raw`<!doctype html>
           loaded: loadReport.loadedSummaryCount == null ? t("mods.loadUnknown") : loadReport.loadedSummaryCount,
           errors: loadReport.errors?.length || 0,
           skipped: loadReport.skipped?.length || 0,
+          warnings: loadReport.warningMods?.length || loadReport.runtimeWarnings?.length || 0,
+          steam: report.steamAuth?.status || "unknown",
         }), report.summary?.status === "ok" ? "ok" : "warn");
       } catch (error) {
         setMessage(modsMessage, error.message, "bad");

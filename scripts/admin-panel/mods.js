@@ -502,6 +502,45 @@ async function findInstalledModDirectories(state) {
   return mods;
 }
 
+async function inspectModDirectoryIssues(rootDir, dir, depth = 0, issues = []) {
+  if (depth > 20) return { hasManifest: false, hasNestedManifest: false };
+
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
+  const hasManifest = entries.some((entry) => entry.isFile() && entry.name.toLowerCase() === "manifest.json");
+  let hasNestedManifest = false;
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || shouldSkipModDirectory(entry.name)) continue;
+    const child = await inspectModDirectoryIssues(rootDir, path.join(dir, entry.name), depth + 1, issues);
+    hasNestedManifest = hasNestedManifest || child.hasManifest || child.hasNestedManifest;
+  }
+
+  const directoryName = modRelativePath(rootDir, dir);
+  if (directoryName && !hasManifest && !hasNestedManifest && entries.length === 0) {
+    issues.push({
+      directoryName,
+      type: "empty-folder",
+      severity: "warn",
+      reason: "empty-folder",
+      message: "data/mods 下存在空目录；SMAPI 会跳过它，确认不需要后可手动清理。",
+    });
+  }
+
+  if (issues.length > 80) {
+    throw new Error("data/mods 下空目录或异常目录过多，请先手动确认目录结构。");
+  }
+
+  return { hasManifest, hasNestedManifest };
+}
+
+async function findModDirectoryIssues(state) {
+  const root = path.resolve(state.modsDir);
+  await fsp.mkdir(root, { recursive: true });
+  const issues = [];
+  await inspectModDirectoryIssues(root, root, 0, issues);
+  return issues;
+}
+
 async function listInstalledMods(state) {
   await fsp.mkdir(state.modsDir, { recursive: true });
   const entries = await findInstalledModDirectories(state);
@@ -573,8 +612,13 @@ function stripComposeLogPrefix(line) {
 }
 
 function cleanSmapiLogLine(line) {
+  const stripped = stripComposeLogPrefix(line);
+  const sourceMatch = stripped.match(/^\s*\[[^\]]*\b(?:TRACE|DEBUG|INFO|WARN|ERROR)\s+([^\]]+)\]\s*(.*)$/i);
+  if (sourceMatch && !/^SMAPI$/i.test(sourceMatch[1].trim())) {
+    return cleanText(`${sourceMatch[1].trim()}: ${sourceMatch[2].trim()}`, 420);
+  }
   return cleanText(
-    stripComposeLogPrefix(line)
+    stripped
       .replace(/^\s*(?:\[[^\]]+\]\s*)?/, "")
       .replace(/^\s*[-*]\s*/, "")
       .replace(/^\s*(?:INFO|WARN|ERROR)\s+SMAPI\s+/i, "")
@@ -610,6 +654,7 @@ function collectSmapiLoadLines(lines) {
     const cleaned = cleanSmapiLogLine(line);
     const nextHeader = /\b(?:Loaded|Skipped|Found|Patched|Started)\s+\d+\b/i.test(line) ||
       /^(?:Loaded|Skipped|Found|Patched|Started|Launching|Game|Type)\b/i.test(cleaned) ||
+      /^\s*\[[^\]]+\b(?:TRACE|DEBUG|INFO|WARN|ERROR)\b/i.test(line) ||
       /^\s*(?:INFO|WARN|ERROR)\s+(?!SMAPI\b)/i.test(line);
     if (section === "loaded" && cleaned && !nextHeader) {
       if (cleaned) loadedLines.push(cleaned);
@@ -651,6 +696,33 @@ function uniqueLogLines(lines, maxItems) {
   return result;
 }
 
+function extractSmapiModPath(line) {
+  const cleaned = cleanSmapiLogLine(line);
+  const pathMatch = cleaned.match(/\bpath:\s*([^)]+)\)/i);
+  const raw = pathMatch ? pathMatch[1] : (cleaned.match(/^(.+?)\s+\(ID:/i)?.[1] || "");
+  return cleanText(raw.replace(/\\/g, "/"), 180, "");
+}
+
+function modLogReason(line) {
+  const cleaned = cleanSmapiLogLine(line);
+  if (!cleaned) return "";
+  if (/\b(?:missing\s+dependency|requires\s+.+not\s+installed)\b/i.test(cleaned)) return "missing-dependency";
+  if (/\b(?:invalid|missing)\s+manifest\b/i.test(cleaned)) return "manifest-error";
+  if (/\bempty\s+folder\b/i.test(cleaned)) return "empty-folder";
+  if (/\b(?:Skipped\s+mods?|could\s+not\s+be\s+added\s+to\s+your\s+game)\b/i.test(cleaned)) return "skipped";
+  if (
+    /\b(?:AssetHelper|asset)\b.*\bfailed\s+to\s+load\s+asset\b/i.test(cleaned) ||
+    /\bAudio\s+has\s+failed\s+to\s+initialize\b/i.test(cleaned)
+  ) {
+    return "runtime-warning";
+  }
+  if (/\bfailed\s+(?:loading|to\s+load|to\s+initialize)\b/i.test(cleaned)) return "load-failed";
+  if (/\bcould\s+not\s+be\s+(?:loaded|initialized)\b/i.test(cleaned)) return "load-failed";
+  if (/\b(?:exception|crash)\b/i.test(cleaned)) return "runtime-error";
+  if (/\b(?:WARN|warning|deprecated|no update keys)\b/i.test(cleaned)) return "runtime-warning";
+  return "";
+}
+
 function isSpecificModProblemLine(line) {
   const cleaned = cleanSmapiLogLine(line);
   if (!cleaned) return false;
@@ -669,6 +741,16 @@ function isSpecificModProblemLine(line) {
   );
 }
 
+function isSpecificModWarningLine(line) {
+  const cleaned = cleanSmapiLogLine(line);
+  if (!cleaned) return false;
+  return (
+    /\b(?:AssetHelper|asset)\b.*\bfailed\s+to\s+load\s+asset\b/i.test(cleaned) ||
+    /\bAudio\s+has\s+failed\s+to\s+initialize\b/i.test(cleaned) ||
+    /\b(?:WARN|warning|deprecated|no update keys)\b/i.test(cleaned)
+  );
+}
+
 function buildModLoadReport(logText, installed = []) {
   const lines = stripAnsi(logText)
     .split(/\r?\n/)
@@ -679,9 +761,11 @@ function buildModLoadReport(logText, installed = []) {
   const { loadedSummaryCount, loadedLines, skippedLines } = collectSmapiLoadLines(lines);
   const smapiErrorFailure = /\b(?:failed|exception|crash|could not|missing dependency|requires .* not installed|invalid|empty folder|skipped mods?)\b/i;
   const errorLines = uniqueLogLines(lines.filter((line) => (
-    (/\bERROR\s+SMAPI\b/i.test(line) && smapiErrorFailure.test(line)) ||
-    /\bSMAPI\b.*\b(error|exception|failed|crash)\b/i.test(line) ||
-    /\b(mod|manifest|content pack|content patcher|dependency)\b.*\b(error|exception|failed|missing|invalid)\b/i.test(line)
+    !isSpecificModWarningLine(line) && (
+      (/\bERROR\s+SMAPI\b/i.test(line) && smapiErrorFailure.test(line)) ||
+      /\bSMAPI\b.*\b(error|exception|failed|crash)\b/i.test(line) ||
+      /\b(mod|manifest|content pack|content patcher|dependency)\b.*\b(error|exception|failed|missing|invalid)\b/i.test(line)
+    )
   )), 24);
   const warningLines = uniqueLogLines(lines.filter((line) => (
     /\bWARN\s+SMAPI\b/i.test(line) ||
@@ -699,8 +783,20 @@ function buildModLoadReport(logText, installed = []) {
     ...skippedLines,
     ...lines,
   ].filter(isSpecificModProblemLine), 80);
+  const runtimeWarningLines = uniqueLogLines(lines.filter(isSpecificModWarningLine), 80);
+  const emptyFolderEntries = uniqueLogLines([
+    ...skippedLines,
+    ...lines,
+  ].filter((line) => /\bempty\s+folder\b/i.test(line)), 40).map((line) => ({
+    directoryName: extractSmapiModPath(line),
+    type: "empty-folder",
+    severity: "warn",
+    reason: "empty-folder",
+    evidence: line,
+  }));
   const byDirectory = {};
   const confirmedLoaded = [];
+  const warningMods = [];
   const problemMods = [];
   const unconfirmedInstalled = [];
 
@@ -708,14 +804,31 @@ function buildModLoadReport(logText, installed = []) {
     const needles = modNeedles(mod);
     const loadedEvidence = pickMatchingLine(loadedTextLines, needles);
     const problemEvidence = pickMatchingLine(problemLines, needles);
+    const warningEvidence = pickMatchingLine(runtimeWarningLines, needles);
     let state = "unconfirmed";
+    let severity = smapiDetected ? "warn" : "unknown";
+    let reason = smapiDetected ? "not-seen-in-log" : "log-unavailable";
     let evidence = "";
-    if (problemEvidence) {
+    if (!mod.hasManifest) {
       state = "problem";
+      severity = "error";
+      reason = "manifest-error";
+      evidence = mod.manifestError || "manifest.json 解析失败。";
+    } else if (problemEvidence) {
+      state = "problem";
+      severity = "error";
+      reason = modLogReason(problemEvidence) || "load-failed";
       evidence = problemEvidence;
     } else if (loadedEvidence) {
       state = "loaded";
+      severity = warningEvidence ? "warn" : "ok";
+      reason = warningEvidence ? (modLogReason(warningEvidence) || "runtime-warning") : "loaded";
       evidence = loadedEvidence;
+    } else if (warningEvidence) {
+      state = "warning";
+      severity = "warn";
+      reason = modLogReason(warningEvidence) || "runtime-warning";
+      evidence = warningEvidence;
     }
 
     const item = {
@@ -723,10 +836,15 @@ function buildModLoadReport(logText, installed = []) {
       name: mod.name,
       uniqueId: mod.uniqueId || "",
       state,
+      severity,
+      reason,
       evidence,
     };
     byDirectory[mod.directoryName] = item;
-    if (state === "loaded") confirmedLoaded.push(item);
+    if (state === "loaded") {
+      confirmedLoaded.push(item);
+      if (severity === "warn") warningMods.push(item);
+    } else if (state === "warning") warningMods.push(item);
     else if (state === "problem") problemMods.push(item);
     else unconfirmedInstalled.push(item);
   }
@@ -740,11 +858,14 @@ function buildModLoadReport(logText, installed = []) {
     loadedNames: loadedTextLines,
     loadedCount: confirmedLoaded.length,
     confirmedLoaded,
+    warningMods,
     problemMods,
     unconfirmedInstalled,
     skipped,
     errors: errorLines,
     warnings: warningLines,
+    runtimeWarnings: runtimeWarningLines,
+    emptyFolderEntries,
     byDirectory,
   };
 }
@@ -1578,11 +1699,16 @@ async function saveModConfig(state, payload) {
 }
 
 async function getModManagement(state, options = {}) {
-  const installed = await listInstalledMods(state);
+  const [installed, directoryIssues] = await Promise.all([
+    listInstalledMods(state),
+    findModDirectoryIssues(state),
+  ]);
   const loadReport = buildModLoadReport(options.logText || "", installed);
+  loadReport.directoryIssues = directoryIssues;
   return {
     modsDir: path.relative(state.rootDir, state.modsDir).replace(/\\/g, "/"),
     installed,
+    directoryIssues,
     loadReport,
     sources: {
       primary: "SMAPI / Nexus Mods",

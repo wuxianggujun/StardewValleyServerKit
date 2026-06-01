@@ -2027,7 +2027,125 @@ async function inspectComposePs() {
   return { ok: true, containers };
 }
 
-function diagnosticSummary(apiDiagnostic, modManagement, stackState) {
+function uniqueDiagnosticLines(lines, maxItems = 20) {
+  const result = [];
+  const seen = new Set();
+  for (const rawLine of lines) {
+    const line = cleanText(rawLine, 420, "");
+    if (!line) continue;
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(line);
+    if (result.length >= maxItems) break;
+  }
+  return result;
+}
+
+function stripComposeServicePrefix(line) {
+  return String(line || "").replace(/^[A-Za-z0-9_.-]+(?:-\d+)?\s+\|\s*/, "").trim();
+}
+
+function buildSteamAuthLogReport(logText) {
+  const rawLines = stripAnsi(logText || "")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(-1200);
+  const steamAuthLines = rawLines.filter((line) => /^[A-Za-z0-9_.-]*steam-auth(?:-\d+)?\s+\|/i.test(line));
+  const sourceLines = steamAuthLines.length ? steamAuthLines : rawLines;
+  const lines = sourceLines.map(stripComposeServicePrefix);
+  const text = lines.join("\n");
+  const notLoggedIn = /No saved session|not logged in|run ['"]?setup['"]? first|run ['"]?login['"]? first/i.test(text);
+  const guardRequired = /Steam Guard|two[- ]factor|2FA|authenticator|This computer has not been authenticated/i.test(text);
+  const steamClientDisconnected = /SteamClient instance must be connected|TryAnotherCM|temporarily unavailable/i.test(text);
+  const manifestForbidden = /(?:manifest|download|depot|Steam).*?(?:403|Forbidden)|(?:403|Forbidden).*?(?:manifest|download|depot|Steam)/i.test(text);
+  const refreshTokenInvalid = /refresh token|access token|invalid token|expired token/i.test(text);
+  const setupCommand = "./setup.sh login";
+  const composeLoginCommand = "docker compose --env-file .env run --rm -it steam-auth login";
+  const issues = [];
+
+  if (notLoggedIn) {
+    issues.push(`Steam Auth 尚未登录。先在服务器项目目录执行 ${setupCommand}；等价底层命令：${composeLoginCommand}`);
+  }
+  if (guardRequired) {
+    issues.push("Steam Guard 需要二次验证；验证码必须输入到运行登录命令的服务器终端。");
+  }
+  if (steamClientDisconnected) {
+    issues.push("SteamClient 连接链路未就绪或被 Steam 临时拒绝，可稍后重试登录；下载阶段可使用 SteamCMD 备用流程。");
+  }
+  if (manifestForbidden) {
+    issues.push("Steam manifest/CDN 下载返回 403；建议执行 ./setup.sh steamcmd-download 使用 SteamCMD 备用下载。");
+  }
+  if (refreshTokenInvalid) {
+    issues.push("Steam 登录 token 可能失效，需要重新执行 Steam Auth 登录。");
+  }
+
+  const recentErrors = uniqueDiagnosticLines(lines.filter((line) => (
+    /error|exception|failed|forbidden|not logged in|No saved session|SteamClient instance must be connected/i.test(line) &&
+    (steamAuthLines.length || /Steam|steam-auth|SteamService|session|manifest|depot|download|Guard|token|setup/i.test(line))
+  )), 20);
+  const recentWarnings = uniqueDiagnosticLines(lines.filter((line) => (
+    /warn|Steam Guard|setup first|TryAnotherCM|authenticated/i.test(line) &&
+    (steamAuthLines.length || /Steam|steam-auth|SteamService|session|manifest|depot|download|Guard|token|setup/i.test(line))
+  )), 20);
+
+  let status = "ok";
+  let message = "Steam Auth 日志未发现明显授权或下载异常。";
+  if (notLoggedIn || guardRequired || refreshTokenInvalid) {
+    status = "needs-login";
+    message = issues[0];
+  } else if (steamClientDisconnected || manifestForbidden) {
+    status = "needs-attention";
+    message = issues[0];
+  } else if (!lines.length) {
+    status = "unknown";
+    message = "未读取到 Steam Auth 日志。";
+  }
+
+  return {
+    status,
+    message,
+    issues,
+    setupCommand,
+    composeLoginCommand,
+    guardRequired,
+    notLoggedIn,
+    steamClientDisconnected,
+    manifestForbidden,
+    refreshTokenInvalid,
+    fallbackRecommended: steamClientDisconnected || manifestForbidden,
+    recentErrors,
+    recentWarnings,
+  };
+}
+
+function buildSteamAuthDiagnostic(logText, stackState) {
+  const containers = Array.isArray(stackState?.containers) ? stackState.containers : [];
+  const container = containers.find((item) => item.name === "sdv-steam-auth") || null;
+  const logReport = buildSteamAuthLogReport(logText);
+  const issues = [...logReport.issues];
+  if (!container) {
+    issues.unshift("没有找到 sdv-steam-auth 容器。");
+  } else if (container.status && container.status !== "running") {
+    issues.unshift(`sdv-steam-auth 容器状态异常：${container.status}/${container.health || "none"}。`);
+  } else if (container.health && !["healthy", "none"].includes(container.health)) {
+    issues.unshift(`sdv-steam-auth 健康检查异常：${container.health}。`);
+  }
+
+  const status = issues.length
+    ? (logReport.status === "ok" ? "needs-attention" : logReport.status)
+    : logReport.status;
+  return {
+    status,
+    ok: status === "ok",
+    message: issues[0] || logReport.message,
+    issues,
+    container,
+    logReport,
+  };
+}
+
+function diagnosticSummary(apiDiagnostic, modManagement, stackState, steamAuthDiagnostic) {
   const issues = [];
   if (apiDiagnostic && !apiDiagnostic.available) {
     issues.push(apiDiagnostic.message || "服务端 HTTP API 不可用。");
@@ -2041,6 +2159,15 @@ function diagnosticSummary(apiDiagnostic, modManagement, stackState) {
   }
   if (loadReport.skipped?.length || loadReport.problemMods?.length) {
     issues.push(`最近 SMAPI 日志显示有 Mod 被跳过或加载异常。`);
+  }
+  if (loadReport.warningMods?.length || loadReport.runtimeWarnings?.length) {
+    issues.push(`最近 SMAPI 日志包含 ${loadReport.warningMods?.length || loadReport.runtimeWarnings.length} 条 Mod 运行警告。`);
+  }
+  if (loadReport.directoryIssues?.length || modManagement?.directoryIssues?.length) {
+    issues.push("data/mods 下存在空目录或异常目录；SMAPI 会跳过这些目录。");
+  }
+  if (steamAuthDiagnostic && steamAuthDiagnostic.status !== "ok") {
+    issues.push(steamAuthDiagnostic.message || "Steam Auth 需要处理。");
   }
   if (stackState?.ok === false) {
     issues.push(stackState.error || "Docker 容器状态读取失败。");
@@ -2064,10 +2191,11 @@ async function getDiagnosticReport() {
     inspectComposePs().catch((error) => ({ ok: false, error: error.message || String(error), containers: [] })),
   ]);
   const logTail = tailLogText(logText, 220, 9000);
+  const steamAuth = buildSteamAuthDiagnostic(logText, stackState);
 
   return {
     generatedAt: new Date().toISOString(),
-    summary: diagnosticSummary(apiDiagnostic, modManagement, stackState),
+    summary: diagnosticSummary(apiDiagnostic, modManagement, stackState, steamAuth),
     env: publicEnvSnapshot(env),
     stack: {
       inspect: stackState,
@@ -2077,9 +2205,11 @@ async function getDiagnosticReport() {
       publishedPorts: status.publishedPorts || [],
     },
     serverApi: apiDiagnostic,
+    steamAuth,
     mods: {
       modsDir: modManagement.modsDir || "data/mods",
       installedCount: modManagement.installed?.length || 0,
+      directoryIssues: modManagement.directoryIssues || [],
       installed: (modManagement.installed || []).map((mod) => ({
         directoryName: mod.directoryName,
         name: mod.name,
@@ -2859,6 +2989,9 @@ module.exports = {
     stackRestartVerified,
     stackStateSummary,
     tailLogText,
+    buildSteamAuthLogReport,
+    buildSteamAuthDiagnostic,
+    diagnosticSummary,
     DOCKER_INSPECT_API_FORMAT,
   },
 };

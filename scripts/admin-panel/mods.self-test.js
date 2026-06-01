@@ -77,6 +77,8 @@ async function main() {
   assert.match(I18N["zh-CN"]["nexus.cachePrefix"], /未再次请求 Nexus API/);
   assert.equal(I18N.en["mods.installLocal"], "Install local file");
   assert.equal(I18N.en["mods.diagnose"], "Load check");
+  assert.equal(I18N["zh-CN"]["mods.loadWarning"], "运行警告");
+  assert.match(I18N["zh-CN"]["mods.diagnosed"], /Steam Auth 状态/);
   assert.doesNotMatch(PAGE, /id="refreshBtn"/);
   assert.doesNotMatch(PAGE, /querySelector\("#refreshBtn"\)/);
   assert.doesNotMatch(PAGE, /URLSearchParams\(location\.search\)/);
@@ -93,6 +95,9 @@ async function main() {
   assert.match(PAGE, /id="diagnoseModsBtn"/);
   assert.match(PAGE, /id="modLoadSummary"/);
   assert.match(PAGE, /\/api\/diagnostics/);
+  assert.match(PAGE, /Steam Auth:/);
+  assert.match(PAGE, /report\.steamAuth/);
+  assert.match(PAGE, /modLoadDetailHtml/);
   assert.match(PAGE, /\.field-8 \{ grid-column: span 8; \}/);
   assert.match(PAGE, /id="installModLocalDialog"/);
   assert.match(PAGE, /id="installModLocalForm"/);
@@ -296,13 +301,16 @@ async function main() {
       UniqueID: "Example.Staging",
       Version: "1.0.0",
     }));
+    await fsp.mkdir(path.join(modsDir, "empty-folder"), { recursive: true });
     const listed = await service.getModManagement();
     assert.deepEqual(listed.installed.map((mod) => mod.directoryName), ["smapi/NestedMod", "VisibleMod"]);
     assert.equal(listed.installed.every((mod) => mod.hasConfig), true);
     assert.equal(listed.installed.every((mod) => mod.configSizeBytes > 0), true);
+    assert.equal(listed.directoryIssues.some((issue) => issue.directoryName === "empty-folder"), true);
     assert.equal(listed.loadReport.installedCount, 2);
     assert.equal(listed.loadReport.logAvailable, false);
     assert.equal(listed.loadReport.smapiDetected, false);
+    assert.equal(listed.loadReport.directoryIssues.some((issue) => issue.reason === "empty-folder"), true);
 
     const loadedReport = __test.buildModLoadReport([
       "sdv-server  | [SMAPI] Loaded 3 mods:",
@@ -316,8 +324,19 @@ async function main() {
     assert.equal(loadedReport.smapiDetected, true);
     assert.equal(loadedReport.confirmedLoaded.some((mod) => mod.directoryName === "VisibleMod"), true);
     assert.equal(loadedReport.problemMods.some((mod) => mod.directoryName === "smapi/NestedMod"), true);
+    assert.equal(loadedReport.byDirectory["smapi/NestedMod"].severity, "error");
+    assert.equal(loadedReport.byDirectory["smapi/NestedMod"].reason, "load-failed");
     assert.equal(loadedReport.skipped.length > 0, true);
     assert.equal(loadedReport.errors.length > 0, true);
+
+    const dependencyReport = __test.buildModLoadReport([
+      "sdv-server  | [SMAPI] Loaded 1 mod:",
+      "sdv-server  | [SMAPI]    Visible Mod 1.0.0 by Local | Example.Visible",
+      "sdv-server  | [SMAPI] Skipped mods",
+      "sdv-server  | [SMAPI]    Nested Mod because it needs missing dependency Example.Dependency.",
+    ].join("\n"), listed.installed);
+    assert.equal(dependencyReport.problemMods.some((mod) => mod.directoryName === "smapi/NestedMod"), true);
+    assert.equal(dependencyReport.byDirectory["smapi/NestedMod"].reason, "missing-dependency");
 
     const advisoryReport = __test.buildModLoadReport([
       "sdv-server  | [SMAPI] Loaded 1 mod:",
@@ -340,6 +359,28 @@ async function main() {
     ].join("\n"), listed.installed);
     assert.equal(assetErrorReport.problemMods.some((mod) => mod.directoryName === "VisibleMod"), false);
     assert.equal(assetErrorReport.byDirectory.VisibleMod.state, "loaded");
+    assert.equal(assetErrorReport.byDirectory.VisibleMod.severity, "warn");
+    assert.equal(assetErrorReport.byDirectory.VisibleMod.reason, "runtime-warning");
+    assert.equal(assetErrorReport.warningMods.some((mod) => mod.directoryName === "VisibleMod"), true);
+
+    const manifestReport = __test.buildModLoadReport("", [{
+      directoryName: "BrokenManifest",
+      name: "Broken Manifest",
+      uniqueId: "",
+      hasManifest: false,
+      manifestError: "manifest.json 解析失败",
+    }]);
+    assert.equal(manifestReport.byDirectory.BrokenManifest.state, "problem");
+    assert.equal(manifestReport.byDirectory.BrokenManifest.reason, "manifest-error");
+    assert.equal(manifestReport.byDirectory.BrokenManifest.severity, "error");
+
+    const emptyFolderReport = __test.buildModLoadReport([
+      "sdv-server  | [SMAPI] Skipped mods",
+      "sdv-server  | [SMAPI]    smapi (ID: ???, path: smapi) because it's an empty folder.",
+      "sdv-server  | [SMAPI]    user/smapi (ID: ???, path: user/smapi) because it's an empty folder.",
+    ].join("\n"), listed.installed);
+    assert.equal(emptyFolderReport.emptyFolderEntries.length, 2);
+    assert.equal(emptyFolderReport.emptyFolderEntries[0].reason, "empty-folder");
 
     const config = await service.readModConfig({ directoryName: "VisibleMod" });
     assert.equal(config.directoryName, "VisibleMod");
