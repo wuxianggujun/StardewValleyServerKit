@@ -207,6 +207,19 @@ async function main() {
     );
     assert.equal(summaryWithCrash.status, "needs-attention");
     assert.match(summaryWithCrash.message, /新一天同步/);
+    const preciseApiJson = __test.parseJsonPreservingUnsafeIntegers([
+      "{",
+      "\"players\":[{\"id\":-3064972570627944779,\"name\":\"Doge\"}],",
+      "\"farmhands\":[{\"id\":556485448514383100,\"name\":\"桃桃\"}],",
+      "\"safe\":42,\"negativeSafe\":-42,\"decimal\":1.5,\"stringId\":\"7373163806841996000\"",
+      "}",
+    ].join(""));
+    assert.equal(preciseApiJson.players[0].id, "-3064972570627944779");
+    assert.equal(preciseApiJson.farmhands[0].id, "556485448514383100");
+    assert.equal(preciseApiJson.safe, 42);
+    assert.equal(preciseApiJson.negativeSafe, -42);
+    assert.equal(preciseApiJson.decimal, 1.5);
+    assert.equal(preciseApiJson.stringId, "7373163806841996000");
 
     const beforeEnv = await readText(envFile);
     await assert.rejects(

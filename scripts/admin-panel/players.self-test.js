@@ -38,6 +38,15 @@ async function main() {
   assert.deepEqual(apiPreferred.farmhands.map((farmhand) => farmhand.name), ["Bob"]);
   assert.equal(apiPreferred.farmhands[0].isOnline, true);
   assert.equal(apiPreferred.capabilities.deleteFarmhand, true);
+  const preciseId = "-3064972570627944779";
+  const preciseIdManagement = buildPlayerManagement(
+    { players: [{ id: preciseId, name: "Doge" }] },
+    { farmhands: [{ id: preciseId, name: "Doge", isCustomized: true }] },
+    null,
+  );
+  assert.equal(preciseIdManagement.onlinePlayers[0].id, preciseId);
+  assert.equal(preciseIdManagement.farmhands[0].id, preciseId);
+  assert.equal(preciseIdManagement.farmhands[0].isOnline, true);
 
   let fallbackCalls = 0;
   const service = createPlayerService({

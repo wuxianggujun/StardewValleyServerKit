@@ -650,6 +650,79 @@ async function readUploadBody(req) {
   throw apiError(415, "本地上传必须使用 multipart/form-data。");
 }
 
+function shouldQuoteJsonInteger(raw) {
+  try {
+    const value = BigInt(raw);
+    const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+    return value > maxSafe || value < -maxSafe;
+  } catch (_) {
+    return false;
+  }
+}
+
+function quoteUnsafeJsonIntegers(jsonText) {
+  const source = String(jsonText || "");
+  let result = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < source.length;) {
+    const char = source[index];
+
+    if (inString) {
+      result += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      result += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === "-" || /[0-9]/.test(char)) {
+      const start = index;
+      if (char === "-") index += 1;
+      while (/[0-9]/.test(source[index] || "")) index += 1;
+
+      let isInteger = true;
+      if (source[index] === ".") {
+        isInteger = false;
+        index += 1;
+        while (/[0-9]/.test(source[index] || "")) index += 1;
+      }
+      if (/[eE]/.test(source[index] || "")) {
+        isInteger = false;
+        index += 1;
+        if (/[+-]/.test(source[index] || "")) index += 1;
+        while (/[0-9]/.test(source[index] || "")) index += 1;
+      }
+
+      const raw = source.slice(start, index);
+      result += isInteger && shouldQuoteJsonInteger(raw) ? `"${raw}"` : raw;
+      continue;
+    }
+
+    result += char;
+    index += 1;
+  }
+
+  return result;
+}
+
+function parseJsonPreservingUnsafeIntegers(jsonText) {
+  return JSON.parse(quoteUnsafeJsonIntegers(jsonText));
+}
+
 async function serverApiRequest(method, pathname, body, options = {}) {
   const env = await readEnv();
   if (env.API_ENABLED === "false") {
@@ -701,7 +774,7 @@ async function serverApiRequest(method, pathname, body, options = {}) {
           let parsed = null;
           if (body) {
             try {
-              parsed = JSON.parse(body);
+              parsed = parseJsonPreservingUnsafeIntegers(body);
             } catch (_) {}
           }
 
@@ -3052,6 +3125,8 @@ module.exports = {
     buildSteamAuthLogReport,
     buildSteamAuthDiagnostic,
     buildGameCrashReport,
+    quoteUnsafeJsonIntegers,
+    parseJsonPreservingUnsafeIntegers,
     diagnosticSummary,
     DOCKER_INSPECT_API_FORMAT,
   },
