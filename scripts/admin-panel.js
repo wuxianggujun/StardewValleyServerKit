@@ -420,9 +420,9 @@ async function compose(args, options = {}) {
 async function ensureGameModsDirectory() {
   const modsDir = path.join(ROOT_DIR, "data", "mods");
   await fsp.mkdir(modsDir, { recursive: true });
-  const script = "mkdir -p /data/game/Mods && touch /data/game/Mods/SVSK_PLACEHOLDER.txt";
+  const script = "mkdir -p /data/game/Mods /data/Mods/user && touch /data/game/Mods/SVSK_PLACEHOLDER.txt";
   const result = await docker(
-    ["run", "--rm", "--user", "0:0", "--mount", `type=bind,source=${modsDir},target=/data/game/Mods`, "busybox:1.36", "sh", "-lc", script],
+    ["run", "--rm", "--user", "0:0", "--mount", `type=bind,source=${modsDir},target=/data/Mods/user`, "busybox:1.36", "sh", "-lc", script],
     { timeoutMs: 120000 },
   );
   if (!result.ok) {

@@ -73,8 +73,7 @@ async function main() {
   assert.equal(__test.isAllowedDownloadHost("supporter-files.nexus-cdn.com"), true);
   assert.equal(__test.isAllowedDownloadHost("evil-nexus-cdn.com"), false);
   assert.match(I18N["zh-CN"]["nexus.cacheSuffix"], /使用缓存/);
-  assert.match(I18N["zh-CN"]["mods.notice"], /\/data\/game\/Mods/);
-  assert.doesNotMatch(I18N["zh-CN"]["mods.notice"], /\/data\/Mods/);
+  assert.match(I18N["zh-CN"]["mods.notice"], /\/data\/Mods\/user/);
   assert.match(I18N["zh-CN"]["nexus.cachePrefix"], /未再次请求 Nexus API/);
   assert.equal(I18N.en["mods.installLocal"], "Install local file");
   assert.doesNotMatch(PAGE, /id="refreshBtn"/);
@@ -83,8 +82,8 @@ async function main() {
   assert.doesNotMatch(PAGE, /params\.get\("token"\)/);
   assert.doesNotMatch(PAGE, /<\/script><script>/i);
   const compose = await fsp.readFile(path.join(__dirname, "..", "..", "docker-compose.yml"), "utf8");
-  assert.match(compose, /\.\/data\/mods:\/data\/game\/Mods/);
-  assert.doesNotMatch(compose, /\.\/data\/mods:\/data\/Mods/);
+  assert.match(compose, /\.\/data\/mods:\/data\/Mods\/user/);
+  assert.doesNotMatch(compose, /\.\/data\/mods:\/data\/Mods(?:\s|$)/);
   assert.match(PAGE, /safeExternalUrl/);
   assert.match(PAGE, /escapeHtml\(buttonText\)/);
   assert.match(PAGE, /id="languageSelect"/);

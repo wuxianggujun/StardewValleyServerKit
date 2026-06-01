@@ -494,10 +494,10 @@ docker port sdv-server
 
 这里有两个不同的 Mod 路径：
 
-- `data/mods`：宿主机目录，会挂载成容器里的 `/data/game/Mods`。这是玩家和管理面板使用的
-  SMAPI Mod 目录。
+- `data/mods`：宿主机目录，会挂载成容器里的 `/data/Mods/user`。这是玩家和管理面板使用的
+  SMAPI Mod 目录，Mod 运行后生成的配置会继续写回这里。
 - `/data/Mods`：镜像内置和运行时的 SMAPI 加载目录，里面包含 JunimoServer API Mod。不要把宿主机
-  `data/mods` 直接挂到这里，否则会遮住内置 API Mod，导致 HTTP API 出现 `socket hang up` 或不可用。
+  `data/mods` 直接挂到 `/data/Mods` 根目录，否则会遮住内置 API Mod，导致 HTTP API 出现 `socket hang up` 或不可用。
 
 如果 `/data/game/Mods` 不存在或完全为空，镜像脚本里的 `cp /data/game/Mods/* ...`
 会因为空 glob 失败，导致 `app` 服务退出。新版管理面板会在每次启动/重启前自动创建
