@@ -1317,6 +1317,8 @@ const PAGE = String.raw`<!doctype html>
         "message=" + (gameCrash.message || "n/a"),
         "newDayDisconnectCrash=" + Boolean(gameCrash.newDayDisconnectCrash),
         "newDaySyncCrash=" + Boolean(gameCrash.newDaySyncCrash),
+        "crashGuardLoaded=" + Boolean(gameCrash.crashGuardLoaded),
+        "crashGuardSuppressedCount=" + (gameCrash.crashGuardSuppressedCount || 0),
         "keyIds=" + ((gameCrash.keyIds || []).join(",") || "none"),
         "repeatCount=" + (gameCrash.repeatCount || 0),
         "timestamp=" + (gameCrash.timestamp || "n/a"),
@@ -1326,6 +1328,8 @@ const PAGE = String.raw`<!doctype html>
         (gameCrash.recommendations || []).join("\n") || "none",
         "recentErrors:",
         (gameCrash.recentErrors || []).join("\n") || "none",
+        "crashGuardRecentEvents:",
+        (gameCrash.crashGuardRecentEvents || []).join("\n") || "none",
         "",
         "Stack:",
         JSON.stringify(report.stack || {}, null, 2),
@@ -1931,12 +1935,15 @@ const PAGE = String.raw`<!doctype html>
             modLoadDetailHtml(loadReport, mod) +
             (mod.updateKeys?.length ? '<span class="hint">UpdateKeys：' + escapeHtml(mod.updateKeys.join(", ")) + '</span>' : '') +
             (mod.hasManifest ? '' : '<span class="hint bad">' + escapeHtml(t("mods.manifestFailed", { error: mod.manifestError || t("mods.unknownError") })) + '</span>') +
+            (mod.protected ? '<span class="hint warn">' + escapeHtml(mod.protectedReason || t("mods.systemProtected")) + '</span>' : '') +
           '</div>' +
           '<div class="manage-actions">' +
             (mod.hasConfig
               ? '<button data-action="edit-mod-config" data-directory="' + escapeHtml(mod.directoryName) + '" data-name="' + escapeHtml(mod.name) + '">' + escapeHtml(t("tab.config")) + '</button>'
               : '<button disabled title="' + escapeHtml(t("mods.noConfigTitle")) + '">' + escapeHtml(t("mods.noConfig")) + '</button>') +
-            '<button class="danger" data-action="delete-mod" data-directory="' + escapeHtml(mod.directoryName) + '" data-name="' + escapeHtml(mod.name) + '">' + escapeHtml(t("action.delete")) + '</button>' +
+            (mod.protected
+              ? '<button class="danger" disabled title="' + escapeHtml(mod.protectedReason || t("mods.systemProtected")) + '">' + escapeHtml(t("mods.systemProtectedShort")) + '</button>'
+              : '<button class="danger" data-action="delete-mod" data-directory="' + escapeHtml(mod.directoryName) + '" data-name="' + escapeHtml(mod.name) + '">' + escapeHtml(t("action.delete")) + '</button>') +
           '</div>' +
         '</div>'
       )).join("") : (query

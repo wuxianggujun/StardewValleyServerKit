@@ -329,6 +329,21 @@ async function main() {
     assert.equal(loadedReport.skipped.length > 0, true);
     assert.equal(loadedReport.errors.length > 0, true);
 
+    await fsp.mkdir(path.join(modsDir, "SVSKCrashGuard"), { recursive: true });
+    await fsp.writeFile(path.join(modsDir, "SVSKCrashGuard", "manifest.json"), JSON.stringify({
+      Name: "SVSK Crash Guard",
+      UniqueID: "SVSK.CrashGuard",
+      Version: "1.0.0",
+    }));
+    const protectedListed = await service.getModManagement();
+    const protectedMod = protectedListed.installed.find((mod) => mod.directoryName === "SVSKCrashGuard");
+    assert.equal(protectedMod.protected, true);
+    assert.match(protectedMod.protectedReason, /系统内置 Mod/);
+    await assert.rejects(
+      () => service.deleteInstalledMod({ directoryName: "SVSKCrashGuard" }),
+      /系统内置 Mod/,
+    );
+
     const dependencyReport = __test.buildModLoadReport([
       "sdv-server  | [SMAPI] Loaded 1 mod:",
       "sdv-server  | [SMAPI]    Visible Mod 1.0.0 by Local | Example.Visible",

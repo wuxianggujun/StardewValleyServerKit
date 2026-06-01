@@ -443,16 +443,32 @@ docker port sdv-server
 常见触发因素是过夜时玩家断线、联机状态残留、农场手/小屋引用不一致，
 或者新增 Mod 在过夜阶段改变多人/保存流程。
 
-先做低风险恢复：
+长期预防需要加载系统保护 Mod `SVSK Crash Guard`。它只拦截
+`LidgrenServer.playerDisconnected(long)` / `GameServer.playerDisconnected(long)` 中已知的
+`KeyNotFoundException` 断线竞态，不会改变 `data/mods` 用户 Mod 目录，也不会遮住镜像内置的
+JunimoServer API Mod。
+
+服务器更新步骤：
 
 ```bash
 cd /opt/stardew/StardewValleyServerKit || exit 1
+git pull --ff-only
+bash ./scripts/build-crash-guard.sh
 docker compose --env-file .env down
 docker compose --env-file .env up -d
 docker compose --env-file .env ps
+docker compose --env-file .env logs --no-color server | grep -E "SVSK Crash Guard|Suppressed missing player disconnect|Loaded [0-9]+ mods" | tail -n 80
+sudo systemctl restart sdv-admin.service
 ```
 
-这一步只清掉游戏进程内存里的残留联机状态，不会删除存档、Mod 或 Docker volume。
+`bash ./scripts/build-crash-guard.sh` 会用 `game-data` Docker volume 里的已安装 SMAPI
+构建 `system-mods/SVSKCrashGuard/dist/SVSKCrashGuard.dll`。如果脚本提示找不到
+`StardewModdingAPI.dll`，先完成一次游戏下载/启动，让镜像把 SMAPI 安装进 `game-data` volume，
+再重新执行构建脚本。
+
+`docker compose down/up -d` 只会重建游戏容器，保留存档、Mod 和 Docker volume。
+`sudo systemctl restart sdv-admin.service` 只重启 Web 管理面板，不能让游戏进程重新加载 SMAPI Mod。
+
 如果重启后能正常进入，先让所有玩家在稳定网络下完成一次过夜保存。
 
 如果每次过夜仍复现：

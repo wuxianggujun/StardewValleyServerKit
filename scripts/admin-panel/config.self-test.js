@@ -197,7 +197,9 @@ async function main() {
     assert.equal(gameCrashReport.newDayDisconnectCrash, true);
     assert.deepEqual(gameCrashReport.keyIds, ["-3064972570627944779"]);
     assert.match(gameCrashReport.message, /新一天同步/);
+    assert.equal(gameCrashReport.crashGuardLoaded, false);
     assert.match(gameCrashReport.recommendations.join("\n"), /小屋和农场手引用/);
+    assert.match(gameCrashReport.recommendations.join("\n"), /SVSK Crash Guard/);
     const summaryWithCrash = __test.diagnosticSummary(
       { available: true },
       { loadReport: {} },
@@ -207,6 +209,16 @@ async function main() {
     );
     assert.equal(summaryWithCrash.status, "needs-attention");
     assert.match(summaryWithCrash.message, /新一天同步/);
+    const guardedCrashLog = [
+      "[SMAPI]    SVSK Crash Guard 1.0.0 by StardewValleyServerKit | Prevents disconnect crashes.",
+      "[10:31:40 INFO SVSK Crash Guard] [SVSK Crash Guard] Installed disconnect guard on StardewValley.Network.LidgrenServer.playerDisconnected.",
+      "[10:31:41 WARN SVSK Crash Guard] [SVSK Crash Guard] Suppressed missing player disconnect for -3064972570627944779: The given key '-3064972570627944779' was not present in the dictionary.",
+    ].join("\n");
+    const guardedCrashReport = __test.buildGameCrashReport(guardedCrashLog);
+    assert.equal(guardedCrashReport.status, "ok");
+    assert.equal(guardedCrashReport.crashGuardLoaded, true);
+    assert.equal(guardedCrashReport.crashGuardSuppressedCount, 1);
+    assert.match(guardedCrashReport.message, /已拦截 1 次/);
     const preciseApiJson = __test.parseJsonPreservingUnsafeIntegers([
       "{",
       "\"players\":[{\"id\":-3064972570627944779,\"name\":\"Doge\"}],",

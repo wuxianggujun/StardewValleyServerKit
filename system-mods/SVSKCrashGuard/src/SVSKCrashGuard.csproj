@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>SVSKCrashGuard</AssemblyName>
+    <RootNamespace>SVSKCrashGuard</RootNamespace>
+    <Version>1.0.0</Version>
+    <TargetFramework>net6.0</TargetFramework>
+    <EnableHarmony>true</EnableHarmony>
+    <EnableModDeploy>false</EnableModDeploy>
+    <EnableModZip>false</EnableModZip>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Pathoschild.Stardew.ModBuildConfig" Version="4.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Stardew Valley">
+      <HintPath>$(GamePath)\Stardew Valley.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

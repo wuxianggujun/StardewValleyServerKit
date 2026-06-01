@@ -27,6 +27,7 @@ services:
       - saves:/config/xdg/config/StardewValley
       - ./data/settings:/data/settings
       - ./data/mods:/data/Mods/user
+      - ./system-mods/SVSKCrashGuard/dist:/data/Mods/SVSKCrashGuard:ro
     environment:
       STEAM_AUTH_URL: "http://steam-auth:3001"
       VNC_PASSWORD: "${VNC_PASSWORD:-}"

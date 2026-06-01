@@ -2227,6 +2227,11 @@ function buildGameCrashReport(logText) {
   const keyIds = Array.from(text.matchAll(/The given key '(-?\d+)' was not present in the dictionary/gi))
     .map((match) => match[1]);
   const uniqueKeyIds = [...new Set(keyIds)];
+  const crashGuardLoaded = /\bSVSK Crash Guard\b.*\bInstalled disconnect guard\b/i.test(text);
+  const crashGuardSuppressedLines = uniqueDiagnosticLines(rawLines.filter((line) => (
+    /\bSVSK Crash Guard\b.*\bSuppressed missing player disconnect\b/i.test(line)
+  )), 20);
+  const crashGuardSuppressedCount = crashGuardSuppressedLines.length;
   const newDayDisconnectCrash =
     /Error on new day/i.test(text) &&
     /KeyNotFoundException/i.test(text) &&
@@ -2246,6 +2251,9 @@ function buildGameCrashReport(logText) {
   if (newDayDisconnectCrash) {
     const idText = uniqueKeyIds.length ? `，异常玩家 ID：${uniqueKeyIds.join(", ")}` : "";
     issues.push(`游戏本体在新一天同步时处理断线玩家失败${idText}。这通常是联机断线状态、农场手/小屋引用或过夜阶段 Mod 逻辑让多人状态字典不一致。`);
+    if (!crashGuardLoaded) {
+      recommendations.push("先构建并加载 SVSK Crash Guard；它会拦截已知的过夜断线 KeyNotFoundException，避免整个游戏进程退出。");
+    }
     recommendations.push("先确认没有玩家在线，然后完全重启游戏容器，清掉内存里的残留联机状态。");
     recommendations.push("如果重启后过夜仍复现，先备份存档，再在“存档配置/小屋修复”里修复当前存档的小屋和农场手引用。");
     recommendations.push("如果问题是在新增或更新 Mod 后开始出现，停服后临时移走最近变更的 Mod，按一次一个 Mod 的方式恢复验证。");
@@ -2257,15 +2265,23 @@ function buildGameCrashReport(logText) {
   const recentErrors = uniqueDiagnosticLines(rawLines.filter((line) => (
     /Error on new day|_newDayTask failed|KeyNotFoundException|LidgrenServer\.playerDisconnected|NetSynchronizer\.barrier|Game1\._newDayAfterFade/i.test(line)
   )), 30);
+  const crashGuardRecentEvents = uniqueDiagnosticLines(rawLines.filter((line) => (
+    /\bSVSK Crash Guard\b/i.test(line)
+  )), 30);
 
   return {
     status: issues.length ? "needs-attention" : "ok",
     ok: issues.length === 0,
-    message: issues[0] || "未发现游戏本体新一天崩溃。",
+    message: issues[0] || (crashGuardSuppressedCount
+      ? `SVSK Crash Guard 已拦截 ${crashGuardSuppressedCount} 次断线异常，未发现游戏本体新一天崩溃。`
+      : "未发现游戏本体新一天崩溃。"),
     issues,
     recommendations,
     newDayDisconnectCrash,
     newDaySyncCrash,
+    crashGuardLoaded,
+    crashGuardSuppressedCount,
+    crashGuardRecentEvents,
     keyIds: uniqueKeyIds,
     repeatCount: keyIds.length,
     timestamp,
@@ -2347,6 +2363,8 @@ async function getDiagnosticReport() {
         name: mod.name,
         uniqueId: mod.uniqueId,
         version: mod.version,
+        protected: Boolean(mod.protected),
+        protectedReason: mod.protectedReason || "",
         hasConfig: mod.hasConfig,
         hasManifest: mod.hasManifest,
         manifestError: mod.manifestError || "",

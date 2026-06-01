@@ -34,6 +34,10 @@ const DOWNLOAD_HOSTS = [
   "raw.githubusercontent.com",
   "githubusercontent.com",
 ];
+const PROTECTED_MOD_UNIQUE_IDS = new Set([
+  "junimohost.server",
+  "svsk.crashguard",
+]);
 
 function stripBom(text) {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
@@ -43,6 +47,24 @@ function cleanText(value, maxLength, fallback = "") {
   const next = String(value || "").trim();
   if (!next) return fallback;
   return next.slice(0, maxLength);
+}
+
+function normalizeModIdentity(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function protectedModInfo(manifest, directoryName = "") {
+  const uniqueId = normalizeModIdentity(manifest?.UniqueID || manifest?.UniqueId);
+  const protectedByUniqueId = uniqueId && PROTECTED_MOD_UNIQUE_IDS.has(uniqueId);
+
+  if (!protectedByUniqueId) {
+    return { protected: false, protectedReason: "" };
+  }
+
+  return {
+    protected: true,
+    protectedReason: "系统内置 Mod 由 StardewValleyServerKit 管理，不允许在用户 Mod 页面删除。",
+  };
 }
 
 function stripAnsi(value) {
@@ -551,6 +573,7 @@ async function listInstalledMods(state) {
     const manifest = await readModManifest(modDir);
     const stat = await fsp.stat(modDir);
     const config = await configFileStat(path.join(modDir, "config.json"));
+    const protection = protectedModInfo(manifest, directoryName);
 
     mods.push({
       directoryName,
@@ -568,6 +591,8 @@ async function listInstalledMods(state) {
       configSizeBytes: config.sizeBytes,
       configUpdatedAt: config.updatedAt,
       updatedAt: stat.mtime.toISOString(),
+      protected: protection.protected,
+      protectedReason: protection.protectedReason,
     });
   }
 
@@ -1654,6 +1679,12 @@ async function deleteInstalledMod(state, payload) {
     throw new Error(`目标不是模组目录：${name}`);
   }
 
+  const manifest = await readModManifest(target);
+  const protection = protectedModInfo(manifest, name);
+  if (protection.protected) {
+    throw new Error(protection.protectedReason);
+  }
+
   const backupName = await backupExistingTarget(state, target, name);
   return {
     deleted: name,
@@ -1783,6 +1814,7 @@ module.exports = {
     normalizeNexusFile,
     normalizeNexusApiError,
     normalizeModConfigText,
+    protectedModInfo,
     parseRetryAfterMs,
     pickRecommendedNexusFile,
     buildModLoadReport,
