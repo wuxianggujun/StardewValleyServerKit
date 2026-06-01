@@ -346,6 +346,35 @@ const PAGE = String.raw`<!doctype html>
     #nexusFilesList {
       max-height: min(42vh, 420px);
     }
+    .diagnostic-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .diagnostic-summary .metric {
+      min-width: 0;
+      border: 1px solid #eef1f5;
+      border-radius: 6px;
+      background: #fbfcfe;
+      padding: 10px;
+    }
+    .diagnostic-summary .metric strong {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .diagnostic-summary .metric span {
+      display: block;
+      margin-top: 4px;
+      font-size: 18px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .diagnostic-summary .metric span.ok { color: var(--green); }
+    .diagnostic-summary .metric span.warn { color: var(--amber); }
+    .diagnostic-summary .metric span.bad { color: var(--red); }
     .manage-item {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
@@ -519,6 +548,7 @@ const PAGE = String.raw`<!doctype html>
       .field-3, .field-4, .field-6, .field-8 { grid-column: span 12; }
       .backup-policy { grid-template-columns: 1fr; }
       .manage-grid { grid-template-columns: 1fr; }
+      .diagnostic-summary { grid-template-columns: 1fr 1fr; }
       .management-panel { max-height: none; overflow: visible; }
       .management-panel .scroll-list { max-height: min(48vh, 460px); }
       #modSearchPanel { max-height: min(40vh, 360px); }
@@ -727,6 +757,7 @@ const PAGE = String.raw`<!doctype html>
             <h2 data-i18n="mods.title"></h2>
             <div class="toolbar">
               <button id="refreshModsBtn" type="button" data-i18n="mods.refresh"></button>
+              <button id="diagnoseModsBtn" type="button" data-i18n="mods.diagnose"></button>
               <button id="backupBeforeModsBtn" type="button" data-i18n="mods.backupBefore"></button>
             </div>
           </div>
@@ -740,6 +771,7 @@ const PAGE = String.raw`<!doctype html>
             </div>
           </div>
           <div id="modsMessage" class="message"></div>
+          <div id="modLoadSummary" class="diagnostic-summary"></div>
           <div id="modSearchPanel" class="manage-column hidden">
             <div class="section-title">
               <h3 data-i18n="mods.searchResults"></h3>
@@ -843,6 +875,7 @@ const PAGE = String.raw`<!doctype html>
             <h2 data-i18n="logs.title"></h2>
             <div class="toolbar">
               <button id="loadLogsBtn" type="button" data-i18n="logs.refreshMore"></button>
+              <button id="diagnosticsBtn" type="button" data-i18n="logs.diagnostics"></button>
               <button id="copyLogsBtn" type="button" data-i18n="logs.copy"></button>
             </div>
           </div>
@@ -1007,6 +1040,7 @@ const PAGE = String.raw`<!doctype html>
     const modManagerPanel = document.querySelector("#modManagerPanel");
     const modsMessage = document.querySelector("#modsMessage");
     const refreshModsBtn = document.querySelector("#refreshModsBtn");
+    const diagnoseModsBtn = document.querySelector("#diagnoseModsBtn");
     const backupBeforeModsBtn = document.querySelector("#backupBeforeModsBtn");
     const modSearchInput = document.querySelector("#modSearchInput");
     const searchModsBtn = document.querySelector("#searchModsBtn");
@@ -1017,6 +1051,7 @@ const PAGE = String.raw`<!doctype html>
     const modSearchResults = document.querySelector("#modSearchResults");
     const installedModsList = document.querySelector("#installedModsList");
     const modGuidanceList = document.querySelector("#modGuidanceList");
+    const modLoadSummary = document.querySelector("#modLoadSummary");
     const autoBackupEnabled = document.querySelector("#autoBackupEnabled");
     const autoBackupInterval = document.querySelector("#autoBackupInterval");
     const backupRetention = document.querySelector("#backupRetention");
@@ -1061,6 +1096,7 @@ const PAGE = String.raw`<!doctype html>
     const playerManagerPanel = document.querySelector("#playerManagerPanel");
     const logsPanel = document.querySelector("#logs");
     const loadLogsBtn = document.querySelector("#loadLogsBtn");
+    const diagnosticsBtn = document.querySelector("#diagnosticsBtn");
     const copyLogsBtn = document.querySelector("#copyLogsBtn");
     const languageSelect = document.querySelector("#languageSelect");
     const i18n = window.SDV_I18N || {};
@@ -1159,6 +1195,90 @@ const PAGE = String.raw`<!doctype html>
       if (shouldStickToBottom || mode === "full") {
         logsPanel.scrollTop = logsPanel.scrollHeight;
       }
+    }
+
+    function metricHtml(label, value, kind) {
+      return '<div class="metric">' +
+        '<strong>' + escapeHtml(label) + '</strong>' +
+        '<span class="' + escapeHtml(kind || "") + '">' + escapeHtml(value) + '</span>' +
+      '</div>';
+    }
+
+    function loadReportStateText(report) {
+      if (!report?.logAvailable || !report?.smapiDetected) return t("mods.loadNoLogs");
+      if (report.errors?.length || report.problemMods?.length || report.skipped?.length) return t("mods.loadNeedsAttention");
+      if (report.unconfirmedInstalled?.length) return t("mods.loadPartial");
+      return t("mods.loadHealthy");
+    }
+
+    function renderModLoadSummary(report, installedCount) {
+      if (!modLoadSummary) return;
+      const loadedSummary = report?.loadedSummaryCount;
+      const loadedText = loadedSummary == null
+        ? t("mods.loadUnknown")
+        : String(loadedSummary);
+      const stateKind = (!report?.logAvailable || !report?.smapiDetected || report.errors?.length || report.problemMods?.length || report.skipped?.length)
+        ? "bad"
+        : (report.unconfirmedInstalled?.length ? "warn" : "ok");
+      modLoadSummary.innerHTML = [
+        metricHtml(t("mods.metricInstalled"), installedCount, ""),
+        metricHtml(t("mods.metricLoaded"), loadedText, loadedSummary == null ? "warn" : "ok"),
+        metricHtml(t("mods.metricUnconfirmed"), String(report?.unconfirmedInstalled?.length || 0), report?.unconfirmedInstalled?.length ? "warn" : "ok"),
+        metricHtml(t("mods.metricState"), loadReportStateText(report), stateKind),
+      ].join("");
+    }
+
+    function modLoadPill(report, mod) {
+      const item = report?.byDirectory?.[mod.directoryName];
+      if (!report?.logAvailable || !report?.smapiDetected) return "";
+      if (!item) return "";
+      if (item.state === "loaded") {
+        return ' <span class="pill ok" title="' + escapeHtml(item.evidence || "") + '">' + escapeHtml(t("mods.loadConfirmed")) + '</span>';
+      }
+      if (item.state === "problem") {
+        return ' <span class="pill bad" title="' + escapeHtml(item.evidence || "") + '">' + escapeHtml(t("mods.loadProblem")) + '</span>';
+      }
+      return ' <span class="pill warn">' + escapeHtml(t("mods.loadUnconfirmed")) + '</span>';
+    }
+
+    function diagnosticsText(report) {
+      const loadReport = report.mods?.loadReport || {};
+      const lines = [
+        "StardewValleyServerKit diagnostics",
+        "Generated: " + (report.generatedAt || ""),
+        "",
+        "Summary: " + (report.summary?.message || "n/a"),
+        "Status: " + (report.summary?.status || "unknown"),
+        "",
+        "Environment:",
+        "API_ENABLED=" + report.env?.apiEnabled,
+        "API_PORT=" + report.env?.apiPort,
+        "API_KEY_SET=" + report.env?.apiKeySet,
+        "ADMIN_HOST=" + report.env?.adminHost,
+        "ADMIN_PORT=" + report.env?.adminPort,
+        "IMAGE_VERSION=" + report.env?.imageVersion,
+        "",
+        "Server API:",
+        JSON.stringify(report.serverApi || {}, null, 2),
+        "",
+        "Stack:",
+        JSON.stringify(report.stack || {}, null, 2),
+        "",
+        "Mods:",
+        "modsDir=" + (report.mods?.modsDir || "data/mods"),
+        "installedCount=" + (report.mods?.installedCount || 0),
+        "loadedSummaryCount=" + (loadReport.loadedSummaryCount ?? "unknown"),
+        "unconfirmedInstalled=" + (loadReport.unconfirmedInstalled?.length || 0),
+        "problemMods=" + (loadReport.problemMods?.length || 0),
+        "smapiErrors=" + (loadReport.errors?.length || 0),
+        "",
+        "Recent SMAPI problems:",
+        [...(loadReport.errors || []), ...(loadReport.skipped || []), ...(loadReport.warnings || [])].slice(0, 40).join("\n") || "none",
+        "",
+        "Recent logs:",
+        report.logs?.tail || "",
+      ];
+      return lines.join("\n");
     }
 
     function openCreateMapDialog() {
@@ -1710,8 +1830,10 @@ const PAGE = String.raw`<!doctype html>
       latestModManagement = data;
       const query = modSearchInput.value.trim().toLowerCase();
       const installed = data.installed || [];
+      const loadReport = data.loadReport || {};
       const filtered = installed.filter((mod) => modMatchesSearch(mod, query));
       const sourceLinks = modSourceLinks(data.sources, "");
+      renderModLoadSummary(loadReport, installed.length);
       setMessage(
         modsMessage,
         query
@@ -1721,7 +1843,7 @@ const PAGE = String.raw`<!doctype html>
       );
       installedModsList.innerHTML = filtered.length ? filtered.map((mod) => (
         '<div class="manage-item">' +
-          '<div><strong>' + escapeHtml(mod.name) + '</strong>' +
+          '<div><strong>' + escapeHtml(mod.name) + modLoadPill(loadReport, mod) + '</strong>' +
             '<span class="hint">' + escapeHtml(t("mods.directory", { directory: mod.directoryName })) +
             ' · UniqueID：' + escapeHtml(mod.uniqueId || "n/a") +
             ' · ' + escapeHtml(t("mods.version", { version: mod.version || "n/a" })) +
@@ -1747,6 +1869,11 @@ const PAGE = String.raw`<!doctype html>
       renderModSearchResults();
 
       modGuidanceList.innerHTML = [
+        '<div class="manage-item"><div><strong>' + escapeHtml(t("mods.guideLoadTitle")) + '</strong><span class="hint">' + escapeHtml(t("mods.guideLoad", {
+          loaded: loadReport.loadedSummaryCount == null ? t("mods.loadUnknown") : loadReport.loadedSummaryCount,
+          errors: loadReport.errors?.length || 0,
+          skipped: loadReport.skipped?.length || 0,
+        })) + '</span></div></div>',
         '<div class="manage-item"><div><strong>' + escapeHtml(t("mods.guideBackupTitle")) + '</strong><span class="hint">' + escapeHtml(t("mods.guideBackup")) + '</span></div></div>',
         '<div class="manage-item"><div><strong>' + escapeHtml(t("mods.guideRestartTitle")) + '</strong><span class="hint">' + escapeHtml(t("mods.guideRestart")) + '</span></div></div>',
         '<div class="manage-item"><div><strong>' + escapeHtml(t("mods.guideInstallTitle")) + '</strong><span class="hint">' + escapeHtml(t("mods.guideInstall")) + '</span></div></div>',
@@ -2269,6 +2396,25 @@ const PAGE = String.raw`<!doctype html>
         await reloadModManagement();
       } catch (error) {
         setMessage(modsMessage, error.message, "bad");
+      }
+    });
+
+    diagnoseModsBtn.addEventListener("click", async () => {
+      diagnoseModsBtn.disabled = true;
+      setMessage(modsMessage, t("mods.diagnosing"));
+      try {
+        const report = await request("/api/diagnostics");
+        setLogsText(diagnosticsText(report), "diagnostics");
+        const loadReport = report.mods?.loadReport || {};
+        setMessage(modsMessage, t("mods.diagnosed", {
+          loaded: loadReport.loadedSummaryCount == null ? t("mods.loadUnknown") : loadReport.loadedSummaryCount,
+          errors: loadReport.errors?.length || 0,
+          skipped: loadReport.skipped?.length || 0,
+        }), report.summary?.status === "ok" ? "ok" : "warn");
+      } catch (error) {
+        setMessage(modsMessage, error.message, "bad");
+      } finally {
+        diagnoseModsBtn.disabled = false;
       }
     });
 
@@ -2932,6 +3078,16 @@ const PAGE = String.raw`<!doctype html>
         setLogsText(logs.logs, "full");
       } finally {
         loadLogsBtn.disabled = false;
+      }
+    });
+
+    diagnosticsBtn.addEventListener("click", async () => {
+      diagnosticsBtn.disabled = true;
+      try {
+        const report = await request("/api/diagnostics");
+        setLogsText(diagnosticsText(report), "diagnostics");
+      } finally {
+        diagnosticsBtn.disabled = false;
       }
     });
 

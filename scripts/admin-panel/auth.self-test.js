@@ -50,6 +50,28 @@ async function main() {
   assert.equal(repairCalled, true);
   assert.deepEqual(repairResponses[0], { status: 200, body: { repaired: true, restarted: true } });
 
+  let diagnosticsCalled = false;
+  const diagnosticsResponses = [];
+  const diagnosticsHandler = createApiHandler({
+    ADMIN_COOKIE: "sdv_admin_token",
+    readJsonBody: async () => ({}),
+    readEnv: async () => ({}),
+    isAuthorized: async () => true,
+    json: (_res, status, body) => diagnosticsResponses.push({ status, body }),
+    getDiagnosticReport: async () => {
+      diagnosticsCalled = true;
+      return { summary: { status: "ok" } };
+    },
+  });
+  await diagnosticsHandler({
+    method: "GET",
+    url: "/api/diagnostics",
+    headers: { host: "example.com" },
+    socket: {},
+  }, {}, "/api/diagnostics");
+  assert.equal(diagnosticsCalled, true);
+  assert.deepEqual(diagnosticsResponses[0], { status: 200, body: { summary: { status: "ok" } } });
+
   assert.match(
     apiTest.adminCookieHeader({
       headers: { host: "example.com", "x-forwarded-proto": "https" },
@@ -90,6 +112,8 @@ async function main() {
   assert.match(PAGE, /adminToolbar\.classList\.remove\("hidden"\);/);
   assert.match(PAGE, /headers\["X-Admin-Token"\] = activeAdminToken;/);
   assert.match(PAGE, /activeAdminToken = token;/);
+  assert.match(PAGE, /id="diagnosticsBtn"/);
+  assert.match(PAGE, /diagnosticsText\(report\)/);
 
   console.log("auth.self-test ok");
 }

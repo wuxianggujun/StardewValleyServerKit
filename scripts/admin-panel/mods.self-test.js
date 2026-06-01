@@ -76,6 +76,7 @@ async function main() {
   assert.match(I18N["zh-CN"]["mods.notice"], /\/data\/Mods\/user/);
   assert.match(I18N["zh-CN"]["nexus.cachePrefix"], /未再次请求 Nexus API/);
   assert.equal(I18N.en["mods.installLocal"], "Install local file");
+  assert.equal(I18N.en["mods.diagnose"], "Load check");
   assert.doesNotMatch(PAGE, /id="refreshBtn"/);
   assert.doesNotMatch(PAGE, /querySelector\("#refreshBtn"\)/);
   assert.doesNotMatch(PAGE, /URLSearchParams\(location\.search\)/);
@@ -89,6 +90,9 @@ async function main() {
   assert.match(PAGE, /id="languageSelect"/);
   assert.match(PAGE, /window\.SDV_I18N/);
   assert.match(PAGE, /data-i18n="mods\.installLocal"/);
+  assert.match(PAGE, /id="diagnoseModsBtn"/);
+  assert.match(PAGE, /id="modLoadSummary"/);
+  assert.match(PAGE, /\/api\/diagnostics/);
   assert.match(PAGE, /\.field-8 \{ grid-column: span 8; \}/);
   assert.match(PAGE, /id="installModLocalDialog"/);
   assert.match(PAGE, /id="installModLocalForm"/);
@@ -296,6 +300,24 @@ async function main() {
     assert.deepEqual(listed.installed.map((mod) => mod.directoryName), ["smapi/NestedMod", "VisibleMod"]);
     assert.equal(listed.installed.every((mod) => mod.hasConfig), true);
     assert.equal(listed.installed.every((mod) => mod.configSizeBytes > 0), true);
+    assert.equal(listed.loadReport.installedCount, 2);
+    assert.equal(listed.loadReport.logAvailable, false);
+    assert.equal(listed.loadReport.smapiDetected, false);
+
+    const loadedReport = __test.buildModLoadReport([
+      "sdv-server  | [SMAPI] Loaded 3 mods:",
+      "sdv-server  | [SMAPI]    Content Patcher 2.5.0 by Pathoschild | Loads content packs.",
+      "sdv-server  | [SMAPI]    Visible Mod 1.0.0 by Local | Example.Visible",
+      "sdv-server  | [SMAPI] Skipped mods",
+      "sdv-server  | [SMAPI]    Broken Mod because it needs missing dependency Example.Dependency.",
+      "sdv-server  | [SMAPI] ERROR SMAPI Failed loading Nested Mod from Mods/user/smapi/NestedMod.",
+    ].join("\n"), listed.installed);
+    assert.equal(loadedReport.loadedSummaryCount, 3);
+    assert.equal(loadedReport.smapiDetected, true);
+    assert.equal(loadedReport.confirmedLoaded.some((mod) => mod.directoryName === "VisibleMod"), true);
+    assert.equal(loadedReport.problemMods.some((mod) => mod.directoryName === "smapi/NestedMod"), true);
+    assert.equal(loadedReport.skipped.length > 0, true);
+    assert.equal(loadedReport.errors.length > 0, true);
 
     const config = await service.readModConfig({ directoryName: "VisibleMod" });
     assert.equal(config.directoryName, "VisibleMod");

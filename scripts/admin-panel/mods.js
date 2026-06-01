@@ -45,6 +45,10 @@ function cleanText(value, maxLength, fallback = "") {
   return next.slice(0, maxLength);
 }
 
+function stripAnsi(value) {
+  return String(value || "").replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, "");
+}
+
 function decodeHtmlEntities(value) {
   return String(value || "").replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, entity) => {
     const named = {
@@ -533,6 +537,194 @@ async function listInstalledMods(state) {
     a.directoryName.localeCompare(b.directoryName, "zh-Hans-CN")
   ));
   return mods;
+}
+
+function normalizedNeedle(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, " ")
+    .trim();
+}
+
+function compactNeedle(value) {
+  return normalizedNeedle(value).replace(/[^a-z0-9]+/g, "");
+}
+
+function modNeedles(mod) {
+  const values = [
+    mod.name,
+    mod.uniqueId,
+    mod.directoryName,
+    path.basename(String(mod.directoryName || "")),
+    ...(Array.isArray(mod.updateKeys) ? mod.updateKeys : []),
+  ];
+  const needles = [];
+  for (const value of values) {
+    const normalized = normalizedNeedle(value);
+    if (normalized && normalized.length >= 3) needles.push(normalized);
+    const compact = compactNeedle(value);
+    if (compact && compact.length >= 5) needles.push(compact);
+  }
+  return [...new Set(needles)];
+}
+
+function stripComposeLogPrefix(line) {
+  return String(line || "").replace(/^[A-Za-z0-9_.-]+(?:-\d+)?\s+\|\s*/, "");
+}
+
+function cleanSmapiLogLine(line) {
+  return cleanText(
+    stripComposeLogPrefix(line)
+      .replace(/^\s*(?:\[[^\]]+\]\s*)?/, "")
+      .replace(/^\s*[-*]\s*/, "")
+      .replace(/^\s*(?:INFO|WARN|ERROR)\s+SMAPI\s+/i, "")
+      .replace(/^\s*(?:SMAPI|TRACE|DEBUG|INFO|WARN|ERROR)\s*[:|-]\s*/i, "")
+      .trim(),
+    420,
+  );
+}
+
+function collectSmapiLoadLines(lines) {
+  const loadedLines = [];
+  const skippedLines = [];
+  let loadedSummaryCount = null;
+  let section = "";
+
+  for (const rawLine of lines) {
+    const line = stripComposeLogPrefix(rawLine);
+    const loadedMatch = line.match(/\bLoaded\s+(\d+)\s+mods?\b/i);
+    if (loadedMatch) {
+      loadedSummaryCount = Number.parseInt(loadedMatch[1], 10);
+      section = "loaded";
+      continue;
+    }
+    if (/\bSkipped\s+mods?\b/i.test(line) || /\bcould not be added to your game\b/i.test(line)) {
+      section = "skipped";
+      continue;
+    }
+    if (/^\s*$/.test(line)) {
+      section = "";
+      continue;
+    }
+
+    const cleaned = cleanSmapiLogLine(line);
+    const nextHeader = /\b(?:Loaded|Skipped|Found|Patched|Started)\s+\d+\b/i.test(line) ||
+      /^(?:Loaded|Skipped|Found|Patched|Started|Launching|Game|Type)\b/i.test(cleaned) ||
+      /^\s*(?:INFO|WARN|ERROR)\s+(?!SMAPI\b)/i.test(line);
+    if (section === "loaded" && cleaned && !nextHeader) {
+      if (cleaned) loadedLines.push(cleaned);
+    } else if (section === "skipped" && !nextHeader) {
+      if (cleaned) skippedLines.push(cleaned);
+    } else if (nextHeader) {
+      section = "";
+    }
+  }
+
+  return { loadedSummaryCount, loadedLines, skippedLines };
+}
+
+function lineMatchesAnyNeedle(line, needles) {
+  const normalizedLine = normalizedNeedle(line);
+  const compactLine = compactNeedle(line);
+  return needles.some((needle) => (
+    normalizedLine.includes(needle) ||
+    (needle.length >= 5 && compactLine.includes(needle.replace(/[^a-z0-9]+/g, "")))
+  ));
+}
+
+function pickMatchingLine(lines, needles) {
+  return lines.find((line) => lineMatchesAnyNeedle(line, needles)) || "";
+}
+
+function uniqueLogLines(lines, maxItems) {
+  const result = [];
+  const seen = new Set();
+  for (const line of lines) {
+    const cleaned = cleanSmapiLogLine(line);
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(cleaned);
+    if (result.length >= maxItems) break;
+  }
+  return result;
+}
+
+function buildModLoadReport(logText, installed = []) {
+  const lines = stripAnsi(logText)
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .slice(-1200);
+  const smapiDetected = lines.some((line) => /\bSMAPI\b|\bLoaded\s+\d+\s+mods?\b|\bSkipped\s+mods?\b/i.test(line));
+  const { loadedSummaryCount, loadedLines, skippedLines } = collectSmapiLoadLines(lines);
+  const errorLines = uniqueLogLines(lines.filter((line) => (
+    /\bERROR\s+SMAPI\b/i.test(line) ||
+    /\bSMAPI\b.*\b(error|exception|failed|crash)\b/i.test(line) ||
+    /\b(mod|manifest|content pack|content patcher|dependency)\b.*\b(error|exception|failed|missing|invalid)\b/i.test(line)
+  )), 24);
+  const warningLines = uniqueLogLines(lines.filter((line) => (
+    /\bWARN\s+SMAPI\b/i.test(line) ||
+    /\b(missing dependency|requires .* not installed|no update keys|skipped)\b/i.test(line)
+  )), 24);
+  const skipped = uniqueLogLines([...skippedLines, ...lines.filter((line) => (
+    /\bSkipped\s+mods?\b/i.test(line) ||
+    /\bcould not be added to your game\b/i.test(line) ||
+    /\brequires .* not installed\b/i.test(line) ||
+    /\bmissing dependency\b/i.test(line)
+  ))], 24);
+
+  const loadedTextLines = uniqueLogLines(loadedLines, 80);
+  const problemLines = [...skipped, ...errorLines, ...warningLines];
+  const byDirectory = {};
+  const confirmedLoaded = [];
+  const problemMods = [];
+  const unconfirmedInstalled = [];
+
+  for (const mod of installed) {
+    const needles = modNeedles(mod);
+    const loadedEvidence = pickMatchingLine(loadedTextLines, needles);
+    const problemEvidence = pickMatchingLine(problemLines, needles);
+    let state = "unconfirmed";
+    let evidence = "";
+    if (problemEvidence) {
+      state = "problem";
+      evidence = problemEvidence;
+    } else if (loadedEvidence) {
+      state = "loaded";
+      evidence = loadedEvidence;
+    }
+
+    const item = {
+      directoryName: mod.directoryName,
+      name: mod.name,
+      uniqueId: mod.uniqueId || "",
+      state,
+      evidence,
+    };
+    byDirectory[mod.directoryName] = item;
+    if (state === "loaded") confirmedLoaded.push(item);
+    else if (state === "problem") problemMods.push(item);
+    else unconfirmedInstalled.push(item);
+  }
+
+  return {
+    source: "recent-smapi-logs",
+    logAvailable: lines.length > 0,
+    smapiDetected,
+    installedCount: installed.length,
+    loadedSummaryCount,
+    loadedNames: loadedTextLines,
+    loadedCount: confirmedLoaded.length,
+    confirmedLoaded,
+    problemMods,
+    unconfirmedInstalled,
+    skipped,
+    errors: errorLines,
+    warnings: warningLines,
+    byDirectory,
+  };
 }
 
 function extractFetchUri(html) {
@@ -1363,11 +1555,13 @@ async function saveModConfig(state, payload) {
   };
 }
 
-async function getModManagement(state) {
+async function getModManagement(state, options = {}) {
   const installed = await listInstalledMods(state);
+  const loadReport = buildModLoadReport(options.logText || "", installed);
   return {
     modsDir: path.relative(state.rootDir, state.modsDir).replace(/\\/g, "/"),
     installed,
+    loadReport,
     sources: {
       primary: "SMAPI / Nexus Mods",
       steamWorkshopAvailable: false,
@@ -1410,7 +1604,7 @@ function createModService(options) {
 
   return {
     ensureModsDir: () => ensureModsDir(state),
-    getModManagement: () => getModManagement(state),
+    getModManagement: (options) => getModManagement(state, options),
     searchMods: (payload) => searchMods(state, payload),
     getNexusModFiles: (payload) => getNexusModFiles(state, payload),
     installModFromUrl: (payload) => installModFromUrl(state, payload),
@@ -1443,5 +1637,7 @@ module.exports = {
     normalizeModConfigText,
     parseRetryAfterMs,
     pickRecommendedNexusFile,
+    buildModLoadReport,
+    collectSmapiLoadLines,
   },
 };

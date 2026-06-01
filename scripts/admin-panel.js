@@ -1965,6 +1965,144 @@ async function latestLogs() {
   return { logs: await sanitize(logs.stdout || logs.stderr || "") };
 }
 
+async function latestServerLogText() {
+  const [composeLogs, runtime] = await Promise.all([
+    latestLogs().catch((error) => ({ logs: error.message || String(error) })),
+    runtimeSignals().catch((error) => ({ logs: error.message || String(error) })),
+  ]);
+  return [composeLogs.logs || "", runtime.logs || ""].filter(Boolean).join("\n");
+}
+
+function publicEnvSnapshot(env) {
+  return {
+    apiEnabled: env.API_ENABLED !== "false",
+    apiPort: apiPortFromEnv(env) || 0,
+    apiKeySet: Boolean(env.API_KEY),
+    adminHost: env.ADMIN_HOST || "127.0.0.1",
+    adminPort: Number(env.ADMIN_PORT || 8088),
+    imageVersion: env.IMAGE_VERSION || "preview",
+    gamePort: Number(env.GAME_PORT || 24642),
+    queryPort: Number(env.QUERY_PORT || 27015),
+    nexusApiKeySet: Boolean(env.NEXUS_API_KEY),
+  };
+}
+
+function normalizeComposePsItem(item) {
+  return {
+    name: item.Name || item.name || "",
+    service: item.Service || item.service || "",
+    state: item.State || item.state || "",
+    status: item.Status || item.status || "",
+    ports: item.Publishers || item.Ports || item.ports || "",
+  };
+}
+
+async function inspectComposePs() {
+  const result = await compose(["ps", "-a", "--format", "json"], { timeoutMs: 12000 });
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: await sanitize(result.stderr || result.stdout || "docker compose ps failed"),
+      containers: [],
+    };
+  }
+
+  const containers = [];
+  const output = String(result.stdout || "").trim();
+  try {
+    const parsed = JSON.parse(output);
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    return { ok: true, containers: items.map((item) => normalizeComposePsItem(item)) };
+  } catch (_) {}
+
+  for (const line of parseTableLines(output)) {
+    try {
+      const item = JSON.parse(line);
+      containers.push(normalizeComposePsItem(item));
+    } catch (_) {
+      containers.push({ raw: line });
+    }
+  }
+
+  return { ok: true, containers };
+}
+
+function diagnosticSummary(apiDiagnostic, modManagement, stackState) {
+  const issues = [];
+  if (apiDiagnostic && !apiDiagnostic.available) {
+    issues.push(apiDiagnostic.message || "服务端 HTTP API 不可用。");
+  }
+  if (apiDiagnostic?.container?.userModsShadowApiMod) {
+    issues.push("检测到旧挂载：data/mods 仍遮住 /data/Mods，需要拉取最新代码并重建游戏容器。");
+  }
+  const loadReport = modManagement?.loadReport || {};
+  if (loadReport.errors?.length) {
+    issues.push(`最近 SMAPI 日志包含 ${loadReport.errors.length} 条错误。`);
+  }
+  if (loadReport.skipped?.length || loadReport.problemMods?.length) {
+    issues.push(`最近 SMAPI 日志显示有 Mod 被跳过或加载异常。`);
+  }
+  if (stackState?.ok === false) {
+    issues.push(stackState.error || "Docker 容器状态读取失败。");
+  }
+
+  return {
+    status: issues.length ? "needs-attention" : "ok",
+    message: issues.length ? issues[0] : "未发现明显的 API、挂载或 SMAPI 加载异常。",
+    issues,
+  };
+}
+
+async function getDiagnosticReport() {
+  const env = await readEnv();
+  const logText = await latestServerLogText();
+  const [status, apiDiagnostic, modManagement, stackState, composePs] = await Promise.all([
+    getStatus().catch((error) => ({ error: error.message || String(error) })),
+    getServerApiDiagnostic().catch((error) => ({ available: false, message: error.message || String(error) })),
+    modService.getModManagement({ logText }).catch((error) => ({ error: error.message || String(error), installed: [], loadReport: null })),
+    inspectStackState().catch((error) => ({ ok: false, error: error.message || String(error), containers: [] })),
+    inspectComposePs().catch((error) => ({ ok: false, error: error.message || String(error), containers: [] })),
+  ]);
+  const logTail = tailLogText(logText, 220, 9000);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    summary: diagnosticSummary(apiDiagnostic, modManagement, stackState),
+    env: publicEnvSnapshot(env),
+    stack: {
+      inspect: stackState,
+      composePs,
+      running: Boolean(status.stackRunning),
+      health: status.health || [],
+      publishedPorts: status.publishedPorts || [],
+    },
+    serverApi: apiDiagnostic,
+    mods: {
+      modsDir: modManagement.modsDir || "data/mods",
+      installedCount: modManagement.installed?.length || 0,
+      installed: (modManagement.installed || []).map((mod) => ({
+        directoryName: mod.directoryName,
+        name: mod.name,
+        uniqueId: mod.uniqueId,
+        version: mod.version,
+        hasConfig: mod.hasConfig,
+        hasManifest: mod.hasManifest,
+        manifestError: mod.manifestError || "",
+      })),
+      loadReport: modManagement.loadReport,
+    },
+    runtime: {
+      farmName: status.runtime?.farmName || "",
+      playerCount: status.runtime?.playerCount ?? null,
+      maxPlayers: status.runtime?.maxPlayers ?? null,
+      inviteCode: status.join?.inviteCode || "n/a",
+    },
+    logs: {
+      tail: logTail,
+    },
+  };
+}
+
 async function isServerContainerRunning() {
   const result = await docker(["inspect", "-f", "{{.State.Running}}", "sdv-server"], { timeoutMs: 8000 });
   return result.ok && result.stdout.trim() === "true";
@@ -2607,7 +2745,7 @@ const handleApi = createApiHandler({
   requestStopStack,
   cancelStopAfterSaveJob,
   getSaveManagement,
-  getModManagement: modService.getModManagement,
+  getModManagement: async () => modService.getModManagement({ logText: await latestServerLogText() }),
   searchMods: modService.searchMods,
   getNexusModFiles: modService.getNexusModFiles,
   installModFromUrl: modService.installModFromUrl,
@@ -2627,6 +2765,7 @@ const handleApi = createApiHandler({
   restoreBackup,
   deleteBackups,
   latestLogs,
+  getDiagnosticReport,
 });
 
 async function main() {

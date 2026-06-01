@@ -93,6 +93,7 @@ function createApiHandler(deps) {
     restoreBackup,
     deleteBackups,
     latestLogs,
+    getDiagnosticReport,
   } = deps;
 
   return async function handleApi(req, res, pathname) {
@@ -269,6 +270,10 @@ function createApiHandler(deps) {
   }
   if (pathname === "/api/logs" && req.method === "GET") {
     json(res, 200, await latestLogs());
+    return;
+  }
+  if (pathname === "/api/diagnostics" && req.method === "GET") {
+    json(res, 200, await getDiagnosticReport());
     return;
   }
 
