@@ -654,6 +654,12 @@ function uniqueLogLines(lines, maxItems) {
 function isSpecificModProblemLine(line) {
   const cleaned = cleanSmapiLogLine(line);
   if (!cleaned) return false;
+  if (
+    /\b(?:AssetHelper|asset)\b.*\bfailed\s+to\s+load\s+asset\b/i.test(cleaned) ||
+    /\bAudio\s+has\s+failed\s+to\s+initialize\b/i.test(cleaned)
+  ) {
+    return false;
+  }
   return (
     /\bfailed\s+(?:loading|to\s+load|to\s+initialize)\b/i.test(cleaned) ||
     /\bcould\s+not\s+be\s+(?:added|loaded|initialized)\b/i.test(cleaned) ||

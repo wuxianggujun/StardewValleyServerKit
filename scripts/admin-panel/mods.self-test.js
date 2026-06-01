@@ -332,6 +332,15 @@ async function main() {
     assert.equal(advisoryReport.problemMods.some((mod) => mod.directoryName === "VisibleMod"), false);
     assert.equal(advisoryReport.byDirectory.VisibleMod.state, "loaded");
 
+    const assetErrorReport = __test.buildModLoadReport([
+      "sdv-server  | [SMAPI] Loaded 1 mod:",
+      "sdv-server  | [SMAPI]    Visible Mod 1.0.0 by Local | Example.Visible",
+      "sdv-server  | [03:02:48 ERROR Visible Mod] AssetHelper: failed to load asset 'level_up.ogg': Audio has failed to initialize.",
+      "sdv-server  | [03:02:48 TRACE Visible Mod] Accessed mod-provided API (GenericModConfigMenu.Framework.Api) for Generic Mod Config Menu.",
+    ].join("\n"), listed.installed);
+    assert.equal(assetErrorReport.problemMods.some((mod) => mod.directoryName === "VisibleMod"), false);
+    assert.equal(assetErrorReport.byDirectory.VisibleMod.state, "loaded");
+
     const config = await service.readModConfig({ directoryName: "VisibleMod" });
     assert.equal(config.directoryName, "VisibleMod");
     assert.match(config.text, /"Enabled":true|"Enabled": true/);
