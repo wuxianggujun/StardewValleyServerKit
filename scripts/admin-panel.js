@@ -69,6 +69,7 @@ const STACK_READY_POLL_MS = 3000;
 const STACK_FAILURE_LOG_LINES = 180;
 const STACK_FAILURE_LOG_MAX_CHARS = 7000;
 const STACK_REQUIRED_CONTAINERS = ["sdv-server", "sdv-steam-auth"];
+const DOCKER_INSPECT_API_FORMAT = '{{.State.Running}}{{printf "\\t"}}{{json .Config.Env}}{{printf "\\t"}}{{json .Mounts}}';
 const ADMIN_ALLOW_PUBLIC_HTTP_KEY = "ADMIN_ALLOW_PUBLIC_HTTP";
 let pendingStopAfterSave = null;
 let autoBackupTimer = null;
@@ -417,9 +418,11 @@ async function compose(args, options = {}) {
 }
 
 async function ensureGameModsDirectory() {
+  const modsDir = path.join(ROOT_DIR, "data", "mods");
+  await fsp.mkdir(modsDir, { recursive: true });
   const script = "mkdir -p /data/game/Mods && touch /data/game/Mods/SVSK_PLACEHOLDER.txt";
   const result = await docker(
-    ["run", "--rm", "--user", "0:0", "-v", "stardew-valley-server-kit_game-data:/data/game", "busybox:1.36", "sh", "-lc", script],
+    ["run", "--rm", "--user", "0:0", "--mount", `type=bind,source=${modsDir},target=/data/game/Mods`, "busybox:1.36", "sh", "-lc", script],
     { timeoutMs: 120000 },
   );
   if (!result.ok) {
@@ -809,9 +812,20 @@ function dockerEnvObject(envJson) {
   }
 }
 
+function dockerMountDestinations(mountsJson) {
+  try {
+    const mounts = JSON.parse(mountsJson || "[]");
+    return (Array.isArray(mounts) ? mounts : [])
+      .map((mount) => String(mount?.Destination || mount?.destination || "").trim())
+      .filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+}
+
 async function inspectServerApiRuntimeEnv(projectEnv) {
   const result = await docker(
-    ["inspect", "-f", "{{.State.Running}}\t{{json .Config.Env}}", "sdv-server"],
+    ["inspect", "-f", DOCKER_INSPECT_API_FORMAT, "sdv-server"],
     { timeoutMs: 8000 },
   );
   if (!result.ok) {
@@ -821,8 +835,9 @@ async function inspectServerApiRuntimeEnv(projectEnv) {
       error: await sanitize(result.stderr || result.stdout || "sdv-server 容器不存在。"),
     };
   }
-  const [runningText, envJson = "[]"] = result.stdout.trim().split("\t");
+  const [runningText, envJson = "[]", mountsJson = "[]"] = result.stdout.trim().split("\t");
   const containerEnv = dockerEnvObject(envJson);
+  const mountDestinations = dockerMountDestinations(mountsJson);
   return {
     exists: true,
     running: runningText === "true",
@@ -832,6 +847,7 @@ async function inspectServerApiRuntimeEnv(projectEnv) {
     apiKeyMatches: String(containerEnv.API_KEY || "") === String(projectEnv.API_KEY || ""),
     apiPortMatches: String(containerEnv.API_PORT || "8080") === String(projectEnv.API_PORT || "8080"),
     apiEnabledMatches: String(containerEnv.API_ENABLED || "true") === String(projectEnv.API_ENABLED || "true"),
+    userModsShadowApiMod: mountDestinations.includes("/data/Mods"),
   };
 }
 
@@ -853,6 +869,9 @@ function apiDiagnosticMessage(env, runtime, healthProbe, statusProbe) {
   }
   if (runtime.apiEnabled === "false") {
     return "sdv-server 容器内 API_ENABLED=false；需要用当前 .env 重建游戏容器。";
+  }
+  if (runtime.userModsShadowApiMod) {
+    return "当前 sdv-server 容器把宿主机 data/mods 挂载到了 /data/Mods，遮住了镜像内置 JunimoServer API Mod；请拉取最新代码并重建游戏容器。";
   }
   if (!runtime.apiEnabledMatches || !runtime.apiPortMatches || !runtime.apiKeyMatches) {
     return "sdv-server 容器内 API 配置与当前 .env 不一致；通常是只重启了 sdv-admin.service，没有重建游戏容器。请重启游戏服务端。";
@@ -2701,5 +2720,6 @@ module.exports = {
     stackRestartVerified,
     stackStateSummary,
     tailLogText,
+    DOCKER_INSPECT_API_FORMAT,
   },
 };

@@ -236,7 +236,8 @@ Web 管理面板的“存档管理”还能执行：
 ## Mod 管理
 
 Web 管理面板的“模组”页会扫描宿主机 `data/mods`，也就是容器内的
-`/data/Mods`。页面会递归读取 `manifest.json`，显示名称、版本、作者、UniqueID、
+`/data/game/Mods`。镜像启动脚本会再把这些用户 Mod 复制到 SMAPI 加载目录，
+同时保留镜像内置的 JunimoServer API Mod。页面会递归读取 `manifest.json`，显示名称、版本、作者、UniqueID、
 MinimumApiVersion、EntryDll 和 UpdateKeys；递归扫描用于兼容
 `data/mods/smapi/ModName/` 这类嵌套目录。
 

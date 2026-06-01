@@ -58,7 +58,8 @@ volume。项目暂不提供裸机 / 无 Docker 部署流程，也不承诺原生
 - 玩家管理：面板通过 JunimoServer HTTP API 读取在线玩家、农场角色和登录验证状态，
   可授予管理员、删除离线农场角色。当前服务端镜像没有 HTTP 踢出 / 封禁接口，所以面板
   明确标记这些操作不可用。
-- Mod 管理：`data/mods/` 会挂载到容器 `/data/Mods`。面板可读取已安装 Mod 的
+- Mod 管理：`data/mods/` 会挂载到容器 `/data/game/Mods`，再由镜像启动脚本复制到
+  SMAPI 加载目录，避免遮住镜像内置的 JunimoServer API Mod。面板可读取已安装 Mod 的
   `manifest.json`，搜索 SMAPI 兼容列表，读取 Nexus 文件分组，从 Nexus / URL /
   本地 zip 安装 Mod，删除 Mod，并编辑 `config.json`。
 - Mod 安装安全保护：后端只接受 HTTPS 下载，限制来源主机和文件大小，校验 zip 魔数，

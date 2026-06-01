@@ -144,6 +144,8 @@ async function main() {
       containers: [{ name: "sdv-server", status: "restarting", health: "unhealthy" }],
     }), /sdv-server=restarting\/unhealthy/);
     assert.equal(__test.tailLogText("a\nb\nc\n", 2, 100), "b\nc");
+    assert.match(__test.DOCKER_INSPECT_API_FORMAT, /printf "\\t"/);
+    assert.match(__test.DOCKER_INSPECT_API_FORMAT, /json \.Mounts/);
 
     const beforeEnv = await readText(envFile);
     await assert.rejects(
