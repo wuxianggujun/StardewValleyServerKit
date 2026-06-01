@@ -2060,7 +2060,7 @@ function buildSteamAuthLogReport(logText) {
   const steamClientDisconnected = /SteamClient instance must be connected|TryAnotherCM|temporarily unavailable/i.test(text);
   const manifestForbidden = /(?:manifest|download|depot|Steam).*?(?:403|Forbidden)|(?:403|Forbidden).*?(?:manifest|download|depot|Steam)/i.test(text);
   const refreshTokenInvalid = /refresh token|access token|invalid token|expired token/i.test(text);
-  const setupCommand = "./setup.sh login";
+  const setupCommand = "./scripts/sdv-server.sh login";
   const composeLoginCommand = "docker compose --env-file .env run --rm -it steam-auth login";
   const issues = [];
 
@@ -2074,7 +2074,7 @@ function buildSteamAuthLogReport(logText) {
     issues.push("SteamClient 连接链路未就绪或被 Steam 临时拒绝，可稍后重试登录；下载阶段可使用 SteamCMD 备用流程。");
   }
   if (manifestForbidden) {
-    issues.push("Steam manifest/CDN 下载返回 403；建议执行 ./setup.sh steamcmd-download 使用 SteamCMD 备用下载。");
+    issues.push("Steam manifest/CDN 下载返回 403；建议执行 ./scripts/sdv-server.sh steamcmd-download 使用 SteamCMD 备用下载。");
   }
   if (refreshTokenInvalid) {
     issues.push("Steam 登录 token 可能失效，需要重新执行 Steam Auth 登录。");

@@ -547,7 +547,7 @@ docker compose --env-file .env ps
 
 ```bash
 cd /opt/stardew/StardewValleyServerKit || exit 1
-./setup.sh login
+./scripts/sdv-server.sh login
 ```
 
 底层等价命令是：
@@ -561,7 +561,7 @@ docker compose --env-file .env run --rm -it steam-auth login
 改用 SteamCMD 备用下载：
 
 ```bash
-./setup.sh steamcmd-download
+./scripts/sdv-server.sh steamcmd-download
 ```
 
 ## Mod 依赖缺失

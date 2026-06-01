@@ -153,7 +153,7 @@ async function main() {
     assert.equal(steamLoginReport.status, "needs-login");
     assert.equal(steamLoginReport.notLoggedIn, true);
     assert.match(steamLoginReport.message, /Steam Auth 尚未登录/);
-    assert.match(steamLoginReport.setupCommand, /\.\/setup\.sh login/);
+    assert.match(steamLoginReport.setupCommand, /\.\/scripts\/sdv-server\.sh login/);
     const steamForbiddenReport = __test.buildSteamAuthLogReport("download failed: Steam manifest HTTP 403 Forbidden");
     assert.equal(steamForbiddenReport.manifestForbidden, true);
     assert.equal(steamForbiddenReport.fallbackRecommended, true);

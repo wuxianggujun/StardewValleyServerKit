@@ -1302,7 +1302,7 @@ const PAGE = String.raw`<!doctype html>
         "Steam Auth:",
         "status=" + (steamAuth.status || "unknown"),
         "message=" + (steamAuth.message || "n/a"),
-        "setupCommand=" + (steamAuthLog.setupCommand || "./setup.sh login"),
+        "setupCommand=" + (steamAuthLog.setupCommand || "./scripts/sdv-server.sh login"),
         "fallbackRecommended=" + Boolean(steamAuthLog.fallbackRecommended),
         "guardRequired=" + Boolean(steamAuthLog.guardRequired),
         "manifestForbidden=" + Boolean(steamAuthLog.manifestForbidden),
