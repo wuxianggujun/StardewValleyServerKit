@@ -10,18 +10,18 @@
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/assets/screenshots/overview.svg" alt="管理面板概览：服务端健康状态、农场信息、玩家数量和加入方式" />
+      <img src="docs/assets/screenshots/overview.jpg" alt="管理面板概览：服务端健康状态、农场信息、玩家数量和加入方式" />
     </td>
     <td width="50%">
-      <img src="docs/assets/screenshots/mods.svg" alt="模组加载检测：宿主机目录、容器挂载和 SMAPI 加载状态" />
+      <img src="docs/assets/screenshots/mods.jpg" alt="模组加载检测：宿主机目录、容器挂载和 SMAPI 加载状态" />
     </td>
   </tr>
   <tr>
     <td width="50%">
-      <img src="docs/assets/screenshots/saves.svg" alt="存档管理：选择农场、创建备份、修复小屋和角色槽" />
+      <img src="docs/assets/screenshots/saves.jpg" alt="存档管理：选择农场、创建备份、修复小屋和角色槽" />
     </td>
     <td width="50%">
-      <img src="docs/assets/screenshots/players.svg" alt="玩家管理：在线玩家、离线农场角色、管理员授权和 API 状态" />
+      <img src="docs/assets/screenshots/players.jpg" alt="玩家管理：在线玩家、离线农场角色、管理员授权和 API 状态" />
     </td>
   </tr>
 </table>
