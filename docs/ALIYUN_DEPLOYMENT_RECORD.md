@@ -77,6 +77,18 @@ The SteamClient instance must be connected
 这通常不是密码错误，而是 SteamClient 链路没有连接成功。脚本会回退到 SteamCMD。
 SteamCMD 的镜像 `cm2network/steamcmd:latest` 也会走同一套 Docker Hub 失败兜底逻辑。
 
+## 现场验证记录
+
+2026-06-05 在阿里云服务器上做过一次完整验证：
+
+- 已通过 SSH 重启 Docker，确认该动作会让当前项目栈短暂重建。
+- 已执行 `./setup.sh start`，`sdv-server` 和 `sdv-steam-auth` 能正常拉起。
+- 已执行 `./setup.sh login`，当前报错点是 `The SteamClient instance must be connected`。
+- 已执行 `./setup.sh download`，脚本已自动回退到 SteamCMD，开始下载更新与游戏文件。
+
+这次验证说明：Docker、Compose、脚本入口和回退链路都能跑通；当前剩下的是
+Steam 登录链路和游戏文件下载时间。
+
 ## 哔站文章二维码
 
 文章可引用仓库里的赞赏二维码：
