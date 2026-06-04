@@ -127,6 +127,15 @@ Steam Guard code:
 
 不要把验证码复制到聊天、Issue 或文档里。
 
+如果脚本是在没有 TTY 的 SSH 命令里运行，例如通过远程命令直接执行
+`ssh root@server 'cd ... && ./setup.sh steamcmd-download'`，SteamCMD 没有地方接收验证码。
+脚本检测到这种情况后会停止重试，避免连续触发 `Account Logon Denied`。
+需要改用带 TTY 的 SSH：
+
+```bash
+ssh -t root@server 'cd /opt/stardew-valley-server-kit && ./setup.sh steamcmd-download'
+```
+
 ## 如果终端断开但容器还在等验证码
 
 先查正在运行的 SteamCMD 容器：

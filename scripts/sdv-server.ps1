@@ -1541,6 +1541,15 @@ function Invoke-SteamCmdDownload {
             return
         }
 
+        $logText = ""
+        if (Test-Path -LiteralPath $logFile) {
+            $logText = Get-Content -LiteralPath $logFile -Raw
+        }
+        if ((-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) -and
+            $logText -match "Steam Guard code|This computer has not been authenticated|set_steam_guard_code") {
+            Write-ErrorExit "SteamCMD requires Steam Guard, but this terminal is non-interactive. Rerun from a terminal with TTY, for example: ssh -t root@server `"cd /opt/stardew-valley-server-kit && ./setup.sh steamcmd-download`""
+        }
+
         Write-Warn "SteamCMD failed with exit code $exitCode"
         Write-Warn "Log written: logs\$(Split-Path -Leaf $logFile)"
         if ($attempt -lt $maxAttempts) {

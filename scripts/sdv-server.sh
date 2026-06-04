@@ -847,6 +847,11 @@ PY
   return 1
 }
 
+steamcmd_output_requires_interactive_guard() {
+  local output_file="$1"
+  grep -Eiq 'Steam Guard code|This computer has not been authenticated|set_steam_guard_code' "$output_file"
+}
+
 new_secret() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'
@@ -1615,20 +1620,35 @@ steamcmd_download() {
   prepare_steamcmd_volumes "$image" "$game_volume" "$steamcmd_volume"
 
   while (( attempt <= max_attempts )); do
+    local attempt_log docker_status
+    attempt_log="$(mktemp "${TMPDIR:-/tmp}/svsk-steamcmd.XXXXXX.log")"
+
     step "SteamCMD attempt $attempt of $max_attempts"
-    if docker run --rm "${docker_tty_args[@]}" \
+    set +e
+    docker run --rm "${docker_tty_args[@]}" \
       "${STEAM_PROXY_DOCKER_ARGS[@]}" \
       -v "$game_volume:/data/game" \
       -v "$steamcmd_volume:/home/steam/Steam" \
       -e "STEAM_USERNAME=$steam_user" \
       -e "STEAM_PASSWORD=$steam_pass" \
       "$image" \
-      bash -lc "$download_command"; then
+      bash -lc "$download_command" 2>&1 | tee "$attempt_log"
+    docker_status="${PIPESTATUS[0]}"
+    set -e
+
+    if (( docker_status == 0 )); then
+      rm -f "$attempt_log"
       assert_game_data_installed "$game_volume" "$steamcmd_volume"
       install_steamworks_sdk "$image" "$game_volume" "$steamcmd_volume"
       ok "SteamCMD download completed"
       return 0
     fi
+
+    if ! interactive_terminal && steamcmd_output_requires_interactive_guard "$attempt_log"; then
+      rm -f "$attempt_log"
+      die "SteamCMD requires Steam Guard, but this terminal is non-interactive. Rerun from an SSH session with TTY, for example: ssh -t root@server 'cd /opt/stardew-valley-server-kit && ./setup.sh steamcmd-download'"
+    fi
+    rm -f "$attempt_log"
 
     printf 'WARN SteamCMD failed on attempt %s\n' "$attempt"
     if (( attempt < max_attempts )); then
