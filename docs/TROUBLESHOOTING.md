@@ -54,6 +54,9 @@ DOCKER_TEMP_MIRROR_RESTART_DOCKER=true
 `DOCKER_TEMP_MIRROR_RESTART_DOCKER=true` 是预授权开关，表示允许脚本自动临时修改
 Docker daemon 配置并重启 Docker。普通交互部署不需要提前打开它，脚本会现场询问。
 
+这类 Docker 镜像源只影响镜像拉取，不影响 Steam 登录、Steam Directory API、
+Steam CM 服务器或 SteamCMD 下载链路。
+
 ## Steam 授权失败
 
 常见原因：
@@ -83,6 +86,25 @@ The SteamClient instance must be connected.
 通常不是密码错误。它表示 `steam-auth` 还没有连上 SteamClient 链路，就执行了认证。
 Steam 网页能 `curl` 通也不代表这条客户端链路可用。当前脚本会在 `download`
 阶段失败后自动切换到 SteamCMD 备用流程；也可以手动执行：
+
+脚本的 `doctor`、`login`、`download` 和 `steamcmd-download` 会探测 Steam Directory API：
+
+```text
+https://api.steampowered.com/ISteamDirectory/GetCMList/v1/?cellid=0&format=json
+```
+
+如果该地址在服务器上超时，说明 SteamClient 还没拿到可用 CM 链路。此时不是账号名拼写
+的第一嫌疑，而是服务器到 Steam API / CM 网络不通。可以在 `.env` 中配置：
+
+```env
+HTTP_PROXY="http://127.0.0.1:7890"
+HTTPS_PROXY="http://127.0.0.1:7890"
+ALL_PROXY="socks5://127.0.0.1:7890"
+NO_PROXY="localhost,127.0.0.1,steam-auth,server"
+```
+
+只填写实际可用的一项或几项即可。代理地址如果包含账号密码，只能放在本机 `.env`，
+不要提交到仓库、Issue 或截图。脚本会把代理变量传给 `steam-auth` 和 SteamCMD 容器。
 
 Windows：
 

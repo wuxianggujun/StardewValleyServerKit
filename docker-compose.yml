@@ -70,6 +70,14 @@ services:
       STEAM_USERNAME: "${STEAM_USERNAME:-}"
       STEAM_PASSWORD: "${STEAM_PASSWORD:-}"
       STEAM_REFRESH_TOKEN: "${STEAM_REFRESH_TOKEN:-}"
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      ALL_PROXY: "${ALL_PROXY:-}"
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,steam-auth,server}"
+      http_proxy: "${HTTP_PROXY:-}"
+      https_proxy: "${HTTPS_PROXY:-}"
+      all_proxy: "${ALL_PROXY:-}"
+      no_proxy: "${NO_PROXY:-localhost,127.0.0.1,steam-auth,server}"
     restart: unless-stopped
 
   discord-bot:

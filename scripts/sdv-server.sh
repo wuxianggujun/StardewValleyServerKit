@@ -723,8 +723,110 @@ if missing:
 
 show_steamcmd_fallback_hint() {
   warn "steam-auth uses the SteamClient/SteamKit login path; SteamCMD uses Valve's official console client path."
+  warn "Docker registry mirrors only fix Docker image pulls; they do not fix SteamClient or SteamCMD connectivity."
   warn "If SteamCMD asks for a Steam Guard code, type the newest code into this terminal and press Enter."
   warn "Do not paste Steam passwords, Steam Guard codes, or tokens into chat, issues, or screenshots."
+}
+
+steam_network_probe_url() {
+  printf '%s' 'https://api.steampowered.com/ISteamDirectory/GetCMList/v1/?cellid=0&format=json'
+}
+
+steam_proxy_value() {
+  local key="$1"
+  local fallback_key="${2:-}"
+  local value=""
+
+  value="${!key:-}"
+  [[ -n "$value" ]] || value="$(get_env_value "$key" || true)"
+  if [[ -z "$value" && -n "$fallback_key" ]]; then
+    value="${!fallback_key:-}"
+    [[ -n "$value" ]] || value="$(get_env_value "$fallback_key" || true)"
+  fi
+
+  printf '%s' "$value"
+}
+
+steam_proxy_configured() {
+  local key
+  for key in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+    [[ -n "$(steam_proxy_value "$key")" ]] && return 0
+  done
+  return 1
+}
+
+STEAM_PROXY_DOCKER_ARGS=()
+
+load_steam_proxy_docker_args() {
+  local key value
+
+  STEAM_PROXY_DOCKER_ARGS=()
+
+  for key in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY; do
+    value="$(steam_proxy_value "$key")"
+    [[ -z "$value" ]] || STEAM_PROXY_DOCKER_ARGS+=(-e "$key=$value")
+  done
+
+  value="$(steam_proxy_value http_proxy HTTP_PROXY)"
+  [[ -z "$value" ]] || STEAM_PROXY_DOCKER_ARGS+=(-e "http_proxy=$value")
+  value="$(steam_proxy_value https_proxy HTTPS_PROXY)"
+  [[ -z "$value" ]] || STEAM_PROXY_DOCKER_ARGS+=(-e "https_proxy=$value")
+  value="$(steam_proxy_value all_proxy ALL_PROXY)"
+  [[ -z "$value" ]] || STEAM_PROXY_DOCKER_ARGS+=(-e "all_proxy=$value")
+  value="$(steam_proxy_value no_proxy NO_PROXY)"
+  [[ -z "$value" ]] || STEAM_PROXY_DOCKER_ARGS+=(-e "no_proxy=$value")
+}
+
+show_steam_network_help() {
+  warn "Steam Directory API is not reachable from this host. SteamClient may fail before Steam Guard."
+  warn "This is a Steam network path issue, not a Steam username spelling issue."
+  warn "Docker Hub mirror settings do not affect api.steampowered.com or Steam CM servers."
+  warn "If this server cannot reach Steam directly, set HTTP_PROXY/HTTPS_PROXY/ALL_PROXY in .env and retry."
+}
+
+check_steam_network_connectivity() {
+  local url output status
+  url="$(steam_network_probe_url)"
+
+  step "Checking Steam Directory API"
+  if command -v curl >/dev/null 2>&1; then
+    set +e
+    output="$(curl -fsSL --connect-timeout 5 --max-time 15 "$url" -o /dev/null 2>&1)"
+    status=$?
+    set -e
+    if (( status == 0 )); then
+      ok "Steam Directory API reachable"
+      return 0
+    fi
+    warn "Steam Directory API probe failed: ${output:-curl exit $status}"
+    show_steam_network_help
+    return 1
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    set +e
+    output="$(SVSK_STEAM_PROBE_URL="$url" python3 - <<'PY' 2>&1
+import os
+import urllib.request
+
+url = os.environ["SVSK_STEAM_PROBE_URL"]
+with urllib.request.urlopen(url, timeout=15) as response:
+    response.read(1)
+PY
+)"
+    status=$?
+    set -e
+    if (( status == 0 )); then
+      ok "Steam Directory API reachable"
+      return 0
+    fi
+    warn "Steam Directory API probe failed: ${output:-python3 exit $status}"
+    show_steam_network_help
+    return 1
+  fi
+
+  warn "curl/python3 not found; skipping Steam Directory API probe."
+  return 0
 }
 
 new_secret() {
@@ -1437,8 +1539,10 @@ install_steamworks_sdk() {
 
   step "Installing Steamworks SDK redistributable"
   prepare_steamworks_sdk_dir "$game_volume"
+  load_steam_proxy_docker_args
 
   docker run --rm \
+    "${STEAM_PROXY_DOCKER_ARGS[@]}" \
     -v "$game_volume:/data/game" \
     -v "$steamcmd_volume:/home/steam/Steam" \
     "$image" \
@@ -1475,6 +1579,11 @@ steamcmd_download() {
   local docker_tty_args=()
 
   step "Downloading game files with SteamCMD"
+  check_steam_network_connectivity || true
+  load_steam_proxy_docker_args
+  if steam_proxy_configured; then
+    ok "Steam proxy variables are configured; values are not printed"
+  fi
   printf 'WARN Steam Guard codes must be typed into this terminal. Do not paste codes into chat or issues.\n'
   printf 'WARN If SteamCMD shows "Steam Guard code:", type the newest code here and press Enter.\n'
   if interactive_terminal; then
@@ -1490,6 +1599,7 @@ steamcmd_download() {
   while (( attempt <= max_attempts )); do
     step "SteamCMD attempt $attempt of $max_attempts"
     if docker run --rm "${docker_tty_args[@]}" \
+      "${STEAM_PROXY_DOCKER_ARGS[@]}" \
       -v "$game_volume:/data/game" \
       -v "$steamcmd_volume:/home/steam/Steam" \
       -e "STEAM_USERNAME=$steam_user" \
@@ -1516,6 +1626,7 @@ steamcmd_download() {
 }
 
 run_steam_auth_login() {
+  check_steam_network_connectivity || true
   if compose_run_login; then
     return 0
   fi
@@ -1526,6 +1637,7 @@ run_steam_auth_login() {
 }
 
 run_steam_auth_download_or_fallback() {
+  check_steam_network_connectivity || true
   if compose run --rm steam-auth download; then
     return 0
   fi
@@ -1586,6 +1698,7 @@ case "$ACTION" in
     ok "Docker daemon available"
     step "Checking Docker images"
     check_configured_images || true
+    check_steam_network_connectivity || true
     step "Checking local directories"
     mkdir -p "$ROOT_DIR/data/settings" "$ROOT_DIR/data/mods"
     ok "data/settings and data/mods ready"

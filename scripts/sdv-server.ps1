@@ -430,8 +430,104 @@ function Invoke-BuildCompose {
 
 function Show-SteamCmdFallbackHint {
     Write-Warn "steam-auth uses the SteamClient/SteamKit login path; SteamCMD uses Valve's official console client path."
+    Write-Warn "Docker registry mirrors only fix Docker image pulls; they do not fix SteamClient or SteamCMD connectivity."
     Write-Warn "If SteamCMD asks for a Steam Guard code, type the newest code into this terminal and press Enter."
     Write-Warn "Do not paste Steam passwords, Steam Guard codes, or tokens into chat, issues, or screenshots."
+}
+
+function Get-SteamNetworkProbeUrl {
+    return "https://api.steampowered.com/ISteamDirectory/GetCMList/v1/?cellid=0&format=json"
+}
+
+function Get-SteamProxyValue {
+    param(
+        [string]$Key,
+        [string]$FallbackKey = ""
+    )
+
+    $value = Get-ExternalEnvValue @($Key)
+    if (-not $value) {
+        $value = Get-EnvValue $Key
+    }
+
+    if (-not $value -and $FallbackKey) {
+        $value = Get-ExternalEnvValue @($FallbackKey)
+        if (-not $value) {
+            $value = Get-EnvValue $FallbackKey
+        }
+    }
+
+    return $value
+}
+
+function Test-SteamProxyConfigured {
+    foreach ($key in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")) {
+        if (Get-SteamProxyValue $key) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-SteamProxyDockerArgs {
+    $args = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($key in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")) {
+        $value = Get-SteamProxyValue $key
+        if ($value) {
+            $args.Add("-e")
+            $args.Add("${key}=$value")
+        }
+    }
+
+    $proxyMap = @(
+        @{ Key = "http_proxy"; Fallback = "HTTP_PROXY" },
+        @{ Key = "https_proxy"; Fallback = "HTTPS_PROXY" },
+        @{ Key = "all_proxy"; Fallback = "ALL_PROXY" },
+        @{ Key = "no_proxy"; Fallback = "NO_PROXY" }
+    )
+
+    foreach ($item in $proxyMap) {
+        $value = Get-SteamProxyValue $item.Key $item.Fallback
+        if ($value) {
+            $args.Add("-e")
+            $args.Add("$($item.Key)=$value")
+        }
+    }
+
+    return @($args)
+}
+
+function Show-SteamNetworkHelp {
+    Write-Warn "Steam Directory API is not reachable from this host. SteamClient may fail before Steam Guard."
+    Write-Warn "This is a Steam network path issue, not a Steam username spelling issue."
+    Write-Warn "Docker Hub mirror settings do not affect api.steampowered.com or Steam CM servers."
+    Write-Warn "If this server cannot reach Steam directly, set HTTP_PROXY/HTTPS_PROXY/ALL_PROXY in .env and retry."
+}
+
+function Test-SteamNetworkConnectivity {
+    Write-Step "Checking Steam Directory API"
+    $request = $null
+    $response = $null
+    try {
+        $request = [System.Net.WebRequest]::Create((Get-SteamNetworkProbeUrl))
+        $request.Timeout = 15000
+        $request.ReadWriteTimeout = 15000
+        $response = $request.GetResponse()
+        Write-Ok "Steam Directory API reachable"
+        return $true
+    }
+    catch {
+        Write-Warn "Steam Directory API probe failed: $($_.Exception.Message)"
+        Show-SteamNetworkHelp
+        return $false
+    }
+    finally {
+        if ($response) {
+            $response.Close()
+        }
+    }
 }
 
 function New-Secret {
@@ -1310,11 +1406,16 @@ function Install-SteamworksSdk {
     Initialize-SteamSdkDir $GameVolume
 
     $sdkCommand = '/home/steam/steamcmd/steamcmd.sh +force_install_dir /data/game/.steam-sdk +login anonymous +app_update 1007 validate +quit'
-    & docker run --rm `
-        -v "${GameVolume}:/data/game" `
-        -v "${SteamCmdVolume}:/home/steam/Steam" `
-        $Image `
-        bash -lc $sdkCommand 2>&1 | ForEach-Object {
+    $dockerArgs = @("run", "--rm") +
+        (Get-SteamProxyDockerArgs) +
+        @(
+            "-v", "${GameVolume}:/data/game",
+            "-v", "${SteamCmdVolume}:/home/steam/Steam",
+            $Image,
+            "bash", "-lc", $sdkCommand
+        )
+
+    & docker @dockerArgs 2>&1 | ForEach-Object {
             Protect-LogLine ([string]$_)
         }
 
@@ -1355,6 +1456,11 @@ function Invoke-SteamCmdDownload {
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
     Write-Step "Downloading game files with SteamCMD"
+    [void](Test-SteamNetworkConnectivity)
+    $steamProxyArgs = Get-SteamProxyDockerArgs
+    if (Test-SteamProxyConfigured) {
+        Write-Ok "Steam proxy variables are configured; values are not printed"
+    }
     Write-Warn "Steam Guard codes must be typed into this terminal. Do not paste codes into chat or issues."
     Write-Warn "If SteamCMD shows 'Steam Guard code:', type the newest code here and press Enter."
     Initialize-SteamCmdVolumes $image $gameVolume $steamCmdVolume
@@ -1371,13 +1477,18 @@ function Invoke-SteamCmdDownload {
             $ErrorActionPreference = "Continue"
             $env:STEAM_USERNAME = $steamUser
             $env:STEAM_PASSWORD = $steamPass
-            & docker run --rm -i `
-                -v "${gameVolume}:/data/game" `
-                -v "${steamCmdVolume}:/home/steam/Steam" `
-                -e STEAM_USERNAME `
-                -e STEAM_PASSWORD `
-                $image `
-                bash -lc $downloadCommand 2>&1 | ForEach-Object {
+            $dockerArgs = @("run", "--rm", "-i") +
+                $steamProxyArgs +
+                @(
+                    "-v", "${gameVolume}:/data/game",
+                    "-v", "${steamCmdVolume}:/home/steam/Steam",
+                    "-e", "STEAM_USERNAME",
+                    "-e", "STEAM_PASSWORD",
+                    $image,
+                    "bash", "-lc", $downloadCommand
+                )
+
+            & docker @dockerArgs 2>&1 | ForEach-Object {
                     $line = Protect-LogLine ([string]$_)
                     Add-Content -LiteralPath $logFile -Value $line -Encoding utf8
                     Write-Host $line
@@ -1421,6 +1532,7 @@ function Invoke-SteamCmdDownload {
 }
 
 function Invoke-SteamAuthLogin {
+    [void](Test-SteamNetworkConnectivity)
     try {
         Invoke-Compose run --rm -it steam-auth login
     }
@@ -1432,6 +1544,7 @@ function Invoke-SteamAuthLogin {
 }
 
 function Invoke-SteamAuthDownloadOrFallback {
+    [void](Test-SteamNetworkConnectivity)
     try {
         Invoke-Compose run --rm steam-auth download
     }
@@ -1647,6 +1760,8 @@ switch ($Action) {
         Test-DockerImage "$imageNamespace/server:$imageVersion"
         Test-DockerImage "$imageNamespace/steam-service:$imageVersion"
         Test-DockerImage "$imageNamespace/discord-bot:$imageVersion"
+
+        [void](Test-SteamNetworkConnectivity)
 
         Write-Step "Checking local directories"
         New-Item -ItemType Directory -Force -Path (Join-Path $RootDir "data\settings"), (Join-Path $RootDir "data\mods") | Out-Null
