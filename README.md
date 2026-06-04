@@ -127,6 +127,14 @@ chmod +x ./setup.sh
 ./setup.sh
 ```
 
+如果 Linux 服务器访问 Docker Hub 很慢或超时，`setup.sh` 会先按正常方式拉取镜像；
+确认失败后，会在终端里询问是否临时配置 Docker 镜像加速地址并重启 Docker。
+只有输入 `yes` 才会继续。脚本会在镜像下载完成后恢复原来的
+`/etc/docker/daemon.json`，并再次重启 Docker。
+
+注意：重启 Docker 会短暂影响同一台机器上的其他 Docker 容器。服务器上有
+1Panel、数据库、反向代理或其他业务容器时，先确认可以接受短暂停顿。
+
 ## 常用命令
 
 Windows：
@@ -482,6 +490,12 @@ Web 管理面板建议通过 1Panel 站点反向代理访问，不直接开放 `
 - `STEAM_PASSWORD`：Steam 密码。只保存在本地 `.env`。
 - `IMAGE_NAMESPACE`：镜像命名空间，默认 `sdvd`；发布到 GHCR 时可设为 `ghcr.io/your-name`。
 - `IMAGE_VERSION`：默认 `preview`，因为部分 JunimoServer sidecar 镜像目前没有 `latest` 标签。
+- `DOCKER_PULL_TIMEOUT_SECONDS`：Linux 脚本拉取 Docker 镜像的超时时间，默认 `300` 秒。
+- `DOCKER_REGISTRY_MIRRORS`：可选 Docker Hub 镜像加速地址。留空时，交互式 `setup.sh`
+  会在 Docker Hub 拉取失败后现场询问。
+- `DOCKER_TEMP_MIRROR_RESTART_DOCKER`：非交互预授权开关。设为 `true` 后，Linux 脚本可在
+  Docker Hub 拉取失败时临时修改 `/etc/docker/daemon.json` 并重启 Docker；默认 `false`，
+  交互式部署会先询问用户。重启 Docker 会短暂影响同机其他容器。
 - `VNC_PASSWORD`：Web 管理入口密码。
 - `API_KEY`：HTTP API 密钥。
 - `ADMIN_TOKEN`：Web 管理面板令牌。

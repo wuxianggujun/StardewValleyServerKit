@@ -204,6 +204,346 @@ run_with_optional_timeout() {
   fi
 }
 
+docker_pull_timeout_seconds() {
+  local seconds="${DOCKER_PULL_TIMEOUT_SECONDS:-}"
+  if [[ -z "$seconds" ]]; then
+    seconds="$(get_env_value DOCKER_PULL_TIMEOUT_SECONDS || true)"
+  fi
+
+  if [[ "$seconds" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$seconds"
+  else
+    printf '0'
+  fi
+}
+
+docker_registry_mirrors_raw() {
+  local mirrors="${SVSK_RUNTIME_DOCKER_REGISTRY_MIRRORS:-${DOCKER_REGISTRY_MIRRORS:-}}"
+  if [[ -z "$mirrors" ]]; then
+    mirrors="$(get_env_value DOCKER_REGISTRY_MIRRORS || true)"
+  fi
+  printf '%s' "$mirrors"
+}
+
+docker_registry_mirrors_json() {
+  local raw
+  raw="$(docker_registry_mirrors_raw)"
+  [[ -n "$raw" ]] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+
+  SVSK_DOCKER_REGISTRY_MIRRORS_RAW="$raw" python3 - <<'PY'
+import json
+import os
+import re
+import sys
+
+raw = os.environ.get("SVSK_DOCKER_REGISTRY_MIRRORS_RAW", "")
+mirrors = []
+for item in re.split(r"[\s,;]+", raw):
+    item = item.strip().rstrip("/")
+    if not item:
+        continue
+    if not re.match(r"^https?://", item):
+        continue
+    if item not in mirrors:
+        mirrors.append(item)
+
+if not mirrors:
+    sys.exit(1)
+
+print(json.dumps(mirrors, ensure_ascii=False))
+PY
+}
+
+docker_registry_mirrors_configured() {
+  docker_registry_mirrors_json >/dev/null 2>&1
+}
+
+truthy_value() {
+  case "${1,,}" in
+    1|true|yes|y|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+docker_temp_mirror_restart_allowed() {
+  local value="${SVSK_ALLOW_TEMP_DOCKER_MIRROR_RESTART:-${DOCKER_TEMP_MIRROR_RESTART_DOCKER:-}}"
+  if [[ -z "$value" ]]; then
+    value="$(get_env_value DOCKER_TEMP_MIRROR_RESTART_DOCKER || true)"
+  fi
+  truthy_value "$value"
+}
+
+interactive_terminal() {
+  [[ -t 0 && -t 1 ]]
+}
+
+prompt_for_docker_registry_mirrors_if_missing() {
+  local mirrors
+
+  docker_registry_mirrors_configured && return 0
+  interactive_terminal || return 1
+
+  warn "Docker Hub 当前不可达，且 .env 里还没有配置 DOCKER_REGISTRY_MIRRORS。"
+  warn "可以现在输入 Docker Hub 镜像加速地址；多个地址用英文逗号或空格分隔。"
+  warn "直接回车表示跳过自动配置，脚本会保留原来的 Docker 配置。"
+  printf 'Docker Hub 镜像加速地址：'
+  IFS= read -r mirrors || return 1
+  mirrors="${mirrors#"${mirrors%%[![:space:]]*}"}"
+  mirrors="${mirrors%"${mirrors##*[![:space:]]}"}"
+  [[ -n "$mirrors" ]] || return 1
+
+  SVSK_RUNTIME_DOCKER_REGISTRY_MIRRORS="$mirrors"
+  export SVSK_RUNTIME_DOCKER_REGISTRY_MIRRORS
+  docker_registry_mirrors_json >/dev/null 2>&1 || {
+    warn "没有识别到有效的 http/https 镜像加速地址。"
+    return 1
+  }
+}
+
+prompt_for_temporary_docker_restart_if_needed() {
+  local answer
+
+  docker_temp_mirror_restart_allowed && return 0
+  interactive_terminal || return 1
+
+  warn "脚本可以临时修改 /etc/docker/daemon.json，配置镜像加速地址后重启 Docker。"
+  warn "重试下载前会重启一次 Docker，下载完成恢复原配置时还会再重启一次。"
+  warn "这会短暂影响同一台服务器上的其他 Docker 容器。"
+  printf '如果允许临时重启 Docker，请输入 yes：'
+  IFS= read -r answer || return 1
+  case "$answer" in
+    yes|YES|Yes)
+      SVSK_ALLOW_TEMP_DOCKER_MIRROR_RESTART=true
+      export SVSK_ALLOW_TEMP_DOCKER_MIRROR_RESTART
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+prepare_temporary_docker_mirror_retry() {
+  prompt_for_docker_registry_mirrors_if_missing || true
+  docker_registry_mirrors_configured || {
+    warn "没有可用的 Docker Hub 镜像加速地址，跳过自动重试。"
+    return 1
+  }
+
+  prompt_for_temporary_docker_restart_if_needed || {
+    warn "用户没有允许临时重启 Docker，跳过镜像源自动重试。"
+    return 1
+  }
+
+  return 0
+}
+
+SVSK_TEMP_DOCKER_MIRROR_ACTIVE=0
+SVSK_TEMP_DOCKER_DAEMON_JSON=""
+SVSK_TEMP_DOCKER_DAEMON_BACKUP=""
+SVSK_TEMP_DOCKER_DAEMON_HAD_CONFIG=0
+
+wait_for_docker_daemon_after_restart() {
+  local attempt
+  for attempt in $(seq 1 30); do
+    if docker info >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+restart_docker_daemon_for_mirror_change() {
+  systemctl restart docker || return 1
+  wait_for_docker_daemon_after_restart
+}
+
+restore_temporary_docker_registry_mirrors() {
+  if [[ "$SVSK_TEMP_DOCKER_MIRROR_ACTIVE" != "1" ]]; then
+    return 0
+  fi
+
+  step "恢复 Docker 镜像源配置"
+  if [[ "$SVSK_TEMP_DOCKER_DAEMON_HAD_CONFIG" == "1" ]]; then
+    cp "$SVSK_TEMP_DOCKER_DAEMON_BACKUP" "$SVSK_TEMP_DOCKER_DAEMON_JSON"
+  else
+    rm -f "$SVSK_TEMP_DOCKER_DAEMON_JSON"
+  fi
+
+  if restart_docker_daemon_for_mirror_change; then
+    ok "Docker 镜像源配置已恢复"
+  else
+    warn "恢复镜像源配置后重启 Docker 失败，请检查：systemctl status docker"
+  fi
+
+  rm -f "$SVSK_TEMP_DOCKER_DAEMON_BACKUP"
+  SVSK_TEMP_DOCKER_MIRROR_ACTIVE=0
+}
+
+enable_temporary_docker_registry_mirrors() {
+  local mirrors_json
+  local daemon_json="/etc/docker/daemon.json"
+  local backup_file
+
+  docker_registry_mirrors_configured || return 1
+  if ! docker_temp_mirror_restart_allowed; then
+    warn "已配置 DOCKER_REGISTRY_MIRRORS，但未允许脚本临时重启 Docker。"
+    warn "非交互部署如需预授权，可设置 DOCKER_TEMP_MIRROR_RESTART_DOCKER=true。"
+    warn "同机有其他 Docker 服务且不能短暂停顿时，请保持 false。"
+    return 1
+  fi
+
+  mirrors_json="$(docker_registry_mirrors_json)" || {
+    warn "DOCKER_REGISTRY_MIRRORS 已设置，但没有有效的 http/https 镜像加速地址。"
+    return 1
+  }
+
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    warn "临时配置 Docker 镜像源只支持 Linux。"
+    return 1
+  fi
+
+  if ! command -v systemctl >/dev/null 2>&1 || [[ ! -d /run/systemd/system ]]; then
+    warn "临时配置 Docker 镜像源需要 systemd。"
+    return 1
+  fi
+
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    warn "临时配置 Docker 镜像源需要 root 权限，因为要修改 Docker daemon 配置。"
+    return 1
+  fi
+
+  command -v python3 >/dev/null 2>&1 || {
+    warn "需要 python3 才能安全修改 /etc/docker/daemon.json。"
+    return 1
+  }
+
+  backup_file="$(mktemp /tmp/svsk-docker-daemon.XXXXXX.json)"
+  mkdir -p "$(dirname "$daemon_json")"
+  if [[ -f "$daemon_json" ]]; then
+    cp "$daemon_json" "$backup_file"
+    SVSK_TEMP_DOCKER_DAEMON_HAD_CONFIG=1
+  else
+    : > "$backup_file"
+    SVSK_TEMP_DOCKER_DAEMON_HAD_CONFIG=0
+  fi
+
+  SVSK_TEMP_DOCKER_DAEMON_JSON="$daemon_json"
+  SVSK_TEMP_DOCKER_DAEMON_BACKUP="$backup_file"
+
+  python3 - "$daemon_json" "$mirrors_json" <<'PY' || {
+import json
+import os
+import sys
+
+path = sys.argv[1]
+mirrors = json.loads(sys.argv[2])
+data = {}
+
+if os.path.exists(path):
+    text = open(path, "r", encoding="utf-8").read().strip()
+    if text:
+        data = json.loads(text)
+
+data["registry-mirrors"] = mirrors
+tmp = path + ".svsk.tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+os.replace(tmp, path)
+PY
+    warn "写入临时 Docker 镜像源配置失败。"
+    rm -f "$backup_file"
+    return 1
+  }
+
+  SVSK_TEMP_DOCKER_MIRROR_ACTIVE=1
+  trap restore_temporary_docker_registry_mirrors EXIT
+
+  step "启用临时 Docker 镜像源"
+  warn "Docker daemon 会先重启，镜像下载完成后脚本会恢复原配置。"
+  warn "这会短暂影响同机其他 Docker 容器。"
+  if restart_docker_daemon_for_mirror_change; then
+    ok "临时 Docker 镜像源已启用"
+    return 0
+  fi
+
+  warn "启用临时镜像源后重启 Docker 失败。"
+  restore_temporary_docker_registry_mirrors
+  return 1
+}
+
+capture_command_output() {
+  local timeout_seconds="$1"
+  shift
+  local output
+  local status
+
+  set +e
+  if [[ "$timeout_seconds" =~ ^[0-9]+$ ]] && (( timeout_seconds > 0 )) && command -v timeout >/dev/null 2>&1; then
+    output="$(timeout "$timeout_seconds" "$@" 2>&1)"
+    status=$?
+    if (( status == 124 )); then
+      output="Command timed out after ${timeout_seconds}s: $*"$'\n'"$output"
+    fi
+  else
+    output="$("$@" 2>&1)"
+    status=$?
+  fi
+  set -e
+
+  SVSK_CAPTURED_OUTPUT="$output"
+  return "$status"
+}
+
+run_docker_registry_command_or_die() {
+  local description="$1"
+  local timeout_seconds="$2"
+  shift 2
+  local output
+  local retry_output
+
+  if capture_command_output "$timeout_seconds" "$@"; then
+    output="$SVSK_CAPTURED_OUTPUT"
+    [[ -z "$output" ]] || printf '%s\n' "$output"
+    return 0
+  fi
+
+  output="$SVSK_CAPTURED_OUTPUT"
+  if docker_output_suggests_daemon_unavailable "$output" || ! docker_daemon_available; then
+    explain_docker_failure "$description" "$output" 1
+  fi
+
+  if docker_output_suggests_image_unavailable "$output"; then
+    explain_docker_failure "$description" "$output" 1
+  fi
+
+  if docker_output_suggests_registry_unreachable "$output"; then
+    warn "$description 失败：Docker Hub/镜像仓库不可达。"
+    if ! prepare_temporary_docker_mirror_retry; then
+      explain_docker_failure "$description" "$output" 1
+    fi
+
+    warn "已确认允许临时配置镜像源，开始重试下载。"
+    if enable_temporary_docker_registry_mirrors; then
+      if capture_command_output "$timeout_seconds" "$@"; then
+        retry_output="$SVSK_CAPTURED_OUTPUT"
+        [[ -z "$retry_output" ]] || printf '%s\n' "$retry_output"
+        restore_temporary_docker_registry_mirrors
+        return 0
+      fi
+
+      retry_output="$SVSK_CAPTURED_OUTPUT"
+      restore_temporary_docker_registry_mirrors
+      explain_docker_failure "$description" "$retry_output" 1
+    fi
+  fi
+
+  explain_docker_failure "$description" "$output" 1
+}
+
 compose() {
   (cd "$ROOT_DIR" && docker compose --env-file "$ENV_FILE" "$@")
 }
@@ -218,10 +558,30 @@ compose_checked() {
   run_docker_command_or_die "$description" compose "$@"
 }
 
+compose_pull_checked() {
+  local description="$1"
+  local timeout_seconds
+  timeout_seconds="$(docker_pull_timeout_seconds)"
+  (cd "$ROOT_DIR" && run_docker_registry_command_or_die "$description" "$timeout_seconds" docker compose --env-file "$ENV_FILE" pull)
+}
+
 compose_example_checked() {
   local description="$1"
   shift
   run_docker_command_or_die "$description" compose_example "$@"
+}
+
+ensure_docker_image() {
+  local image="$1"
+  local timeout_seconds
+
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  timeout_seconds="$(docker_pull_timeout_seconds)"
+  step "Pulling Docker helper image: $image"
+  run_docker_registry_command_or_die "Pulling Docker helper image $image" "$timeout_seconds" docker pull "$image"
 }
 
 check_remote_image_manifest() {
@@ -1105,6 +1465,8 @@ steamcmd_download() {
   step "Downloading game files with SteamCMD"
   printf 'WARN Steam Guard codes must be typed into this terminal. Do not paste codes into chat or issues.\n'
   printf 'WARN If SteamCMD shows "Steam Guard code:", type the newest code here and press Enter.\n'
+  ensure_docker_image "$image"
+  ensure_docker_image "alpine:3.20"
   prepare_steamcmd_volumes "$image" "$game_volume" "$steamcmd_volume"
 
   while (( attempt <= max_attempts )); do
@@ -1232,7 +1594,7 @@ case "$ACTION" in
     step "Preparing .env"
     ensure_env_file
     step "Pulling Docker images"
-    compose_checked "拉取 Docker 镜像" pull
+    compose_pull_checked "Pulling Docker images"
     step "Running Steam login"
     run_steam_auth_login || true
     step "Downloading or updating game files"
@@ -1311,7 +1673,7 @@ case "$ACTION" in
   update)
     ensure_env_file
     step "Updating images and restarting"
-    compose_checked "拉取 Docker 镜像" pull
+    compose_pull_checked "Pulling Docker images"
     compose_checked "停止旧服务" down
     start_server
     show_access_info

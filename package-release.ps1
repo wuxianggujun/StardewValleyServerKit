@@ -272,6 +272,12 @@ sudo usermod -aG docker $USER
 newgrp docker
 ```
 
+If Docker Hub is slow or unreachable, `./setup.sh` first tries the normal pull path.
+After a confirmed registry timeout, it can ask whether to temporarily configure Docker
+registry mirrors and restart Docker. Type `yes` only if this server can tolerate a
+brief interruption of other Docker containers. The script restores the original
+`/etc/docker/daemon.json` after image downloads finish.
+
 ## Useful commands
 
 ```bash

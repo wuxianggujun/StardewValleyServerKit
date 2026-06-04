@@ -13,6 +13,47 @@
 2. 确认 WSL2 / 虚拟化正常。
 3. 重新执行 `.\setup.ps1 status`。
 
+## Docker Hub 镜像下载超时
+
+现象：
+
+- `setup.sh` 停在 `Pulling Docker images`。
+- 日志里出现 `registry-1.docker.io`、`auth.docker.io`、`i/o timeout`、
+  `context deadline exceeded` 或 `Command timed out`。
+- 阿里云等公网服务器访问 Docker Hub 很慢，导致 `cm2network/steamcmd:latest`
+  或项目镜像拉取失败。
+
+Linux 交互式部署时，脚本会先按正常方式拉取镜像。确认 Docker Hub 拉取失败后，
+会询问是否临时配置 Docker 镜像加速地址并重启 Docker。只有输入 `yes` 才会继续。
+脚本会在下载完成后恢复原来的 `/etc/docker/daemon.json`，并再次重启 Docker。
+
+注意：重启 Docker 会短暂影响同一台机器上的其他 Docker 服务。如果这台服务器还跑着
+1Panel、数据库、反向代理或其他业务容器，先确认可以接受短暂停顿。
+
+交互式处理：
+
+```bash
+./setup.sh
+```
+
+如果脚本提示输入镜像加速地址，可以输入一个或多个地址，多个地址用英文逗号或空格分隔。
+随后看到重启 Docker 风险提示时，输入：
+
+```text
+yes
+```
+
+非交互部署可以提前写入 `.env`：
+
+```env
+DOCKER_PULL_TIMEOUT_SECONDS=300
+DOCKER_REGISTRY_MIRRORS="https://<your-mirror>"
+DOCKER_TEMP_MIRROR_RESTART_DOCKER=true
+```
+
+`DOCKER_TEMP_MIRROR_RESTART_DOCKER=true` 是预授权开关，表示允许脚本自动临时修改
+Docker daemon 配置并重启 Docker。普通交互部署不需要提前打开它，脚本会现场询问。
+
 ## Steam 授权失败
 
 常见原因：
