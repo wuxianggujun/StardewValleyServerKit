@@ -278,6 +278,16 @@ interactive_terminal() {
   [[ -t 0 && -t 1 ]]
 }
 
+compose_run_login() {
+  if interactive_terminal; then
+    compose run --rm -it steam-auth login
+  else
+    warn "No interactive terminal detected; steam-auth login will run without TTY."
+    warn "If Steam Guard is requested, rerun this command from an SSH session with a TTY."
+    compose run --rm -T steam-auth login
+  fi
+}
+
 prompt_for_docker_registry_mirrors_if_missing() {
   local mirrors
 
@@ -1461,17 +1471,24 @@ steamcmd_download() {
   local game_volume="stardew-valley-server-kit_game-data"
   local steamcmd_volume="stardew-valley-server-kit_steamcmd"
   local download_command='/home/steam/steamcmd/steamcmd.sh +@sSteamCmdForcePlatformType linux +force_install_dir /data/game +login "$STEAM_USERNAME" "$STEAM_PASSWORD" +app_update 413150 validate +quit'
+  local docker_tty_args=()
 
   step "Downloading game files with SteamCMD"
   printf 'WARN Steam Guard codes must be typed into this terminal. Do not paste codes into chat or issues.\n'
   printf 'WARN If SteamCMD shows "Steam Guard code:", type the newest code here and press Enter.\n'
+  if interactive_terminal; then
+    docker_tty_args=(-it)
+  else
+    warn "No interactive terminal detected; SteamCMD will run without TTY."
+    warn "If Steam Guard is requested, rerun this command from an SSH session with a TTY."
+  fi
   ensure_docker_image "$image"
   ensure_docker_image "alpine:3.20"
   prepare_steamcmd_volumes "$image" "$game_volume" "$steamcmd_volume"
 
   while (( attempt <= max_attempts )); do
     step "SteamCMD attempt $attempt of $max_attempts"
-    if docker run --rm -it \
+    if docker run --rm "${docker_tty_args[@]}" \
       -v "$game_volume:/data/game" \
       -v "$steamcmd_volume:/home/steam/Steam" \
       -e "STEAM_USERNAME=$steam_user" \
@@ -1498,7 +1515,7 @@ steamcmd_download() {
 }
 
 run_steam_auth_login() {
-  if compose run --rm -it steam-auth login; then
+  if compose_run_login; then
     return 0
   fi
 
