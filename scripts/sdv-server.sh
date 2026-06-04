@@ -785,28 +785,39 @@ show_steam_network_help() {
   warn "If this server cannot reach Steam directly, set HTTP_PROXY/HTTPS_PROXY/ALL_PROXY in .env and retry."
 }
 
-check_steam_network_connectivity() {
-  local url output status
-  url="$(steam_network_probe_url)"
-
-  step "Checking Steam Directory API"
-  if command -v curl >/dev/null 2>&1; then
-    set +e
-    output="$(curl -fsSL --connect-timeout 5 --max-time 15 "$url" -o /dev/null 2>&1)"
-    status=$?
-    set -e
-    if (( status == 0 )); then
-      ok "Steam Directory API reachable"
-      return 0
-    fi
-    warn "Steam Directory API probe failed: ${output:-curl exit $status}"
-    show_steam_network_help
-    return 1
+steam_network_check_retries() {
+  local retries="${STEAM_NETWORK_CHECK_RETRIES:-}"
+  if [[ -z "$retries" ]]; then
+    retries="$(get_env_value STEAM_NETWORK_CHECK_RETRIES || true)"
   fi
 
-  if command -v python3 >/dev/null 2>&1; then
-    set +e
-    output="$(SVSK_STEAM_PROBE_URL="$url" python3 - <<'PY' 2>&1
+  if [[ "$retries" =~ ^[0-9]+$ ]] && (( retries > 0 )); then
+    printf '%s' "$retries"
+  else
+    printf '3'
+  fi
+}
+
+check_steam_network_connectivity() {
+  local url output status attempt retries
+  url="$(steam_network_probe_url)"
+  retries="$(steam_network_check_retries)"
+
+  step "Checking Steam Directory API"
+  for attempt in $(seq 1 "$retries"); do
+    if command -v curl >/dev/null 2>&1; then
+      set +e
+      output="$(curl -fsSL --connect-timeout 5 --max-time 15 "$url" -o /dev/null 2>&1)"
+      status=$?
+      set -e
+      if (( status == 0 )); then
+        ok "Steam Directory API reachable"
+        return 0
+      fi
+      warn "Steam Directory API probe failed on attempt $attempt/$retries: ${output:-curl exit $status}"
+    elif command -v python3 >/dev/null 2>&1; then
+      set +e
+      output="$(SVSK_STEAM_PROBE_URL="$url" python3 - <<'PY' 2>&1
 import os
 import urllib.request
 
@@ -815,19 +826,25 @@ with urllib.request.urlopen(url, timeout=15) as response:
     response.read(1)
 PY
 )"
-    status=$?
-    set -e
-    if (( status == 0 )); then
-      ok "Steam Directory API reachable"
+      status=$?
+      set -e
+      if (( status == 0 )); then
+        ok "Steam Directory API reachable"
+        return 0
+      fi
+      warn "Steam Directory API probe failed on attempt $attempt/$retries: ${output:-python3 exit $status}"
+    else
+      warn "curl/python3 not found; skipping Steam Directory API probe."
       return 0
     fi
-    warn "Steam Directory API probe failed: ${output:-python3 exit $status}"
-    show_steam_network_help
-    return 1
-  fi
 
-  warn "curl/python3 not found; skipping Steam Directory API probe."
-  return 0
+    if (( attempt < retries )); then
+      sleep 3
+    fi
+  done
+
+  show_steam_network_help
+  return 1
 }
 
 new_secret() {

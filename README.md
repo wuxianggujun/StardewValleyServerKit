@@ -505,6 +505,7 @@ Web 管理面板建议通过 1Panel 站点反向代理访问，不直接开放 `
 - `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`：可选 Steam 登录与下载代理，只影响
   `steam-auth` 和 SteamCMD 这类 Steam 链路，不等同于 Docker Hub 镜像源。
 - `NO_PROXY`：可选代理绕过列表，默认包含 `localhost,127.0.0.1,steam-auth,server`。
+- `STEAM_NETWORK_CHECK_RETRIES`：Steam Directory API 预检重试次数，默认 `3`。
 - `VNC_PASSWORD`：Web 管理入口密码。
 - `API_KEY`：HTTP API 密钥。
 - `ADMIN_TOKEN`：Web 管理面板令牌。

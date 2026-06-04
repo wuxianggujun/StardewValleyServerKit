@@ -93,8 +93,10 @@ Steam 网页能 `curl` 通也不代表这条客户端链路可用。当前脚本
 https://api.steampowered.com/ISteamDirectory/GetCMList/v1/?cellid=0&format=json
 ```
 
-如果该地址在服务器上超时，说明 SteamClient 还没拿到可用 CM 链路。此时不是账号名拼写
-的第一嫌疑，而是服务器到 Steam API / CM 网络不通。可以在 `.env` 中配置：
+脚本默认会按 `STEAM_NETWORK_CHECK_RETRIES=3` 重试，避免阿里云这类网络偶发超时
+造成一次性误判。如果多次都超时，说明 SteamClient 还没拿到可用 CM 链路。
+此时不是账号名拼写的第一嫌疑，而是服务器到 Steam API / CM 网络不通。
+可以在 `.env` 中配置：
 
 ```env
 HTTP_PROXY="http://127.0.0.1:7890"

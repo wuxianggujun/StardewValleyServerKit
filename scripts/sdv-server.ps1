@@ -506,28 +506,50 @@ function Show-SteamNetworkHelp {
     Write-Warn "If this server cannot reach Steam directly, set HTTP_PROXY/HTTPS_PROXY/ALL_PROXY in .env and retry."
 }
 
+function Get-SteamNetworkCheckRetries {
+    $value = Get-ExternalEnvValue @("STEAM_NETWORK_CHECK_RETRIES")
+    if (-not $value) {
+        $value = Get-EnvValue "STEAM_NETWORK_CHECK_RETRIES"
+    }
+
+    $parsed = 0
+    if ([int]::TryParse($value, [ref]$parsed) -and $parsed -gt 0) {
+        return $parsed
+    }
+
+    return 3
+}
+
 function Test-SteamNetworkConnectivity {
     Write-Step "Checking Steam Directory API"
-    $request = $null
-    $response = $null
-    try {
-        $request = [System.Net.WebRequest]::Create((Get-SteamNetworkProbeUrl))
-        $request.Timeout = 15000
-        $request.ReadWriteTimeout = 15000
-        $response = $request.GetResponse()
-        Write-Ok "Steam Directory API reachable"
-        return $true
-    }
-    catch {
-        Write-Warn "Steam Directory API probe failed: $($_.Exception.Message)"
-        Show-SteamNetworkHelp
-        return $false
-    }
-    finally {
-        if ($response) {
-            $response.Close()
+    $retries = Get-SteamNetworkCheckRetries
+    for ($attempt = 1; $attempt -le $retries; $attempt++) {
+        $request = $null
+        $response = $null
+        try {
+            $request = [System.Net.WebRequest]::Create((Get-SteamNetworkProbeUrl))
+            $request.Timeout = 15000
+            $request.ReadWriteTimeout = 15000
+            $response = $request.GetResponse()
+            Write-Ok "Steam Directory API reachable"
+            return $true
+        }
+        catch {
+            Write-Warn "Steam Directory API probe failed on attempt ${attempt}/${retries}: $($_.Exception.Message)"
+        }
+        finally {
+            if ($response) {
+                $response.Close()
+            }
+        }
+
+        if ($attempt -lt $retries) {
+            Start-Sleep -Seconds 3
         }
     }
+
+    Show-SteamNetworkHelp
+    return $false
 }
 
 function New-Secret {
