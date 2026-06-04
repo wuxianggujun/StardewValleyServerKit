@@ -10,7 +10,7 @@ services:
     restart: "no"
 
   server:
-    image: sdvd/server:${IMAGE_VERSION:-preview}
+    image: ${IMAGE_NAMESPACE:-sdvd}/server:${IMAGE_VERSION:-preview}
     container_name: sdv-server
     stdin_open: true
     tty: true
@@ -54,7 +54,7 @@ services:
     restart: unless-stopped
 
   steam-auth:
-    image: sdvd/steam-service:${IMAGE_VERSION:-preview}
+    image: ${IMAGE_NAMESPACE:-sdvd}/steam-service:${IMAGE_VERSION:-preview}
     container_name: sdv-steam-auth
     stdin_open: true
     tty: true
@@ -73,7 +73,7 @@ services:
     restart: unless-stopped
 
   discord-bot:
-    image: sdvd/discord-bot:${IMAGE_VERSION:-preview}
+    image: ${IMAGE_NAMESPACE:-sdvd}/discord-bot:${IMAGE_VERSION:-preview}
     container_name: sdv-discord-bot
     profiles:
       - discord

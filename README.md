@@ -97,11 +97,16 @@ volume。项目暂不提供裸机 / 无 Docker 部署流程，也不承诺原生
 
 ## 快速开始
 
+如果你是把发布包交给别人部署，普通服主应下载
+`stardew-valley-server-kit-pull-<version>.zip`，解压后优先看包内
+`QUICKSTART.md`。这个包只保留拉镜像部署入口，不包含 `setup-build`、
+`release-images` 或 `package-release` 这类维护者入口。
+
 ### Windows
 
 ```powershell
 cd <repo-root>
-.\setup.ps1 setup
+.\setup.ps1
 ```
 
 脚本会完成：
@@ -118,8 +123,8 @@ cd <repo-root>
 
 ```bash
 cd StardewValleyServerKit
-chmod +x ./scripts/sdv-server.sh
-./scripts/sdv-server.sh setup
+chmod +x ./setup.sh
+./setup.sh
 ```
 
 ## 常用命令
@@ -139,6 +144,10 @@ Windows：
 .\setup.ps1 logs
 .\setup.ps1 status
 .\setup.ps1 update
+.\setup.ps1 build
+.\setup.ps1 build-setup
+.\setup.ps1 build-start
+.\setup.ps1 build-update
 .\setup.ps1 backup
 .\setup.ps1 join-info
 .\setup.ps1 admin
@@ -189,6 +198,10 @@ Linux / macOS：
 ./scripts/sdv-server.sh logs
 ./scripts/sdv-server.sh status
 ./scripts/sdv-server.sh update
+./scripts/sdv-server.sh build
+./scripts/sdv-server.sh build-setup
+./scripts/sdv-server.sh build-start
+./scripts/sdv-server.sh build-update
 ./scripts/sdv-server.sh backup
 ./scripts/sdv-server.sh join-info
 ./scripts/sdv-server.sh admin
@@ -206,6 +219,103 @@ Linux / macOS：
 ./scripts/sdv-server.sh host-auto
 ./scripts/sdv-server.sh host-visibility
 ```
+
+默认的 `setup` / `update` 会执行 `docker compose pull`，用于拉取已经发布的
+`sdvd/*` 镜像，适合普通服主直接部署。`setup-build` 只用于
+`source-build` 包，或维护者在目标机器上用源码和 Dockerfile 本地构建镜像。
+
+如果要在目标机器本地构建镜像，直接运行本地构建部署脚本：
+
+```powershell
+.\setup-build.ps1
+```
+
+Linux / macOS：
+
+```bash
+chmod +x ./setup-build.sh
+./setup-build.sh
+```
+
+脚本会在缺少 `docker-compose.build.yml` 时自动从
+`docker-compose.build.yml.example` 生成一份。发布本地构建包时，请把真实源码 /
+Dockerfile 放在 `docker-compose.build.yml` 指向的目录里；如果目录不在默认位置，
+可以通过 `SVSK_BUILD_COMPOSE_FILE` 指定。
+
+## 维护者发布镜像
+
+普通服主不需要执行发布脚本。只有维护者需要把镜像推送到 Docker Hub、GHCR
+或私有镜像仓库时，才执行这一节。
+
+先登录镜像仓库：
+
+```bash
+docker login
+```
+
+Windows：
+
+```powershell
+.\release-images.ps1 -ImageNamespace your-name -ImageVersion preview
+```
+
+Linux / macOS：
+
+```bash
+chmod +x ./release-images.sh
+./release-images.sh --namespace your-name --version preview
+```
+
+`IMAGE_NAMESPACE` 默认是 `sdvd`，也可以改成 `ghcr.io/your-name`。
+发布脚本会构建并推送：
+
+```text
+<IMAGE_NAMESPACE>/server:<IMAGE_VERSION>
+<IMAGE_NAMESPACE>/steam-service:<IMAGE_VERSION>
+<IMAGE_NAMESPACE>/discord-bot:<IMAGE_VERSION>
+```
+
+只想先验证构建，不推送镜像时：
+
+```powershell
+.\release-images.ps1 -NoPush
+```
+
+Linux / macOS：
+
+```bash
+./release-images.sh --no-push
+```
+
+生成给用户下载的发布包：
+
+```powershell
+.\package-release.ps1 -ImageNamespace your-name -ImageVersion preview
+```
+
+Linux / macOS：
+
+```bash
+chmod +x ./package-release.sh
+./package-release.sh --namespace your-name --version preview
+```
+
+脚本会生成拉镜像部署包：
+
+```text
+dist/stardew-valley-server-kit-pull-<version>.zip
+```
+
+如果仓库中存在 `server/Dockerfile`、`steam-service/Dockerfile` 和
+`discord-bot/Dockerfile`，还会额外生成本地构建部署包：
+
+```text
+dist/stardew-valley-server-kit-source-build-<version>.zip
+```
+
+源码目录不在默认位置时，可以通过 `-ServerSource` / `-SteamServiceSource` /
+`-DiscordBotSource` 或 shell 版的 `--server-source` / `--steam-source` /
+`--discord-source` 指定。
 
 ## 访问入口
 
@@ -370,6 +480,7 @@ Web 管理面板建议通过 1Panel 站点反向代理访问，不直接开放 `
 
 - `STEAM_USERNAME`：拥有星露谷物语的 Steam 账号。
 - `STEAM_PASSWORD`：Steam 密码。只保存在本地 `.env`。
+- `IMAGE_NAMESPACE`：镜像命名空间，默认 `sdvd`；发布到 GHCR 时可设为 `ghcr.io/your-name`。
 - `IMAGE_VERSION`：默认 `preview`，因为部分 JunimoServer sidecar 镜像目前没有 `latest` 标签。
 - `VNC_PASSWORD`：Web 管理入口密码。
 - `API_KEY`：HTTP API 密钥。

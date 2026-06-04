@@ -5,6 +5,8 @@ ACTION="${1:-setup}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT_DIR/.env"
 ENV_EXAMPLE_FILE="$ROOT_DIR/.env.example"
+BUILD_COMPOSE_FILE="${SVSK_BUILD_COMPOSE_FILE:-$ROOT_DIR/docker-compose.build.yml}"
+BUILD_COMPOSE_EXAMPLE_FILE="$ROOT_DIR/docker-compose.build.yml.example"
 BACKUP_DIR="$ROOT_DIR/backups"
 SYSTEMD_SERVICE_NAME="sdv-admin.service"
 STABLE_VNC_PARAMS='-AcceptPointerEvents=1 -AcceptKeyEvents=1 -AcceptSetDesktopSize=1 -AlwaysShared=1 -DisconnectClients=0'
@@ -26,13 +28,327 @@ die() {
   exit 1
 }
 
+docker_output_suggests_daemon_unavailable() {
+  local output="$1"
+  printf '%s' "$output" | grep -Eiq 'cannot connect to the docker daemon|is the docker daemon running|dockerDesktopLinuxEngine|docker_engine|error during connect|failed to connect to .*docker|open (//|\.\./|\\\\\.)?/?\.?/pipe/docker|The system cannot find the file specified|no such file or directory.*docker\.sock|permission denied.*docker\.sock'
+}
+
+docker_output_suggests_registry_unreachable() {
+  local output="$1"
+  printf '%s' "$output" | grep -Eiq 'registry-1\.docker\.io|auth\.docker\.io|docker\.io|request canceled|Client\.Timeout exceeded|context deadline exceeded|i/o timeout|TLS handshake timeout|connection timed out|timed out after|network is unreachable|no route to host|temporary failure in name resolution|could not resolve|proxyconnect tcp|connection refused|connection reset by peer|failed to fetch anonymous token|failed to authorize'
+}
+
+docker_output_suggests_image_unavailable() {
+  local output="$1"
+  printf '%s' "$output" | grep -Eiq 'manifest unknown|manifest for .* not found|not found: manifest unknown|pull access denied|repository does not exist|insufficient_scope|denied: requested access|no matching manifest|not found'
+}
+
+docker_daemon_available() {
+  docker info >/dev/null 2>&1
+}
+
+require_docker_cli() {
+  command -v docker >/dev/null 2>&1 || die "未找到 docker 命令。请先安装 Docker Desktop/Docker Engine，并确认 docker 已加入 PATH。"
+}
+
+require_docker_compose() {
+  local output
+  if ! output="$(docker compose version 2>&1)"; then
+    warn "Docker Compose 不可用，脚本无法解析或启动服务。"
+    warn "请安装包含 Compose v2 的 Docker Desktop，或安装 Docker Compose plugin。"
+    print_docker_debug_hint "$output"
+    die "Docker Compose 检查失败。"
+  fi
+  printf '%s\n' "$output"
+}
+
+print_docker_debug_hint() {
+  local output="$1"
+  if [[ "${SVSK_DEBUG_DOCKER:-0}" == "1" ]]; then
+    printf '%s\n' "$output" >&2
+  else
+    warn "如需查看 Docker 原始输出，请设置 SVSK_DEBUG_DOCKER=1 后重试。"
+  fi
+}
+
+print_docker_daemon_help() {
+  warn "Docker Engine/daemon 未运行，或当前终端无法连接到 Docker。"
+  warn "Windows/macOS：启动 Docker Desktop，等待 Engine 显示 Running 后再重试。"
+  warn "Windows：请确认 Docker Desktop 使用 Linux containers。"
+  warn "PowerShell 可验证：Test-Path \\\\.\\pipe\\dockerDesktopLinuxEngine"
+  warn "Linux：可尝试 sudo systemctl start docker；若是权限问题，将当前用户加入 docker 组后重新登录。"
+  warn "WSL：在 Docker Desktop Settings -> Resources -> WSL integration 中启用当前发行版。"
+}
+
+configured_image_namespace() {
+  local image_namespace="sdvd"
+  local configured_namespace
+  if [[ -f "$ENV_FILE" ]]; then
+    configured_namespace="$(get_env_value IMAGE_NAMESPACE || true)"
+    [[ -z "$configured_namespace" ]] || image_namespace="$configured_namespace"
+  fi
+  printf '%s' "$image_namespace"
+}
+
+configured_image_version() {
+  local image_version="preview"
+  local configured_version
+  if [[ -f "$ENV_FILE" ]]; then
+    configured_version="$(get_env_value IMAGE_VERSION || true)"
+    [[ -z "$configured_version" ]] || image_version="$configured_version"
+  fi
+  printf '%s' "$image_version"
+}
+
+configured_image_refs() {
+  local image_namespace
+  local image_version
+  image_namespace="$(configured_image_namespace)"
+  image_version="$(configured_image_version)"
+  printf '%s\n' \
+    "$image_namespace/server:$image_version" \
+    "$image_namespace/steam-service:$image_version" \
+    "$image_namespace/discord-bot:$image_version"
+}
+
+first_configured_image_ref() {
+  configured_image_refs | head -n 1
+}
+
+print_configured_image_help() {
+  local image_namespace
+  local image_version
+  local image
+  image_namespace="$(configured_image_namespace)"
+  image_version="$(configured_image_version)"
+
+  warn "当前镜像配置：IMAGE_NAMESPACE=$image_namespace，IMAGE_VERSION=$image_version。"
+  warn "脚本会使用以下镜像标签："
+  while IFS= read -r image; do
+    printf '     - %s\n' "$image" >&2
+  done < <(configured_image_refs)
+}
+
+explain_docker_failure() {
+  local description="$1"
+  local output="$2"
+  local fatal="${3:-1}"
+  local reason="Docker 命令失败"
+
+  if docker_output_suggests_daemon_unavailable "$output" || ! docker_daemon_available; then
+    reason="Docker daemon 不可用"
+    print_docker_daemon_help
+  elif docker_output_suggests_image_unavailable "$output"; then
+    reason="镜像标签不可拉取"
+    warn "当前镜像标签无法拉取。常见原因是默认 preview 标签尚未发布、.env 中 IMAGE_VERSION/IMAGE_NAMESPACE 写错，或仓库不可访问。"
+    print_configured_image_help
+    warn "请检查 .env 中的 IMAGE_NAMESPACE 和 IMAGE_VERSION，并以发布说明中的镜像标签为准。"
+    warn "可手动验证：docker manifest inspect $(first_configured_image_ref)"
+    warn "如果本地包包含源码和 Dockerfile，也可以改用 build-setup/build-start 从本地构建。"
+  elif docker_output_suggests_registry_unreachable "$output"; then
+    reason="镜像仓库不可达"
+    warn "Docker 无法访问 Docker Hub/镜像仓库，镜像拉取或远端标签检查没有完成。"
+    print_configured_image_help
+    warn "请检查网络、DNS、代理、防火墙，以及 Docker Desktop/daemon 的代理或镜像加速器配置。"
+    warn "需要能访问 registry-1.docker.io 和 auth.docker.io；使用私有仓库时请确认对应 registry 可达。"
+    warn "网络恢复后重试当前命令；如果本地已有镜像，可先运行 start，或使用 build-start 从本地构建。"
+  else
+    warn "$description 失败，但脚本未识别出明确原因。"
+    warn "请先运行 ./scripts/sdv-server.sh doctor 获取 Docker、Compose 和镜像状态。"
+  fi
+
+  print_docker_debug_hint "$output"
+  [[ "$fatal" == "1" ]] && die "$description 失败：$reason。"
+  return 1
+}
+
+require_docker_daemon() {
+  local output
+  if ! output="$(docker info 2>&1)"; then
+    explain_docker_failure "Docker 检查" "$output" 1
+  fi
+}
+
 require_docker() {
-  command -v docker >/dev/null 2>&1 || die "Command not found: docker. Please install Docker first."
-  docker version >/dev/null 2>&1 || die "Docker is not running. Please start Docker and retry."
+  require_docker_cli
+  require_docker_daemon
+}
+
+run_docker_command_or_die() {
+  local description="$1"
+  shift
+  local output
+  local status
+
+  set +e
+  output="$("$@" 2>&1)"
+  status=$?
+  set -e
+
+  if (( status == 0 )); then
+    [[ -z "$output" ]] || printf '%s\n' "$output"
+    return 0
+  fi
+
+  explain_docker_failure "$description" "$output" 1
+}
+
+run_with_optional_timeout() {
+  local seconds="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
+    timeout "$seconds" "$@"
+  else
+    "$@"
+  fi
 }
 
 compose() {
   (cd "$ROOT_DIR" && docker compose --env-file "$ENV_FILE" "$@")
+}
+
+compose_example() {
+  (cd "$ROOT_DIR" && docker compose --env-file "$ENV_EXAMPLE_FILE" "$@")
+}
+
+compose_checked() {
+  local description="$1"
+  shift
+  run_docker_command_or_die "$description" compose "$@"
+}
+
+compose_example_checked() {
+  local description="$1"
+  shift
+  run_docker_command_or_die "$description" compose_example "$@"
+}
+
+check_remote_image_manifest() {
+  local image="$1"
+  local output
+  local status
+
+  set +e
+  output="$(run_with_optional_timeout 20 docker manifest inspect "$image" 2>&1)"
+  status=$?
+  set -e
+
+  if (( status == 0 )); then
+    ok "Remote image tag available: $image"
+    return 0
+  fi
+
+  if (( status == 124 )); then
+    output="Docker manifest inspect timed out after 20 seconds for $image. $output"
+  fi
+
+  explain_docker_failure "远端镜像检查 $image" "$output" 0
+  return 1
+}
+
+check_configured_images() {
+  local image
+  local missing_local=0
+  local remote_failed=0
+
+  while IFS= read -r image; do
+    if docker image inspect "$image" >/dev/null 2>&1; then
+      ok "Image available locally: $image"
+    else
+      missing_local=1
+      warn "本地未找到镜像：$image"
+    fi
+  done < <(configured_image_refs)
+
+  if (( missing_local == 0 )); then
+    return 0
+  fi
+
+  step "Checking remote image tags"
+  warn "以下检查只访问镜像仓库元数据，不会触发 Steam 登录或下载游戏文件。"
+  while IFS= read -r image; do
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+      check_remote_image_manifest "$image" || remote_failed=1
+    fi
+  done < <(configured_image_refs)
+
+  if (( remote_failed != 0 )); then
+    warn "至少有一个远端镜像标签检查失败。setup/update 可能无法拉取镜像。"
+    return 1
+  fi
+
+  warn "远端镜像标签存在，但本地还没有镜像。运行 setup 或 update 会执行拉取。"
+  return 0
+}
+
+ensure_build_compose_file() {
+  if [[ -f "$BUILD_COMPOSE_FILE" ]]; then
+    return
+  fi
+
+  [[ -f "$BUILD_COMPOSE_EXAMPLE_FILE" ]] || die "Local build compose file not found: ${BUILD_COMPOSE_FILE#$ROOT_DIR/}. Add docker-compose.build.yml with build.context paths for local builds."
+  cp "$BUILD_COMPOSE_EXAMPLE_FILE" "$BUILD_COMPOSE_FILE"
+  warn "Created docker-compose.build.yml from docker-compose.build.yml.example."
+  warn "If this package does not include ./server and ./steam-service Dockerfiles, edit docker-compose.build.yml before retrying."
+}
+
+compose_build() {
+  ensure_build_compose_file
+  (cd "$ROOT_DIR" && docker compose --env-file "$ENV_FILE" -f "$ROOT_DIR/docker-compose.yml" -f "$BUILD_COMPOSE_FILE" "$@")
+}
+
+build_compose_config_json() {
+  ensure_build_compose_file
+  if [[ "${ENABLE_DISCORD:-0}" == "1" ]]; then
+    (cd "$ROOT_DIR" && docker compose --env-file "$ENV_FILE" -f "$ROOT_DIR/docker-compose.yml" -f "$BUILD_COMPOSE_FILE" --profile discord config --format json)
+  else
+    (cd "$ROOT_DIR" && docker compose --env-file "$ENV_FILE" -f "$ROOT_DIR/docker-compose.yml" -f "$BUILD_COMPOSE_FILE" config --format json)
+  fi
+}
+
+validate_build_contexts() {
+  local config_json
+  config_json="$(build_compose_config_json)"
+
+  if command -v python3 >/dev/null 2>&1; then
+    local validation_output
+    if ! validation_output="$(printf '%s' "$config_json" | python3 -c '
+import json
+import os
+import sys
+
+data = json.load(sys.stdin)
+missing = []
+for name, service in sorted(data.get("services", {}).items()):
+    build = service.get("build")
+    if not build:
+        continue
+    context = build.get("context")
+    if not context:
+        missing.append(f"{name}: build.context is missing")
+        continue
+    dockerfile = build.get("dockerfile") or "Dockerfile"
+    dockerfile_path = dockerfile if os.path.isabs(dockerfile) else os.path.join(context, dockerfile)
+    if not os.path.isdir(context):
+        missing.append(f"{name}: build context not found: {context}")
+    elif not os.path.isfile(dockerfile_path):
+        missing.append(f"{name}: Dockerfile not found: {dockerfile_path}")
+
+if missing:
+    print("Missing local Docker build inputs:")
+    for item in missing:
+        print(f" - {item}")
+    print("Fix docker-compose.build.yml or copy the source/Dockerfile directories into this package.")
+    sys.exit(1)
+')"; then
+      printf '%s\n' "$validation_output" >&2
+      die "Local build inputs are incomplete."
+    fi
+    return
+  fi
+
+  warn "python3 not found; skipping local Dockerfile preflight check."
 }
 
 show_steamcmd_fallback_hint() {
@@ -449,10 +765,10 @@ admin_service_logs() {
 smoke_test() {
   ensure_env_file
   step "Starting server stack"
-  compose up --detach
+  compose_checked "启动服务栈" up --detach
   step "Waiting for containers"
   sleep 15
-  compose ps
+  compose_checked "查看服务状态" ps
 
   vnc_port="$(env_or_default VNC_PORT 5800)"
   api_port="$(env_or_default API_PORT 8080)"
@@ -841,14 +1157,35 @@ run_steam_auth_download_or_fallback() {
 
 start_server() {
   if [[ "${ENABLE_DISCORD:-0}" == "1" ]]; then
-    compose --profile discord up -d
+    compose_checked "启动服务" --profile discord up -d
   else
-    compose up -d
+    compose_checked "启动服务" up -d
+  fi
+}
+
+start_server_from_local_build() {
+  if [[ "${ENABLE_DISCORD:-0}" == "1" ]]; then
+    compose_build --profile discord up -d
+  else
+    compose_build up -d
+  fi
+}
+
+build_local_images() {
+  validate_build_contexts
+  if [[ "${ENABLE_DISCORD:-0}" == "1" ]]; then
+    compose_build build server steam-auth discord-bot
+  else
+    compose_build build server steam-auth
   fi
 }
 
 case "$ACTION" in
   admin|admin-public|admin-token-rotate|admin-service-install|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
+    ;;
+  doctor)
+    step "Checking Docker"
+    require_docker_cli
     ;;
   *)
     step "Checking Docker"
@@ -859,25 +1196,16 @@ esac
 case "$ACTION" in
   doctor)
     step "Checking Docker Compose"
-    docker compose version
+    require_docker_compose
     ok "Docker Compose available"
     step "Validating docker-compose.yml"
-    (cd "$ROOT_DIR" && docker compose --env-file "$ENV_EXAMPLE_FILE" config --quiet)
+    compose_example_checked "校验 docker-compose.yml" config --quiet
     ok "Compose config OK"
+    step "Checking Docker daemon"
+    require_docker_daemon
+    ok "Docker daemon available"
     step "Checking Docker images"
-    image_version="preview"
-    if [[ -f "$ENV_FILE" ]]; then
-      configured_version="$(get_env_value IMAGE_VERSION || true)"
-      [[ -z "$configured_version" ]] || image_version="$configured_version"
-    fi
-    for image in "sdvd/server:$image_version" "sdvd/steam-service:$image_version" "sdvd/discord-bot:$image_version"; do
-      if docker image inspect "$image" >/dev/null 2>&1; then
-        ok "Image available: $image"
-      else
-        printf 'WARN Image not found locally: %s\n' "$image"
-        printf '     Run: docker pull %s\n' "$image"
-      fi
-    done
+    check_configured_images || true
     step "Checking local directories"
     mkdir -p "$ROOT_DIR/data/settings" "$ROOT_DIR/data/mods"
     ok "data/settings and data/mods ready"
@@ -904,7 +1232,24 @@ case "$ACTION" in
     step "Preparing .env"
     ensure_env_file
     step "Pulling Docker images"
-    compose pull
+    compose_checked "拉取 Docker 镜像" pull
+    step "Running Steam login"
+    run_steam_auth_login || true
+    step "Downloading or updating game files"
+    run_steam_auth_download_or_fallback
+    smoke_test
+    prompt_admin_panel_after_setup
+    ;;
+  build)
+    ensure_env_file
+    step "Building local Docker images"
+    build_local_images
+    ;;
+  build-setup)
+    step "Preparing .env"
+    ensure_env_file
+    step "Building local Docker images"
+    build_local_images
     step "Running Steam login"
     run_steam_auth_login || true
     step "Downloading or updating game files"
@@ -934,14 +1279,22 @@ case "$ACTION" in
     start_server
     show_access_info
     ;;
+  build-start)
+    ensure_env_file
+    step "Building local Docker images"
+    build_local_images
+    step "Starting server from local images"
+    start_server_from_local_build
+    show_access_info
+    ;;
   stop)
     step "Stopping server"
-    compose down
+    compose_checked "停止服务" down
     ;;
   restart)
     ensure_env_file
     step "Restarting server"
-    compose down
+    compose_checked "停止旧服务" down
     start_server
     show_access_info
     ;;
@@ -953,14 +1306,22 @@ case "$ACTION" in
   status)
     ensure_env_file
     step "Showing container status"
-    compose ps
+    compose_checked "查看服务状态" ps
     ;;
   update)
     ensure_env_file
     step "Updating images and restarting"
-    compose pull
-    compose down
+    compose_checked "拉取 Docker 镜像" pull
+    compose_checked "停止旧服务" down
     start_server
+    show_access_info
+    ;;
+  build-update)
+    ensure_env_file
+    step "Rebuilding local images and restarting"
+    build_local_images
+    compose_build down
+    start_server_from_local_build
     show_access_info
     ;;
   vnc-check)
@@ -1012,6 +1373,6 @@ case "$ACTION" in
     admin_service_logs
     ;;
   *)
-    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/smoke/setup/start/stop/restart/logs/status/update/backup/join-info/admin/admin-public/admin-token-rotate/admin-service-install/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
+    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-token-rotate/admin-service-install/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
     ;;
 esac

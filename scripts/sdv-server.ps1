@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup", "start", "stop", "restart", "logs", "status", "update", "backup", "join-info", "admin", "admin-public", "admin-token-rotate", "admin-service-install", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
+    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "join-info", "admin", "admin-public", "admin-token-rotate", "admin-service-install", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
     [string]$Action = "setup",
 
     [string]$SteamUsername,
@@ -17,6 +17,18 @@ $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 $EnvFile = Join-Path $RootDir ".env"
 $EnvExampleFile = Join-Path $RootDir ".env.example"
+$BuildComposeExampleFile = Join-Path $RootDir "docker-compose.build.yml.example"
+$BuildComposeFile = if ($env:SVSK_BUILD_COMPOSE_FILE) {
+    if ([System.IO.Path]::IsPathRooted($env:SVSK_BUILD_COMPOSE_FILE)) {
+        $env:SVSK_BUILD_COMPOSE_FILE
+    }
+    else {
+        Join-Path $RootDir $env:SVSK_BUILD_COMPOSE_FILE
+    }
+}
+else {
+    Join-Path $RootDir "docker-compose.build.yml"
+}
 $BackupDir = Join-Path $RootDir "backups"
 $LogDir = Join-Path $RootDir "logs"
 $StableVncParams = "-AcceptPointerEvents=1 -AcceptKeyEvents=1 -AcceptSetDesktopSize=1 -AlwaysShared=1 -DisconnectClients=0"
@@ -50,6 +62,251 @@ function Assert-Command {
     }
 }
 
+function Get-DockerImageSettings {
+    $imageNamespace = "sdvd"
+    $imageVersion = "preview"
+    if (Test-Path $EnvFile) {
+        $configuredNamespace = Get-EnvValue "IMAGE_NAMESPACE"
+        if ($configuredNamespace) {
+            $imageNamespace = $configuredNamespace
+        }
+        $configuredVersion = Get-EnvValue "IMAGE_VERSION"
+        if ($configuredVersion) {
+            $imageVersion = $configuredVersion
+        }
+    }
+
+    return [pscustomobject]@{
+        Namespace = $imageNamespace
+        Version = $imageVersion
+        Images = @(
+            "$imageNamespace/server:$imageVersion",
+            "$imageNamespace/steam-service:$imageVersion",
+            "$imageNamespace/discord-bot:$imageVersion"
+        )
+    }
+}
+
+function Invoke-DockerForDiagnostics {
+    param(
+        [string[]]$DockerArgs,
+        [switch]$SuppressOutput,
+        [int]$TimeoutSeconds = 0
+    )
+
+    if ($TimeoutSeconds -gt 0) {
+        $job = Start-Job -ScriptBlock {
+            param([string[]]$DockerArgs)
+
+            $jobOutputLines = [System.Collections.Generic.List[string]]::new()
+            & docker @DockerArgs 2>&1 | ForEach-Object {
+                $jobOutputLines.Add([string]$_)
+            }
+
+            [pscustomobject]@{
+                ExitCode = $LASTEXITCODE
+                OutputLines = @($jobOutputLines)
+            }
+        } -ArgumentList (, $DockerArgs)
+
+        try {
+            if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
+                Stop-Job -Job $job -Force
+                return [pscustomobject]@{
+                    ExitCode = 124
+                    OutputLines = @("Docker command timed out after $TimeoutSeconds seconds: docker $($DockerArgs -join ' ')")
+                }
+            }
+
+            $jobResult = Receive-Job -Job $job
+            return [pscustomobject]@{
+                ExitCode = $jobResult.ExitCode
+                OutputLines = @($jobResult.OutputLines)
+            }
+        }
+        finally {
+            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $outputLines = [System.Collections.Generic.List[string]]::new()
+    $oldPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & docker @DockerArgs 2>&1 | ForEach-Object {
+            $line = [string]$_
+            $outputLines.Add($line)
+            if (-not $SuppressOutput) {
+                Write-Host $line
+            }
+        }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $oldPreference
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        OutputLines = @($outputLines)
+    }
+}
+
+function Join-DockerDiagnosticText {
+    param([object[]]$OutputLines)
+
+    return (($OutputLines | ForEach-Object { [string]$_ }) -join "`n")
+}
+
+function Get-DockerFailureKind {
+    param([object[]]$OutputLines)
+
+    $text = (Join-DockerDiagnosticText $OutputLines).ToLowerInvariant()
+    if ($text -match 'dockerdesktoplinuxengine|docker_engine|//\./pipe/docker|\\\\\.\\pipe\\docker|cannot connect to the docker daemon|error during connect|daemon is not running') {
+        return "engine"
+    }
+
+    if ($text -match 'registry-1\.docker\.io|docker\.io|docker hub|registry' -and
+        $text -match 'timeout|timed out|i/o timeout|tls handshake timeout|context deadline exceeded|client\.timeout|request canceled|no such host|could not resolve|temporary failure in name resolution|proxyconnect|connection refused|connection reset|network is unreachable|dial tcp') {
+        return "registry"
+    }
+
+    if ($text -match 'manifest unknown|no matching manifest|pull access denied|repository does not exist|requested access to the resource is denied|insufficient_scope|name unknown|failed to resolve reference|not found') {
+        return "image"
+    }
+
+    return "unknown"
+}
+
+function Get-DockerImageFromText {
+    param(
+        [object[]]$OutputLines,
+        [string[]]$FallbackImages = @()
+    )
+
+    $text = Join-DockerDiagnosticText $OutputLines
+    if ($text -match '(sdvd/[a-z0-9._/-]+:[a-zA-Z0-9._-]+)') {
+        return $Matches[1]
+    }
+
+    if ($FallbackImages.Count -gt 0) {
+        return ($FallbackImages -join ", ")
+    }
+
+    return ""
+}
+
+function Write-DockerDiagnostic {
+    param(
+        [string]$Kind,
+        [string]$Operation,
+        [object[]]$OutputLines,
+        [string[]]$Images = @(),
+        [switch]$WarningOnly
+    )
+
+    $prefix = if ($WarningOnly) { "WARN" } else { "ERROR" }
+    $color = if ($WarningOnly) { "Yellow" } else { "Red" }
+    $imageText = Get-DockerImageFromText -OutputLines $OutputLines -FallbackImages $Images
+
+    Write-Host ""
+    switch ($Kind) {
+        "engine" {
+            Write-Host "$prefix Docker Desktop Linux Engine 未运行或当前终端连接不上。" -ForegroundColor $color
+            Write-Host "当前步骤：$Operation"
+            Write-Host ""
+            Write-Host "处理方法："
+            Write-Host "1. 打开 Docker Desktop，等待状态显示为 Engine running。"
+            Write-Host "2. 确认 Docker Desktop 正在使用 Linux containers。"
+            Write-Host "3. 如果刚启动 Docker Desktop，请等待 1 到 2 分钟后重试。"
+            Write-Host "4. 仍失败时，在 Docker Desktop 的 Troubleshoot 中执行 Restart。"
+            Write-Host ""
+            Write-Host "验证命令：docker version"
+            Write-Host "建议重试：.\setup.ps1 doctor"
+        }
+        "registry" {
+            Write-Host "$prefix 无法访问 Docker Hub 或镜像仓库。" -ForegroundColor $color
+            Write-Host "当前步骤：$Operation"
+            if ($imageText) {
+                Write-Host "相关镜像：$imageText"
+            }
+            Write-Host ""
+            Write-Host "这通常是网络、代理、DNS 或 Docker Desktop 网络配置问题。"
+            Write-Host "setup 会在 Steam 登录或下载前停止，避免继续触发敏感流程。"
+            Write-Host ""
+            Write-Host "处理方法："
+            Write-Host "1. 确认当前网络可以访问 https://registry-1.docker.io/v2/。"
+            Write-Host "2. 如果使用代理，在 Docker Desktop 和终端中配置相同代理。"
+            Write-Host "3. 公司或校园网络受限时，切换网络或配置 Docker 镜像加速。"
+            Write-Host "4. 网络恢复后运行：docker pull sdvd/server:preview"
+            Write-Host "5. 不想从仓库拉取时，改用本地构建：.\setup.ps1 build-setup"
+        }
+        "image" {
+            Write-Host "$prefix Docker 镜像标签不可拉取。" -ForegroundColor $color
+            Write-Host "当前步骤：$Operation"
+            if ($imageText) {
+                Write-Host "相关镜像：$imageText"
+            }
+            Write-Host ""
+            Write-Host "常见原因：默认 preview 标签尚未发布、已被移除，或 .env 中 IMAGE_NAMESPACE / IMAGE_VERSION 配置错误。"
+            Write-Host ""
+            Write-Host "处理方法："
+            Write-Host "1. 检查 .env 中的 IMAGE_NAMESPACE 和 IMAGE_VERSION。"
+            Write-Host "2. 手动验证标签：docker manifest inspect sdvd/server:preview"
+            Write-Host "3. 改成已发布的镜像标签后重试：.\setup.ps1 update"
+            Write-Host "4. 如果仓库暂不可用，使用本地构建：.\setup.ps1 build-setup"
+        }
+        default {
+            Write-Host "$prefix Docker 命令执行失败。" -ForegroundColor $color
+            Write-Host "当前步骤：$Operation"
+            Write-Host ""
+            Write-Host "处理方法："
+            Write-Host "1. 先运行：.\setup.ps1 doctor"
+            Write-Host "2. 再运行：docker version"
+            Write-Host "3. 如需进一步排查，可单独运行失败的 docker compose 命令。"
+        }
+    }
+}
+
+function Stop-DockerFailure {
+    param(
+        [string]$Operation,
+        [object[]]$OutputLines,
+        [string[]]$Images = @()
+    )
+
+    $kind = Get-DockerFailureKind $OutputLines
+    Write-DockerDiagnostic -Kind $kind -Operation $Operation -OutputLines $OutputLines -Images $Images
+    exit 1
+}
+
+function Invoke-ComposeWithDiagnostics {
+    param(
+        [string]$Operation,
+        [string[]]$ComposeArgs,
+        [string[]]$Images = @(),
+        [string]$ComposeEnvFile = $EnvFile
+    )
+
+    Push-Location $RootDir
+    try {
+        $argsWithEnv = @("compose", "--env-file", $ComposeEnvFile) + $ComposeArgs
+        $result = Invoke-DockerForDiagnostics -DockerArgs $argsWithEnv -SuppressOutput
+        if ($result.ExitCode -ne 0) {
+            Stop-DockerFailure -Operation $Operation -OutputLines $result.OutputLines -Images $Images
+        }
+
+        foreach ($line in $result.OutputLines) {
+            if ($line) {
+                Write-Host $line
+            }
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Invoke-Compose {
     param(
         [Parameter(ValueFromRemainingArguments = $true)]
@@ -59,6 +316,108 @@ function Invoke-Compose {
     Push-Location $RootDir
     try {
         $argsWithEnv = @("compose", "--env-file", $EnvFile) + $ComposeArgs
+        & docker @argsWithEnv
+        if ($LASTEXITCODE -ne 0) {
+            throw "docker $($argsWithEnv -join ' ') failed with exit code $LASTEXITCODE"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Assert-BuildComposeFile {
+    if (-not (Test-Path -LiteralPath $BuildComposeFile)) {
+        if (-not (Test-Path -LiteralPath $BuildComposeExampleFile)) {
+            throw "Local build compose file not found: $BuildComposeFile. Add docker-compose.build.yml with build.context paths for local builds."
+        }
+
+        Copy-Item -LiteralPath $BuildComposeExampleFile -Destination $BuildComposeFile
+        Write-Warn "Created docker-compose.build.yml from docker-compose.build.yml.example."
+        Write-Warn "If this package does not include .\server and .\steam-service Dockerfiles, edit docker-compose.build.yml before retrying."
+    }
+}
+
+function Get-BuildComposeConfig {
+    Assert-BuildComposeFile
+
+    Push-Location $RootDir
+    try {
+        $profileArgs = @()
+        if ($EnableDiscord) {
+            $profileArgs = @("--profile", "discord")
+        }
+
+        $argsWithEnv = @(
+            "compose", "--env-file", $EnvFile,
+            "-f", (Join-Path $RootDir "docker-compose.yml"),
+            "-f", $BuildComposeFile
+        ) + $profileArgs + @("config", "--format", "json")
+
+        $json = & docker @argsWithEnv
+        if ($LASTEXITCODE -ne 0) {
+            throw "docker $($argsWithEnv -join ' ') failed with exit code $LASTEXITCODE"
+        }
+
+        return (($json -join "`n") | ConvertFrom-Json)
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Assert-LocalBuildInputs {
+    $config = Get-BuildComposeConfig
+    $missing = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($serviceProperty in $config.services.PSObject.Properties) {
+        $serviceName = $serviceProperty.Name
+        $service = $serviceProperty.Value
+        if (-not $service.build) {
+            continue
+        }
+
+        $context = [string]$service.build.context
+        if (-not $context) {
+            $missing.Add("${serviceName}: build.context is missing")
+            continue
+        }
+
+        $dockerfile = if ($service.build.dockerfile) { [string]$service.build.dockerfile } else { "Dockerfile" }
+        $dockerfilePath = if ([System.IO.Path]::IsPathRooted($dockerfile)) {
+            $dockerfile
+        }
+        else {
+            Join-Path $context $dockerfile
+        }
+
+        if (-not (Test-Path -LiteralPath $context -PathType Container)) {
+            $missing.Add("${serviceName}: build context not found: $context")
+        }
+        elseif (-not (Test-Path -LiteralPath $dockerfilePath -PathType Leaf)) {
+            $missing.Add("${serviceName}: Dockerfile not found: $dockerfilePath")
+        }
+    }
+
+    if ($missing.Count -gt 0) {
+        Write-Host "Missing local Docker build inputs:" -ForegroundColor Red
+        foreach ($item in $missing) {
+            Write-Host " - $item" -ForegroundColor Red
+        }
+        throw "Fix docker-compose.build.yml or copy the source/Dockerfile directories into this package."
+    }
+}
+
+function Invoke-BuildCompose {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$ComposeArgs
+    )
+
+    Assert-BuildComposeFile
+    Push-Location $RootDir
+    try {
+        $argsWithEnv = @("compose", "--env-file", $EnvFile, "-f", (Join-Path $RootDir "docker-compose.yml"), "-f", $BuildComposeFile) + $ComposeArgs
         & docker @argsWithEnv
         if ($LASTEXITCODE -ne 0) {
             throw "docker $($argsWithEnv -join ' ') failed with exit code $LASTEXITCODE"
@@ -463,11 +822,11 @@ function Invoke-SmokeTest {
     Ensure-EnvFile
 
     Write-Step "Starting server stack"
-    Invoke-Compose up --detach
+    Invoke-ComposeUpWithDiagnostics -UpArgs @("up", "--detach")
 
     Write-Step "Waiting for containers"
     Start-Sleep -Seconds 15
-    Invoke-Compose ps
+    Invoke-ComposeWithDiagnostics -Operation "Showing container status" -ComposeArgs @("ps")
 
     $vncPort = [int](Get-EnvOrDefault "VNC_PORT" "5800")
     $apiPort = [int](Get-EnvOrDefault "API_PORT" "8080")
@@ -1169,9 +1528,9 @@ function Initialize-ServerSettings {
 
 function Assert-Docker {
     Assert-Command "docker"
-    & docker version | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Docker is not running. Please start Docker Desktop and retry."
+    $result = Invoke-DockerForDiagnostics -DockerArgs @("version") -SuppressOutput
+    if ($result.ExitCode -ne 0) {
+        Stop-DockerFailure -Operation "Checking Docker" -OutputLines $result.OutputLines
     }
 }
 
@@ -1180,9 +1539,9 @@ function Assert-ComposeConfig {
 
     Push-Location $RootDir
     try {
-        & docker compose --env-file $ComposeEnvFile config --quiet
-        if ($LASTEXITCODE -ne 0) {
-            throw "docker compose config validation failed."
+        $result = Invoke-DockerForDiagnostics -DockerArgs @("compose", "--env-file", $ComposeEnvFile, "config", "--quiet") -SuppressOutput
+        if ($result.ExitCode -ne 0) {
+            Stop-DockerFailure -Operation "Validating docker-compose.yml" -OutputLines $result.OutputLines
         }
     }
     finally {
@@ -1193,14 +1552,34 @@ function Assert-ComposeConfig {
 function Test-DockerImage {
     param([string]$Image)
 
-    & docker image inspect $Image | Out-Null
-    if ($LASTEXITCODE -eq 0) {
+    $localResult = Invoke-DockerForDiagnostics -DockerArgs @("image", "inspect", $Image) -SuppressOutput
+    if ($localResult.ExitCode -eq 0) {
         Write-Ok "Image available: $Image"
         return
     }
 
     Write-Warn "Image not found locally: $Image"
-    Write-Host "     Run: docker pull $Image"
+    $remoteResult = Invoke-DockerForDiagnostics -DockerArgs @("manifest", "inspect", $Image) -SuppressOutput -TimeoutSeconds 20
+    if ($remoteResult.ExitCode -eq 0) {
+        Write-Ok "Remote image tag available: $Image"
+        Write-Host "     Run: docker pull $Image"
+        return
+    }
+
+    $kind = Get-DockerFailureKind $remoteResult.OutputLines
+    Write-DockerDiagnostic -Kind $kind -Operation "Checking remote image $Image" -OutputLines $remoteResult.OutputLines -Images @($Image) -WarningOnly
+}
+
+function Invoke-ComposePullWithDiagnostics {
+    $imageSettings = Get-DockerImageSettings
+    Invoke-ComposeWithDiagnostics -Operation "Pulling Docker images" -ComposeArgs @("pull") -Images $imageSettings.Images
+}
+
+function Invoke-ComposeUpWithDiagnostics {
+    param([string[]]$UpArgs)
+
+    $imageSettings = Get-DockerImageSettings
+    Invoke-ComposeWithDiagnostics -Operation "Starting server" -ComposeArgs $UpArgs -Images $imageSettings.Images
 }
 
 function Get-UpArgs {
@@ -1211,9 +1590,21 @@ function Get-UpArgs {
     return @("up", "-d")
 }
 
+function Invoke-LocalImageBuild {
+    Assert-LocalBuildInputs
+
+    $services = @("server", "steam-auth")
+    if ($EnableDiscord) {
+        $services += "discord-bot"
+    }
+
+    Invoke-BuildCompose build @services
+}
+
 $dockerRequiredActions = @(
     "doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup",
-    "start", "stop", "restart", "logs", "status", "update", "backup", "join-info",
+    "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status",
+    "update", "build-update", "backup", "join-info",
     "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility"
 )
 
@@ -1225,9 +1616,14 @@ if ($dockerRequiredActions -contains $Action) {
 switch ($Action) {
     "doctor" {
         Write-Step "Checking Docker Compose"
-        & docker compose version
-        if ($LASTEXITCODE -ne 0) {
-            throw "Docker Compose is not available."
+        $composeVersion = Invoke-DockerForDiagnostics -DockerArgs @("compose", "version") -SuppressOutput
+        if ($composeVersion.ExitCode -ne 0) {
+            Stop-DockerFailure -Operation "Checking Docker Compose" -OutputLines $composeVersion.OutputLines
+        }
+        foreach ($line in $composeVersion.OutputLines) {
+            if ($line) {
+                Write-Host $line
+            }
         }
         Write-Ok "Docker Compose available"
 
@@ -1236,16 +1632,21 @@ switch ($Action) {
         Write-Ok "Compose config OK"
 
         Write-Step "Checking Docker images"
+        $imageNamespace = "sdvd"
         $imageVersion = "preview"
         if (Test-Path $EnvFile) {
+            $configuredNamespace = Get-EnvValue "IMAGE_NAMESPACE"
+            if ($configuredNamespace) {
+                $imageNamespace = $configuredNamespace
+            }
             $configuredVersion = Get-EnvValue "IMAGE_VERSION"
             if ($configuredVersion) {
                 $imageVersion = $configuredVersion
             }
         }
-        Test-DockerImage "sdvd/server:$imageVersion"
-        Test-DockerImage "sdvd/steam-service:$imageVersion"
-        Test-DockerImage "sdvd/discord-bot:$imageVersion"
+        Test-DockerImage "$imageNamespace/server:$imageVersion"
+        Test-DockerImage "$imageNamespace/steam-service:$imageVersion"
+        Test-DockerImage "$imageNamespace/discord-bot:$imageVersion"
 
         Write-Step "Checking local directories"
         New-Item -ItemType Directory -Force -Path (Join-Path $RootDir "data\settings"), (Join-Path $RootDir "data\mods") | Out-Null
@@ -1288,7 +1689,38 @@ switch ($Action) {
         Ensure-EnvFile
 
         Write-Step "Pulling Docker images"
-        Invoke-Compose pull
+        Invoke-ComposePullWithDiagnostics
+
+        Write-Step "Running Steam login"
+        try {
+            Invoke-SteamAuthLogin
+        }
+        catch {
+            Write-Warn "Continuing to download; if steam-auth is not logged in, the script will fall back to SteamCMD."
+        }
+
+        Write-Step "Downloading or updating game files"
+        Invoke-SteamAuthDownloadOrFallback
+
+        if (-not $NoStart) {
+            Invoke-SmokeTest
+        }
+        else {
+            Show-AccessInfo
+        }
+        Prompt-AdminPanelAfterSetup
+    }
+    "build" {
+        Ensure-EnvFile
+        Write-Step "Building local Docker images"
+        Invoke-LocalImageBuild
+    }
+    "build-setup" {
+        Write-Step "Preparing .env"
+        Ensure-EnvFile
+
+        Write-Step "Building local Docker images"
+        Invoke-LocalImageBuild
 
         Write-Step "Running Steam login"
         try {
@@ -1313,19 +1745,29 @@ switch ($Action) {
         Ensure-EnvFile
         Write-Step "Starting server"
         $upArgs = Get-UpArgs
-        Invoke-Compose @upArgs
+        Invoke-ComposeUpWithDiagnostics -UpArgs $upArgs
+        Show-AccessInfo
+    }
+    "build-start" {
+        Ensure-EnvFile
+        Write-Step "Building local Docker images"
+        Invoke-LocalImageBuild
+
+        Write-Step "Starting server from local images"
+        $upArgs = Get-UpArgs
+        Invoke-BuildCompose @upArgs
         Show-AccessInfo
     }
     "stop" {
         Write-Step "Stopping server"
-        Invoke-Compose down
+        Invoke-ComposeWithDiagnostics -Operation "Stopping server" -ComposeArgs @("down")
     }
     "restart" {
         Ensure-EnvFile
         Write-Step "Restarting server"
-        Invoke-Compose down
+        Invoke-ComposeWithDiagnostics -Operation "Stopping server" -ComposeArgs @("down")
         $upArgs = Get-UpArgs
-        Invoke-Compose @upArgs
+        Invoke-ComposeUpWithDiagnostics -UpArgs $upArgs
         Show-AccessInfo
     }
     "logs" {
@@ -1336,15 +1778,24 @@ switch ($Action) {
     "status" {
         Ensure-EnvFile
         Write-Step "Showing container status"
-        Invoke-Compose ps
+        Invoke-ComposeWithDiagnostics -Operation "Showing container status" -ComposeArgs @("ps")
     }
     "update" {
         Ensure-EnvFile
         Write-Step "Updating images and restarting"
-        Invoke-Compose pull
-        Invoke-Compose down
+        Invoke-ComposePullWithDiagnostics
+        Invoke-ComposeWithDiagnostics -Operation "Stopping server" -ComposeArgs @("down")
         $upArgs = Get-UpArgs
-        Invoke-Compose @upArgs
+        Invoke-ComposeUpWithDiagnostics -UpArgs $upArgs
+        Show-AccessInfo
+    }
+    "build-update" {
+        Ensure-EnvFile
+        Write-Step "Rebuilding local images and restarting"
+        Invoke-LocalImageBuild
+        Invoke-BuildCompose down
+        $upArgs = Get-UpArgs
+        Invoke-BuildCompose @upArgs
         Show-AccessInfo
     }
     "backup" {

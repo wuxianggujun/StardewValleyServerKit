@@ -1,0 +1,17 @@
+# Copy this file to docker-compose.build.yml when you want to build images
+# locally instead of pulling published images.
+#
+# Adjust the build.context paths to point at your local Dockerfile directories.
+
+services:
+  server:
+    build:
+      context: ./server
+
+  steam-auth:
+    build:
+      context: ./steam-service
+
+  discord-bot:
+    build:
+      context: ./discord-bot
