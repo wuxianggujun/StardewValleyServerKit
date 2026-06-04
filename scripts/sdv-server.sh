@@ -138,13 +138,6 @@ explain_docker_failure() {
   if docker_output_suggests_daemon_unavailable "$output" || ! docker_daemon_available; then
     reason="Docker daemon 不可用"
     print_docker_daemon_help
-  elif docker_output_suggests_image_unavailable "$output"; then
-    reason="镜像标签不可拉取"
-    warn "当前镜像标签无法拉取。常见原因是默认 preview 标签尚未发布、.env 中 IMAGE_VERSION/IMAGE_NAMESPACE 写错，或仓库不可访问。"
-    print_configured_image_help
-    warn "请检查 .env 中的 IMAGE_NAMESPACE 和 IMAGE_VERSION，并以发布说明中的镜像标签为准。"
-    warn "可手动验证：docker manifest inspect $(first_configured_image_ref)"
-    warn "如果本地包包含源码和 Dockerfile，也可以改用 build-setup/build-start 从本地构建。"
   elif docker_output_suggests_registry_unreachable "$output"; then
     reason="镜像仓库不可达"
     warn "Docker 无法访问 Docker Hub/镜像仓库，镜像拉取或远端标签检查没有完成。"
@@ -152,6 +145,13 @@ explain_docker_failure() {
     warn "请检查网络、DNS、代理、防火墙，以及 Docker Desktop/daemon 的代理或镜像加速器配置。"
     warn "需要能访问 registry-1.docker.io 和 auth.docker.io；使用私有仓库时请确认对应 registry 可达。"
     warn "网络恢复后重试当前命令；如果本地已有镜像，可先运行 start，或使用 build-start 从本地构建。"
+  elif docker_output_suggests_image_unavailable "$output"; then
+    reason="镜像标签不可拉取"
+    warn "当前镜像标签无法拉取。常见原因是默认 preview 标签尚未发布、.env 中 IMAGE_VERSION/IMAGE_NAMESPACE 写错，或仓库不可访问。"
+    print_configured_image_help
+    warn "请检查 .env 中的 IMAGE_NAMESPACE 和 IMAGE_VERSION，并以发布说明中的镜像标签为准。"
+    warn "可手动验证：docker manifest inspect $(first_configured_image_ref)"
+    warn "如果本地包包含源码和 Dockerfile，也可以改用 build-setup/build-start 从本地构建。"
   else
     warn "$description 失败，但脚本未识别出明确原因。"
     warn "请先运行 ./scripts/sdv-server.sh doctor 获取 Docker、Compose 和镜像状态。"
@@ -516,10 +516,6 @@ run_docker_registry_command_or_die() {
     explain_docker_failure "$description" "$output" 1
   fi
 
-  if docker_output_suggests_image_unavailable "$output"; then
-    explain_docker_failure "$description" "$output" 1
-  fi
-
   if docker_output_suggests_registry_unreachable "$output"; then
     warn "$description 失败：Docker Hub/镜像仓库不可达。"
     if ! prepare_temporary_docker_mirror_retry; then
@@ -539,6 +535,10 @@ run_docker_registry_command_or_die() {
       restore_temporary_docker_registry_mirrors
       explain_docker_failure "$description" "$retry_output" 1
     fi
+  fi
+
+  if docker_output_suggests_image_unavailable "$output"; then
+    explain_docker_failure "$description" "$output" 1
   fi
 
   explain_docker_failure "$description" "$output" 1
