@@ -1534,7 +1534,24 @@ function Invoke-SteamCmdDownload {
 function Invoke-SteamAuthLogin {
     [void](Test-SteamNetworkConnectivity)
     try {
-        Invoke-Compose run --rm -it steam-auth login
+        if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+            Invoke-Compose run --rm -it steam-auth login
+        }
+        else {
+            Write-Warn "No interactive terminal detected; steam-auth login will run without TTY."
+            Write-Warn "Automatically selecting username/password authentication for non-interactive runs."
+            Write-Warn "If Steam Guard is requested, rerun this command from a terminal with TTY."
+            Push-Location $RootDir
+            try {
+                "1" | & docker compose --env-file $EnvFile run --rm -T steam-auth login
+                if ($LASTEXITCODE -ne 0) {
+                    throw "docker compose steam-auth login failed with exit code $LASTEXITCODE"
+                }
+            }
+            finally {
+                Pop-Location
+            }
+        }
     }
     catch {
         Write-Warn "steam-auth login failed. If the log says 'The SteamClient instance must be connected', this is usually not a password error."

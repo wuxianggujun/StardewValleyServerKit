@@ -283,8 +283,9 @@ compose_run_login() {
     compose run --rm -it steam-auth login
   else
     warn "No interactive terminal detected; steam-auth login will run without TTY."
+    warn "Automatically selecting username/password authentication for non-interactive runs."
     warn "If Steam Guard is requested, rerun this command from an SSH session with a TTY."
-    compose run --rm -T steam-auth login
+    printf '1\n' | compose run --rm -T steam-auth login
   fi
 }
 
