@@ -750,6 +750,7 @@ get_env_value() {
   local key="$1"
   [[ -f "$ENV_FILE" ]] || return 0
   grep -E "^[[:space:]]*$key[[:space:]]*=" "$ENV_FILE" \
+    | tr -d '\r' \
     | tail -n 1 \
     | sed -E 's/^[^=]+=//' \
     | sed -E 's/^["'\'']|["'\'']$//g'
