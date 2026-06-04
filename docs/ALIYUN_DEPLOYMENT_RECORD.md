@@ -52,6 +52,7 @@ DOCKER_TEMP_MIRROR_RESTART_DOCKER=true
 cd /opt/stardew-valley-server-kit
 chmod +x setup.sh scripts/sdv-server.sh
 ./setup.sh doctor
+./setup.sh steam-network
 docker compose --env-file .env config --quiet
 ```
 
@@ -77,9 +78,11 @@ The SteamClient instance must be connected
 这通常不是密码错误，而是 SteamClient 链路没有连接成功。脚本会回退到 SteamCMD。
 SteamCMD 的镜像 `cm2network/steamcmd:latest` 也会走同一套 Docker Hub 失败兜底逻辑。
 
-2026-06-05 排查时确认：服务器可以访问 `store.steampowered.com`，但访问
-`api.steampowered.com/ISteamDirectory/GetCMList/v1/?cellid=0&format=json` 超时。
-这说明当前卡点是 Steam Directory API / SteamClient CM 链路，不是账号名拼写问题，
+2026-06-05 分层排查时确认：服务器不是完全不能访问 Steam。`store.steampowered.com`
+可以访问但有抖动；`steamcommunity.com:443` 连续超时；Steam CM 的 `443` 端口部分可通，
+`27017-27020` 大多不通；`steam-auth` 仍报 `The SteamClient instance must be connected`。
+同时，`cm2network/steamcmd:latest` 里的 SteamCMD 匿名登录已经成功连到 Steam Public。
+这说明当前卡点是 `steam-auth` 使用的 SteamKit / SteamClient 通道，而不是账号名拼写问题，
 也不是 Docker Hub 镜像源问题。
 
 如果目标服务器直连 Steam API/CM 不稳定，可以在服务器 `.env` 中补充：
@@ -91,8 +94,9 @@ ALL_PROXY=""
 NO_PROXY="localhost,127.0.0.1,steam-auth,server"
 ```
 
-代理值如果包含账号密码，只保存在服务器 `.env`，不要写入文档。同步代码后执行
-`./setup.sh doctor` 会主动检查 Steam Directory API 连通性。
+代理值如果包含账号密码，只保存在服务器 `.env`，不要写入文档。同步代码后可以执行
+`./setup.sh steam-network` 做无账号诊断。这个命令只测试 DNS、Steam Web、Steam Directory API、
+CM 端口和 SteamCMD 匿名登录，不读取 Steam 账号密码，也不会触发 Steam Guard。
 
 ## 现场验证记录
 
@@ -101,11 +105,13 @@ NO_PROXY="localhost,127.0.0.1,steam-auth,server"
 - 已通过 SSH 重启 Docker，确认该动作会让当前项目栈短暂重建。
 - 已执行 `./setup.sh start`，`sdv-server` 和 `sdv-steam-auth` 能正常拉起。
 - 已执行 `./setup.sh login`，当前报错点是 `The SteamClient instance must be connected`。
-- 已执行 `./setup.sh download`，脚本已自动回退到 SteamCMD，开始下载更新与游戏文件。
-- 已补充部署脚本：Steam Directory API 预检、Steam 代理变量透传、SteamCMD 代理透传。
+- 已执行 `./setup.sh steamcmd-download`，SteamCMD 能连接 Steam Public，并停在 Steam Guard
+  验证码输入阶段；非交互 SSH 无法输入验证码，所以脚本会停止重试。
+- 已补充部署脚本：Steam Directory API 预检、Steam 代理变量透传、SteamCMD 代理透传、
+  `steam-network` 无账号公共链路诊断。
 
-这次验证说明：Docker、Compose、脚本入口和回退链路都能跑通；当前剩下的是
-Steam 登录链路和游戏文件下载时间。
+这次验证说明：Docker、Compose、脚本入口和 SteamCMD 回退链路都能跑通；当前剩下的是
+从带 TTY 的 SSH 终端输入 Steam Guard 验证码，让服务器这台设备完成 SteamCMD 授权。
 
 ## 哔站文章二维码
 

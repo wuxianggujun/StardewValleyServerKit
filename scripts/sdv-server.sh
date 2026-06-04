@@ -847,6 +847,132 @@ PY
   return 1
 }
 
+steam_network_probe_http_url() {
+  local url="$1"
+  local label="$2"
+  local output status
+
+  printf -- '-- %s\n' "$label"
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl not found; skipping HTTPS probe for $label."
+    return 0
+  fi
+
+  set +e
+  output="$(curl -4 -L -o /dev/null -sS -w 'http=%{http_code} connect=%{time_connect} tls=%{time_appconnect} total=%{time_total} remote=%{remote_ip} err=%{errormsg}\n' --connect-timeout 5 --max-time 15 "$url" 2>&1)"
+  status=$?
+  set -e
+
+  printf '%s\n' "$output"
+  if (( status == 0 )); then
+    ok "$label reachable over HTTPS"
+    return 0
+  fi
+
+  warn "$label HTTPS probe failed"
+  return 1
+}
+
+steam_network_probe_tcp() {
+  local host="$1"
+  local port="$2"
+
+  printf '%s:%s ' "$host" "$port"
+  if run_with_optional_timeout 6 bash -lc "cat < /dev/null > /dev/tcp/$host/$port" >/dev/null 2>&1; then
+    printf 'ok\n'
+    return 0
+  fi
+
+  printf 'fail\n'
+  return 1
+}
+
+steam_network_probe_steamcmd_anonymous() {
+  local image="cm2network/steamcmd:latest"
+  local steamcmd_probe_volume="stardew-valley-server-kit_steamcmd-net-test"
+  local timeout_seconds="${SVSK_STEAMCMD_NETWORK_TEST_TIMEOUT:-240}"
+  local output_file status
+
+  step "Checking SteamCMD anonymous login"
+  warn "This uses anonymous login only. It does not read Steam credentials from .env."
+  load_steam_proxy_docker_args
+  if steam_proxy_configured; then
+    ok "Steam proxy variables are configured; values are not printed"
+  fi
+
+  ensure_docker_image "$image"
+  docker run --rm --user 0:0 \
+    -v "$steamcmd_probe_volume:/home/steam/Steam" \
+    --entrypoint bash \
+    "$image" -lc 'mkdir -p /home/steam/Steam && chown -R steam:steam /home/steam/Steam' >/dev/null
+
+  output_file="$(mktemp "${TMPDIR:-/tmp}/svsk-steamcmd-network.XXXXXX.log")"
+  set +e
+  run_with_optional_timeout "$timeout_seconds" docker run --rm \
+    "${STEAM_PROXY_DOCKER_ARGS[@]}" \
+    -v "$steamcmd_probe_volume:/home/steam/Steam" \
+    "$image" \
+    bash -lc '/home/steam/steamcmd/steamcmd.sh +login anonymous +quit' 2>&1 | tee "$output_file"
+  status="${PIPESTATUS[0]}"
+  set -e
+
+  if (( status == 0 )) && grep -Eiq 'Connecting anonymously to Steam Public|Waiting for user info' "$output_file"; then
+    rm -f "$output_file"
+    ok "SteamCMD anonymous login reached Steam Public"
+    return 0
+  fi
+
+  if (( status == 124 )); then
+    warn "SteamCMD anonymous login timed out after ${timeout_seconds}s"
+  else
+    warn "SteamCMD anonymous login failed with exit code $status"
+  fi
+  warn "If this fails while Docker image pulls work, the server needs a Steam-capable network path or proxy."
+  rm -f "$output_file"
+  return 1
+}
+
+steam_network_diagnostics() {
+  local host port
+  local failed=0
+
+  step "Checking Steam DNS"
+  for host in api.steampowered.com store.steampowered.com steamcommunity.com cm0.steampowered.com cm1.steampowered.com steamcdn-a.akamaihd.net; do
+    printf -- '-- %s\n' "$host"
+    if command -v getent >/dev/null 2>&1; then
+      getent ahostsv4 "$host" | awk '{print $1}' | sort -u | head -n 8 || true
+    elif command -v nslookup >/dev/null 2>&1; then
+      nslookup "$host" | sed -n '1,12p' || true
+    else
+      warn "No getent/nslookup available for DNS probe."
+      break
+    fi
+  done
+
+  step "Checking Steam HTTPS endpoints"
+  steam_network_probe_http_url "https://store.steampowered.com/" "Steam Store" || failed=1
+  steam_network_probe_http_url "https://steamcommunity.com/" "Steam Community" || failed=1
+  steam_network_probe_http_url "$(steam_network_probe_url)" "Steam Directory API" || failed=1
+
+  step "Checking Steam CM TCP endpoints"
+  for host in cm0.steampowered.com cm1.steampowered.com 162.254.193.6 162.254.195.44; do
+    for port in 443 27017 27018 27019 27020; do
+      steam_network_probe_tcp "$host" "$port" || failed=1
+    done
+  done
+
+  steam_network_probe_steamcmd_anonymous || failed=1
+
+  if (( failed == 0 )); then
+    ok "Steam public network diagnostics passed"
+    return 0
+  fi
+
+  warn "Steam public network diagnostics found at least one blocked or unstable endpoint."
+  warn "If SteamCMD anonymous login succeeds but steam-auth still fails, use steamcmd-download from an SSH TTY for Steam Guard."
+  return 1
+}
+
 steamcmd_output_requires_interactive_guard() {
   local output_file="$1"
   grep -Eiq 'Steam Guard code|This computer has not been authenticated|set_steam_guard_code' "$output_file"
@@ -1801,6 +1927,9 @@ case "$ACTION" in
   steamcmd-download)
     steamcmd_download
     ;;
+  steam-network)
+    steam_network_diagnostics
+    ;;
   smoke)
     smoke_test
     ;;
@@ -1904,6 +2033,6 @@ case "$ACTION" in
     admin_service_logs
     ;;
   *)
-    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-token-rotate/admin-service-install/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
+    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-token-rotate/admin-service-install/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
     ;;
 esac

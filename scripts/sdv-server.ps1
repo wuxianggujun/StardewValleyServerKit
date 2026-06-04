@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "join-info", "admin", "admin-public", "admin-token-rotate", "admin-service-install", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
+    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "join-info", "admin", "admin-public", "admin-token-rotate", "admin-service-install", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
     [string]$Action = "setup",
 
     [string]$SteamUsername,
@@ -552,6 +552,210 @@ function Test-SteamNetworkConnectivity {
     return $false
 }
 
+function Test-SteamHttpEndpoint {
+    param(
+        [string]$Url,
+        [string]$Label
+    )
+
+    Write-Host "-- $Label"
+    $request = $null
+    $response = $null
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $request = [System.Net.WebRequest]::Create($Url)
+        $request.Timeout = 15000
+        $request.ReadWriteTimeout = 15000
+        $request.UserAgent = "StardewValleyServerKit/steam-network"
+        $response = $request.GetResponse()
+        $timer.Stop()
+        $statusCode = 200
+        if ($response.PSObject.Properties.Name -contains "StatusCode") {
+            $statusCode = [int]$response.StatusCode
+        }
+        Write-Host ("http={0} total={1:n3}s" -f $statusCode, $timer.Elapsed.TotalSeconds)
+        Write-Ok "$Label reachable over HTTPS"
+        return $true
+    }
+    catch {
+        $timer.Stop()
+        Write-Host ("http=000 total={0:n3}s err={1}" -f $timer.Elapsed.TotalSeconds, $_.Exception.Message)
+        Write-Warn "$Label HTTPS probe failed"
+        return $false
+    }
+    finally {
+        if ($response) {
+            $response.Close()
+        }
+    }
+}
+
+function Invoke-DockerForSteamNetwork {
+    param(
+        [string[]]$DockerArgs,
+        [int]$TimeoutSeconds = 240
+    )
+
+    $job = Start-Job -ScriptBlock {
+        param([string[]]$DockerArgs)
+
+        $jobOutputLines = [System.Collections.Generic.List[string]]::new()
+        & docker @DockerArgs 2>&1 | ForEach-Object {
+            $jobOutputLines.Add([string]$_)
+        }
+
+        [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            OutputLines = @($jobOutputLines)
+        }
+    } -ArgumentList (, $DockerArgs)
+
+    try {
+        if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
+            Stop-Job -Job $job -Force
+            return [pscustomobject]@{
+                ExitCode = 124
+                OutputLines = @("Docker command timed out after $TimeoutSeconds seconds.")
+            }
+        }
+
+        $jobResult = Receive-Job -Job $job
+        return [pscustomobject]@{
+            ExitCode = $jobResult.ExitCode
+            OutputLines = @($jobResult.OutputLines)
+        }
+    }
+    finally {
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Ensure-DockerHelperImage {
+    param([string]$Image)
+
+    $localResult = Invoke-DockerForDiagnostics -DockerArgs @("image", "inspect", $Image) -SuppressOutput
+    if ($localResult.ExitCode -eq 0) {
+        return
+    }
+
+    Write-Step "Pulling Docker helper image: $Image"
+    $pullResult = Invoke-DockerForDiagnostics -DockerArgs @("pull", $Image) -SuppressOutput -TimeoutSeconds 300
+    if ($pullResult.ExitCode -ne 0) {
+        Stop-DockerFailure -Operation "Pulling Docker helper image $Image" -OutputLines $pullResult.OutputLines -Images @($Image)
+    }
+}
+
+function Invoke-SteamCmdAnonymousNetworkProbe {
+    $image = "cm2network/steamcmd:latest"
+    $steamCmdProbeVolume = "stardew-valley-server-kit_steamcmd-net-test"
+    $timeoutSeconds = 240
+    $configuredTimeout = Get-ExternalEnvValue @("SVSK_STEAMCMD_NETWORK_TEST_TIMEOUT")
+    if ($configuredTimeout) {
+        $parsedTimeout = 0
+        if ([int]::TryParse($configuredTimeout, [ref]$parsedTimeout) -and $parsedTimeout -gt 0) {
+            $timeoutSeconds = $parsedTimeout
+        }
+    }
+
+    Write-Step "Checking SteamCMD anonymous login"
+    Write-Warn "This uses anonymous login only. It does not read Steam credentials from .env."
+    $steamProxyArgs = Get-SteamProxyDockerArgs
+    if (Test-SteamProxyConfigured) {
+        Write-Ok "Steam proxy variables are configured; values are not printed"
+    }
+
+    Ensure-DockerHelperImage $image
+
+    $prepareArgs = @(
+        "run", "--rm", "--user", "0:0",
+        "-v", "${steamCmdProbeVolume}:/home/steam/Steam",
+        "--entrypoint", "bash",
+        $image,
+        "-lc", "mkdir -p /home/steam/Steam && chown -R steam:steam /home/steam/Steam"
+    )
+    $prepareResult = Invoke-DockerForDiagnostics -DockerArgs $prepareArgs -SuppressOutput -TimeoutSeconds 60
+    if ($prepareResult.ExitCode -ne 0) {
+        Stop-DockerFailure -Operation "Preparing SteamCMD network test volume" -OutputLines $prepareResult.OutputLines -Images @($image)
+    }
+
+    $dockerArgs = @("run", "--rm") +
+        $steamProxyArgs +
+        @(
+            "-v", "${steamCmdProbeVolume}:/home/steam/Steam",
+            $image,
+            "bash", "-lc", "/home/steam/steamcmd/steamcmd.sh +login anonymous +quit"
+        )
+
+    $result = Invoke-DockerForSteamNetwork -DockerArgs $dockerArgs -TimeoutSeconds $timeoutSeconds
+    foreach ($line in $result.OutputLines) {
+        if ($line) {
+            Write-Host (Protect-LogLine ([string]$line))
+        }
+    }
+
+    $text = ($result.OutputLines -join "`n")
+    if ($result.ExitCode -eq 0 -and $text -match "Connecting anonymously to Steam Public|Waiting for user info") {
+        Write-Ok "SteamCMD anonymous login reached Steam Public"
+        return $true
+    }
+
+    if ($result.ExitCode -eq 124) {
+        Write-Warn "SteamCMD anonymous login timed out after ${timeoutSeconds}s"
+    }
+    else {
+        Write-Warn "SteamCMD anonymous login failed with exit code $($result.ExitCode)"
+    }
+    Write-Warn "If this fails while Docker image pulls work, the server needs a Steam-capable network path or proxy."
+    return $false
+}
+
+function Invoke-SteamNetworkDiagnostics {
+    $failed = $false
+
+    Write-Step "Checking Steam DNS"
+    foreach ($hostName in @("api.steampowered.com", "store.steampowered.com", "steamcommunity.com", "cm0.steampowered.com", "cm1.steampowered.com", "steamcdn-a.akamaihd.net")) {
+        Write-Host "-- $hostName"
+        try {
+            [System.Net.Dns]::GetHostAddresses($hostName) |
+                Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork } |
+                Select-Object -First 8 |
+                ForEach-Object { Write-Host $_.IPAddressToString }
+        }
+        catch {
+            Write-Warn "DNS lookup failed for ${hostName}: $($_.Exception.Message)"
+            $failed = $true
+        }
+    }
+
+    Write-Step "Checking Steam HTTPS endpoints"
+    if (-not (Test-SteamHttpEndpoint "https://store.steampowered.com/" "Steam Store")) { $failed = $true }
+    if (-not (Test-SteamHttpEndpoint "https://steamcommunity.com/" "Steam Community")) { $failed = $true }
+    if (-not (Test-SteamHttpEndpoint (Get-SteamNetworkProbeUrl) "Steam Directory API")) { $failed = $true }
+
+    Write-Step "Checking Steam CM TCP endpoints"
+    foreach ($hostName in @("cm0.steampowered.com", "cm1.steampowered.com", "162.254.193.6", "162.254.195.44")) {
+        foreach ($port in @(443, 27017, 27018, 27019, 27020)) {
+            $ok = Test-TcpPort -HostName $hostName -Port $port -TimeoutMs 6000
+            Write-Host ("{0}:{1} {2}" -f $hostName, $port, $(if ($ok) { "ok" } else { "fail" }))
+            if (-not $ok) {
+                $failed = $true
+            }
+        }
+    }
+
+    if (-not (Invoke-SteamCmdAnonymousNetworkProbe)) {
+        $failed = $true
+    }
+
+    if (-not $failed) {
+        Write-Ok "Steam public network diagnostics passed"
+        return
+    }
+
+    Write-Warn "Steam public network diagnostics found at least one blocked or unstable endpoint."
+    Write-Warn "If SteamCMD anonymous login succeeds but steam-auth still fails, use steamcmd-download from an SSH TTY for Steam Guard."
+}
+
 function New-Secret {
     param([int]$Bytes = 32)
 
@@ -705,7 +909,7 @@ function Protect-LogLine {
     param([string]$Line)
 
     $protected = $Line -replace '\x1B\[[0-9;?]*[ -/]*[@-~]', ''
-    foreach ($key in @("STEAM_USERNAME", "STEAM_PASSWORD", "STEAM_REFRESH_TOKEN", "VNC_PASSWORD", "API_KEY", "ADMIN_TOKEN", "SERVER_PASSWORD", "DISCORD_BOT_TOKEN")) {
+    foreach ($key in @("STEAM_USERNAME", "STEAM_PASSWORD", "STEAM_REFRESH_TOKEN", "VNC_PASSWORD", "API_KEY", "ADMIN_TOKEN", "SERVER_PASSWORD", "DISCORD_BOT_TOKEN", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")) {
         $value = Get-EnvValue $key
         if ($value) {
             $protected = $protected.Replace($value, "<redacted>")
@@ -1763,7 +1967,7 @@ function Invoke-LocalImageBuild {
 }
 
 $dockerRequiredActions = @(
-    "doctor", "check-env", "login", "download", "steamcmd-download", "smoke", "setup",
+    "doctor", "check-env", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup",
     "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status",
     "update", "build-update", "backup", "join-info",
     "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility"
@@ -1843,6 +2047,9 @@ switch ($Action) {
     }
     "steamcmd-download" {
         Invoke-SteamCmdDownload
+    }
+    "steam-network" {
+        Invoke-SteamNetworkDiagnostics
     }
     "smoke" {
         Invoke-SmokeTest

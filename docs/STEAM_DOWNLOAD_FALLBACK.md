@@ -46,6 +46,26 @@ stardew-valley-server-kit_game-data
 
 ## 推荐命令
 
+先做无账号网络诊断，确认服务器到底是哪条 Steam 链路可用：
+
+Windows：
+
+```powershell
+.\setup.ps1 steam-network
+```
+
+Linux / macOS：
+
+```bash
+./scripts/sdv-server.sh steam-network
+```
+
+这个命令只测试 DNS、Steam Web、Steam Directory API、常见 CM 端口和 SteamCMD
+匿名登录，不读取 `.env` 中的 Steam 账号密码，也不会触发 Steam Guard。
+
+如果诊断显示 SteamCMD 匿名登录能到 Steam Public，但 `steam-auth` 仍然报
+`The SteamClient instance must be connected`，直接走 SteamCMD 备用下载。
+
 Windows：
 
 ```powershell

@@ -145,6 +145,7 @@ Windows：
 .\setup.ps1 login
 .\setup.ps1 download
 .\setup.ps1 steamcmd-download
+.\setup.ps1 steam-network
 .\setup.ps1 smoke
 .\setup.ps1 start
 .\setup.ps1 stop
@@ -184,6 +185,21 @@ Linux / macOS：
 RETRIES=5 ./scripts/sdv-server.sh steamcmd-download
 ```
 
+如果只是想判断服务器到底能不能访问 Steam 公共链路，先执行无账号诊断：
+
+```powershell
+.\setup.ps1 steam-network
+```
+
+Linux / macOS：
+
+```bash
+./scripts/sdv-server.sh steam-network
+```
+
+该诊断只测试 DNS、Steam Web、Steam Directory API、常见 CM 端口和 SteamCMD 匿名登录。
+它不会读取 `.env` 中的 Steam 账号密码，也不会触发 Steam Guard。
+
 该备用流程使用 Valve 官方 SteamCMD 下载链路，会同时下载 Stardew Valley 本体和
 Steamworks SDK。SDK 缺失时，JunimoServer 的 Steam SDR / GameServer 模式可能启动不完整。
 如果 SteamCMD 下载中途出现 `state is 0x402 after update job`，重新执行同一命令即可，
@@ -205,6 +221,7 @@ Linux / macOS：
 ./scripts/sdv-server.sh login
 ./scripts/sdv-server.sh download
 ./scripts/sdv-server.sh steamcmd-download
+./scripts/sdv-server.sh steam-network
 ./scripts/sdv-server.sh smoke
 ./scripts/sdv-server.sh start
 ./scripts/sdv-server.sh stop
