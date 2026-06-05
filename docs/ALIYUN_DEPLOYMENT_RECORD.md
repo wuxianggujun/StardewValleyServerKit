@@ -62,6 +62,10 @@ http://139.196.225.211:8088
 直接访问 `8080` 返回 `Unauthorized. Provide a valid Authorization header: Bearer <api-key>`
 是 API 鉴权的正常结果。
 
+交互式 `setup` 会检测 1Panel、Nginx、OpenResty、Caddy、Traefik 等反向代理候选项。
+检测结果只用于推荐：检测到候选项时推荐本地反代模式；未检测到候选项时推荐公网直连模式。
+最终仍由用户在终端选择，避免把“已安装反代”误判为“已为本项目配置好反代站点”。
+
 ## Docker 重启影响
 
 重启 Docker 会短暂影响同一台服务器上的其他 Docker 容器，例如 1Panel、数据库、

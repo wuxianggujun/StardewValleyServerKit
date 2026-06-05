@@ -425,6 +425,16 @@ sudo ./scripts/sdv-server.sh admin-service-install-public
 `8088/tcp`，然后访问 `http://<server-public-ip>:8088`。登录页使用 `.env`
 里的 `ADMIN_TOKEN`，脚本不会把令牌打印到终端或日志。
 
+交互式 Linux root 执行 `setup` 结束后，脚本会先检测本机是否存在反向代理候选项：
+`1Panel`、`nginx`、`openresty`、`caddy`、`traefik`、`nginx-proxy-manager`
+等 systemd 服务、命令、常见目录或 Docker 容器。检测结果只用于推荐：
+
+- 检测到反向代理候选项：默认推荐 `admin-service-install`
+- 没检测到反向代理候选项：默认推荐 `admin-service-install-public`
+
+检测到“已安装反向代理”不代表已经为本项目配置好了站点，所以脚本不会静默替你决定；
+它会列出候选项并让你选择 `1/2/3`。
+
 如果服务器没有 Node.js 18+，Linux 脚本会询问是否下载项目本地 Node.js 到
 `.svsk-tools/`。非交互部署可在 `.env` 中设置 `SVSK_AUTO_INSTALL_NODE=true`，
 下载源默认优先使用 `https://npmmirror.com/mirrors/node`，再回退到 `https://nodejs.org/dist`。

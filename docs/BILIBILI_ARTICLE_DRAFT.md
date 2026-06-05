@@ -52,6 +52,9 @@ sudo ./scripts/sdv-server.sh admin-service-install
 
 再把域名反向代理到 `http://127.0.0.1:8088`。
 
+交互式 `setup` 会检测 1Panel、Nginx、Caddy、Traefik 等候选项并给出推荐，但不会
+静默替你决定，因为“安装了反代”不等于“已经为这个项目配置好了站点”。
+
 ## Docker Hub 下载失败怎么办
 
 国内云服务器经常会遇到 Docker Hub 下载很慢或超时，尤其是阿里云、腾讯云等公网环境。

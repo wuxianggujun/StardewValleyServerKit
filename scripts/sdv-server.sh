@@ -1306,6 +1306,53 @@ show_access_info() {
   warn "VNC passwords, API keys, and admin tokens are stored in .env and are not printed here."
 }
 
+detect_reverse_proxy_candidates() {
+  local unit active docker_lines
+
+  if command -v systemctl >/dev/null 2>&1; then
+    for unit in 1panel.service nginx.service openresty.service caddy.service traefik.service; do
+      if systemctl list-unit-files "$unit" --no-pager --no-legend 2>/dev/null | grep -q .; then
+        active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+        printf 'systemd:%s (%s)\n' "$unit" "${active:-unknown}"
+      fi
+    done
+  fi
+
+  command -v 1pctl >/dev/null 2>&1 && printf '%s\n' "command:1pctl"
+  command -v nginx >/dev/null 2>&1 && printf '%s\n' "command:nginx"
+  command -v openresty >/dev/null 2>&1 && printf '%s\n' "command:openresty"
+  command -v caddy >/dev/null 2>&1 && printf '%s\n' "command:caddy"
+  command -v traefik >/dev/null 2>&1 && printf '%s\n' "command:traefik"
+  [[ -d /opt/1panel ]] && printf '%s\n' "path:/opt/1panel"
+
+  if command -v docker >/dev/null 2>&1; then
+    docker_lines="$(
+      docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null \
+        | grep -E -i '(1panel|nginx|openresty|caddy|traefik|nginx-proxy-manager)' \
+        || true
+    )"
+    if [[ -n "$docker_lines" ]]; then
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && printf 'docker:%s\n' "$line"
+      done <<<"$docker_lines"
+    fi
+  fi
+}
+
+show_admin_service_recommendation() {
+  local findings="$1"
+  if [[ -n "$findings" ]]; then
+    step "Reverse proxy detection"
+    printf '%s\n' "$findings" | sed 's/^/- /'
+    warn "Detected reverse proxy candidates. This does not prove a site is already configured for this project."
+    warn "Recommended default: reverse-proxy mode on 127.0.0.1:8088."
+  else
+    step "Reverse proxy detection"
+    warn "No Nginx, 1Panel, Caddy, Traefik, or reverse-proxy container was detected."
+    warn "Recommended default: direct public mode on 0.0.0.0:8088."
+  fi
+}
+
 prompt_admin_panel_after_setup() {
   if ! ensure_node_available 1; then
     return 0
@@ -1320,14 +1367,43 @@ prompt_admin_panel_after_setup() {
   local answer
   step "Optional web admin panel"
   if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] && [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-    read -r -p "Install web admin as a public systemd service for direct browser access? This opens ADMIN_PORT over HTTP and still requires ADMIN_TOKEN. [y/N]: " answer
-    case "$answer" in
-      y|Y|yes|YES)
-        admin_service_install public
+    local findings recommended
+    findings="$(detect_reverse_proxy_candidates | sort -u)"
+    show_admin_service_recommendation "$findings"
+    if [[ -n "$findings" ]]; then
+      recommended="proxy"
+    else
+      recommended="public"
+    fi
+
+    if [[ "$recommended" == "proxy" ]]; then
+      printf '%s\n' '1) Install reverse-proxy mode on 127.0.0.1:8088 (recommended)'
+      printf '%s\n' '2) Install direct public mode on 0.0.0.0:8088'
+    else
+      printf '%s\n' '1) Install direct public mode on 0.0.0.0:8088 (recommended)'
+      printf '%s\n' '2) Install reverse-proxy mode on 127.0.0.1:8088'
+    fi
+    printf '%s\n' '3) Skip systemd admin service'
+    read -r -p "Choose admin panel mode [1/2/3]: " answer
+    case "${answer:-1}" in
+      1)
+        if [[ "$recommended" == "proxy" ]]; then
+          admin_service_install
+        else
+          admin_service_install public
+        fi
+        return 0
+        ;;
+      2)
+        if [[ "$recommended" == "proxy" ]]; then
+          admin_service_install public
+        else
+          admin_service_install
+        fi
         return 0
         ;;
       *)
-        warn "Skipped public admin service. For reverse proxy mode, run: sudo ./scripts/sdv-server.sh admin-service-install"
+        warn "Skipped systemd admin service."
         ;;
     esac
   elif [[ "$(uname -s)" == "Linux" ]] && command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then

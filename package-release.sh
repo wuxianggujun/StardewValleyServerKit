@@ -318,6 +318,10 @@ brief interruption of other Docker containers. The script restores the original
 server without reverse proxy; open TCP 8088 in the cloud security group and
 visit \`http://<server-public-ip>:8088\`.
 
+Interactive Linux setup detects common reverse proxy candidates and recommends a
+mode, but still asks the user to choose because installed reverse proxy software
+does not prove a site is configured for this project.
+
 If the server has no Node.js 18+, the Linux script can download a project-local
 Node.js runtime into \`.svsk-tools/\`. Interactive runs ask first; non-interactive
 runs can set \`SVSK_AUTO_INSTALL_NODE=true\`.

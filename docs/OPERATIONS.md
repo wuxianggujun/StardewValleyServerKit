@@ -91,6 +91,12 @@ sudo ./scripts/sdv-server.sh admin-service-install-public
 `8088/tcp`，然后访问 `http://<server-public-ip>:8088`。登录页使用 `.env`
 里的 `ADMIN_TOKEN`。
 
+交互式 Linux root 执行 `setup` 结束后，脚本会检测 `1Panel`、`nginx`、
+`openresty`、`caddy`、`traefik`、`nginx-proxy-manager` 等 systemd 服务、
+命令、常见目录或 Docker 容器。检测结果只用于推荐：检测到反向代理候选项时默认推荐
+`admin-service-install`，否则默认推荐 `admin-service-install-public`。检测到反向代理
+不代表已经为本项目配置好站点，所以脚本仍会让用户选择 `1/2/3`。
+
 如果服务器没有 Node.js 18+，Linux 脚本会询问是否下载项目本地 Node.js 到
 `.svsk-tools/`。非交互部署可在 `.env` 中设置 `SVSK_AUTO_INSTALL_NODE=true`。
 
