@@ -297,7 +297,8 @@ $files = @(
 foreach ($file in $files) {
   $tokens = $null
   $errors = $null
-  [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+  $source = [System.IO.File]::ReadAllText((Resolve-Path $file), [System.Text.Encoding]::UTF8)
+  [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors) | Out-Null
   if ($errors.Count -gt 0) {
     $errors | ForEach-Object { Write-Host $_.Message }
     exit 1

@@ -38,6 +38,9 @@ Windows：
 .\setup.ps1 start
 .\setup.ps1 stop
 .\setup.ps1 restart
+.\setup.ps1 update
+.\setup.ps1 self-update
+.\setup.ps1 full-update
 .\setup.ps1 backup
 .\setup.ps1 admin
 .\setup.ps1 admin-token-show
@@ -57,6 +60,9 @@ Linux / macOS：
 ./scripts/sdv-server.sh start
 ./scripts/sdv-server.sh stop
 ./scripts/sdv-server.sh restart
+./scripts/sdv-server.sh update
+./scripts/sdv-server.sh self-update
+./scripts/sdv-server.sh full-update
 ./scripts/sdv-server.sh backup
 ./scripts/sdv-server.sh admin
 ./scripts/sdv-server.sh admin-detect
@@ -235,11 +241,36 @@ Linux / macOS：
 SteamCMD 备用流程也可能触发 Steam Guard。验证码必须输入到运行
 SteamCMD 或 `docker attach` 的本机终端里，不要发送到聊天、Issue 或截图。
 
-## 更新镜像
+## 更新脚本和镜像
 
 ```powershell
 .\setup.ps1 update
 ```
+
+`update` 只更新 Docker 镜像并重启服务端，不会更新 `setup.sh`、`setup.ps1`、
+`scripts/` 或网页管理面板源码。
+
+如果服务器目录是 Git 部署，可以单独更新项目脚本和网页管理面板：
+
+```powershell
+.\setup.ps1 self-update
+```
+
+也可以执行完整更新，先快进更新项目源码，再拉取镜像并重启：
+
+```powershell
+.\setup.ps1 full-update
+```
+
+Linux 菜单里对应：
+
+- `16) 仅更新镜像并重启`
+- `19) 更新项目脚本 / 管理面板`
+- `20) 完整更新：脚本、镜像并重启`
+
+`self-update` / `source-update` 会使用当前 Git 分支的上游分支做
+`git fetch` 和 `git merge --ff-only`。更新前会备份 `.env` 到 `backups/`，
+并且在检测到受 Git 管理的文件有本地修改时停止，不会强制覆盖本地改动。
 
 更新前建议：
 
@@ -248,7 +279,7 @@ SteamCMD 或 `docker attach` 的本机终端里，不要发送到聊天、Issue 
 3. 执行 `.\setup.ps1 backup` 备份存档。
 4. 记录当前 `IMAGE_VERSION`。
 
-如果更新后异常，回退 `.env` 中的 `IMAGE_VERSION` 后重启。
+如果只是镜像更新后异常，回退 `.env` 中的 `IMAGE_VERSION` 后重启。
 
 ## 添加 Mod
 

@@ -70,9 +70,11 @@ menu_text() {
     en:token_rotate) printf 'Rotate web admin token' ;;
     en:join_info) printf 'Show join info' ;;
     en:backup) printf 'Backup saves' ;;
-    en:update) printf 'Update images and restart' ;;
+    en:update) printf 'Update images only and restart' ;;
     en:create_save) printf 'Create new farm save' ;;
     en:language) printf 'Language / 语言' ;;
+    en:source_update) printf 'Update project scripts / admin panel' ;;
+    en:full_update) printf 'Full update: scripts, images, restart' ;;
     en:exit) printf 'Exit' ;;
     en:choose) printf 'Choose an option' ;;
     en:unknown) printf 'Unknown menu option' ;;
@@ -100,9 +102,11 @@ menu_text() {
     zh:token_rotate) printf '轮换网页管理 Token' ;;
     zh:join_info) printf '显示加入信息' ;;
     zh:backup) printf '备份存档' ;;
-    zh:update) printf '更新镜像并重启' ;;
+    zh:update) printf '仅更新镜像并重启' ;;
     zh:create_save) printf '创建新农场存档' ;;
     zh:language) printf '语言 / Language' ;;
+    zh:source_update) printf '更新项目脚本 / 管理面板' ;;
+    zh:full_update) printf '完整更新：脚本、镜像并重启' ;;
     zh:exit) printf '退出' ;;
     zh:choose) printf '请选择' ;;
     zh:unknown) printf '未知菜单选项' ;;
@@ -1629,6 +1633,87 @@ run_menu_action() {
   pause_menu
 }
 
+backup_env_before_source_update() {
+  [[ -f "$ENV_FILE" ]] || return 0
+
+  mkdir -p "$BACKUP_DIR"
+  local timestamp backup_file
+  timestamp="$(date +%Y%m%d-%H%M%S)"
+  backup_file="$BACKUP_DIR/env-before-source-update-$timestamp"
+  cp -p "$ENV_FILE" "$backup_file"
+  chmod 600 "$backup_file" 2>/dev/null || true
+  ok "Backed up .env to backups/${backup_file##*/}"
+}
+
+restart_admin_service_after_source_update() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  systemctl list-unit-files "$SYSTEMD_SERVICE_NAME" --no-legend 2>/dev/null | grep -q "$SYSTEMD_SERVICE_NAME" || return 0
+
+  if [[ "$(id -u)" != "0" ]]; then
+    warn "Web admin systemd service exists, but restarting it requires root. Run: sudo ./scripts/sdv-server.sh admin-service-restart"
+    return 0
+  fi
+
+  if systemctl is-active --quiet "$SYSTEMD_SERVICE_NAME"; then
+    step "Restarting web admin service"
+    systemctl restart "$SYSTEMD_SERVICE_NAME"
+    ok "Web admin service restarted"
+  else
+    warn "Web admin systemd service is installed but not active; skip restart."
+  fi
+}
+
+update_project_source() {
+  step "Updating project scripts / admin panel"
+  command -v git >/dev/null 2>&1 || die "未找到 git 命令。无法自动更新项目脚本。"
+
+  if ! git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    die "当前目录不是 Git 部署。请使用 git clone 部署，或下载新版发布包后手动替换项目文件。"
+  fi
+
+  local tracked_status upstream before after counts ahead behind
+  tracked_status="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=no)"
+  if [[ -n "$tracked_status" ]]; then
+    warn "检测到受 Git 管理文件有本地修改，自动更新已停止："
+    printf '%s\n' "$tracked_status" >&2
+    die "请先提交或处理这些本地修改，再重新运行 self-update/source-update。"
+  fi
+
+  if ! upstream="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"; then
+    warn "当前分支没有配置上游分支。当前远端如下："
+    git -C "$ROOT_DIR" remote -v || true
+    die "无法判断应该从哪个远端分支更新。请配置 upstream 后重试。"
+  fi
+
+  backup_env_before_source_update
+
+  before="$(git -C "$ROOT_DIR" rev-parse --short HEAD)"
+  step "Fetching latest project source from $upstream"
+  git -C "$ROOT_DIR" fetch --prune
+
+  counts="$(git -C "$ROOT_DIR" rev-list --left-right --count "HEAD...@{u}" 2>/dev/null || printf '0 0')"
+  ahead="${counts%%[[:space:]]*}"
+  behind="${counts##*[[:space:]]}"
+  if [[ "$ahead" != "0" && "$behind" != "0" ]]; then
+    die "当前分支与 $upstream 已分叉，不能安全快进更新。请人工处理后重试。"
+  fi
+  if [[ "$ahead" != "0" && "$behind" == "0" ]]; then
+    warn "当前本地分支比 $upstream 超前 $ahead 个提交；不会回退本地代码。"
+  fi
+
+  step "Applying fast-forward source update"
+  git -C "$ROOT_DIR" merge --ff-only '@{u}'
+
+  after="$(git -C "$ROOT_DIR" rev-parse --short HEAD)"
+  if [[ "$before" == "$after" ]]; then
+    ok "Project scripts already up to date: $after"
+  else
+    ok "Project scripts updated: $before -> $after"
+  fi
+
+  restart_admin_service_after_source_update
+}
+
 language_menu() {
   if ! interactive_terminal; then
     die "The language menu requires a TTY."
@@ -1686,6 +1771,8 @@ interactive_menu() {
     printf '16) %s\n' "$(menu_text update)"
     printf '17) %s\n' "$(menu_text create_save)"
     printf '18) %s\n' "$(menu_text language)"
+    printf '19) %s\n' "$(menu_text source_update)"
+    printf '20) %s\n' "$(menu_text full_update)"
     printf '0) %s\n\n' "$(menu_text exit)"
     read -r -p "$(menu_text choose): " choice
     case "$choice" in
@@ -1744,6 +1831,12 @@ interactive_menu() {
       18)
         language_menu
         pause_menu
+        ;;
+      19)
+        run_menu_action self-update
+        ;;
+      20)
+        run_menu_action full-update
         ;;
       0|q|Q|exit|quit)
         ok "$(menu_text bye)"
@@ -2503,8 +2596,17 @@ build_local_images() {
   fi
 }
 
+update_images_and_restart() {
+  ensure_env_file
+  step "Updating images and restarting"
+  compose_pull_checked "Pulling Docker images"
+  compose_checked "停止旧服务" down
+  start_server
+  show_access_info
+}
+
 case "$ACTION" in
-  menu|language|steam-config|access-info|admin|admin-public|admin-detect|admin-token-show|admin-token-rotate|admin-service-install|admin-service-install-public|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
+  menu|language|self-update|source-update|full-update|steam-config|access-info|admin|admin-public|admin-detect|admin-token-show|admin-token-rotate|admin-service-install|admin-service-install-public|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
     ;;
   doctor)
     step "Checking Docker"
@@ -2653,12 +2755,16 @@ case "$ACTION" in
     compose_checked "查看服务状态" ps
     ;;
   update)
-    ensure_env_file
-    step "Updating images and restarting"
-    compose_pull_checked "Pulling Docker images"
-    compose_checked "停止旧服务" down
-    start_server
-    show_access_info
+    update_images_and_restart
+    ;;
+  self-update|source-update)
+    update_project_source
+    ;;
+  full-update)
+    update_project_source
+    step "Checking Docker"
+    require_docker
+    update_images_and_restart
     ;;
   build-update)
     ensure_env_file
@@ -2735,6 +2841,6 @@ case "$ACTION" in
     admin_service_logs
     ;;
   *)
-    die "Unknown command: $ACTION. Available: menu/language/doctor/check-env/steam-config/access-info/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/create-save/join-info/admin/admin-public/admin-detect/admin-token-show/admin-token-rotate/admin-service-install/admin-service-install-public/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
+    die "Unknown command: $ACTION. Available: menu/language/doctor/check-env/steam-config/access-info/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/self-update/source-update/full-update/build-update/backup/create-save/join-info/admin/admin-public/admin-detect/admin-token-show/admin-token-rotate/admin-service-install/admin-service-install-public/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
     ;;
 esac

@@ -102,11 +102,17 @@ chmod +x ./setup.sh
 13) Rotate web admin token
 14) Show join info
 15) Backup saves
-16) Update images and restart
+16) Update images only and restart
+17) Create new farm save
+18) Language / 语言
+19) Update project scripts / admin panel
+20) Full update: scripts, images, restart
 0) Exit
 ```
 
 新手第一次部署只需要关注 1、2、3、8、9、11、12、14。
+后续维护时，菜单 16 只更新 Docker 镜像；菜单 19 更新脚本和网页管理面板源码；
+菜单 20 会先更新脚本，再更新镜像并重启服务端。
 
 ## 第四步：填写 Steam 账号密码
 
@@ -389,6 +395,16 @@ http://<服务器公网IP>:8088
 ### 重启 Web 面板后游戏配置没生效
 
 `sdv-admin.service` 只是网页面板。游戏配置、Mod、端口、人数、存档切换通常需要重启游戏服务端。
+
+### 更新脚本和更新镜像有什么区别
+
+菜单 16 只执行 Docker 镜像拉取和服务端重启，适合镜像发布了新版本时使用。
+
+菜单 19 会从当前 Git 上游分支快进更新项目脚本和网页管理面板。它会先备份 `.env`，
+并且在检测到受 Git 管理的文件有本地修改时停止，不会强制覆盖用户改动。
+
+菜单 20 是完整更新：先执行菜单 19 的脚本更新，再执行菜单 16 的镜像更新和重启。
+如果你想拿到新菜单、新网页功能和新镜像，优先使用菜单 20。
 
 ### 想离线上传镜像
 

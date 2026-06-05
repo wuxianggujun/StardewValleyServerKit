@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("menu", "language", "doctor", "check-env", "steam-config", "access-info", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "create-save", "join-info", "admin", "admin-public", "admin-detect", "admin-token-show", "admin-token-rotate", "admin-service-install", "admin-service-install-public", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
+    [ValidateSet("menu", "language", "doctor", "check-env", "steam-config", "access-info", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "self-update", "source-update", "full-update", "build-update", "backup", "create-save", "join-info", "admin", "admin-public", "admin-detect", "admin-token-show", "admin-token-rotate", "admin-service-install", "admin-service-install-public", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
     [string]$Action = "setup",
 
     [string]$SteamUsername,
@@ -24,8 +24,14 @@ if (-not $PSBoundParameters.ContainsKey("Action") -and $PSBoundParameters.Count 
     $Action = "menu"
 }
 
-$RootDir = Split-Path -Parent $PSScriptRoot
-$ScriptSelf = Join-Path $PSScriptRoot "sdv-server.ps1"
+$ScriptRoot = if ($env:SVSK_POWERSHELL_SCRIPT_ROOT) {
+    $env:SVSK_POWERSHELL_SCRIPT_ROOT
+}
+else {
+    $PSScriptRoot
+}
+$RootDir = Split-Path -Parent $ScriptRoot
+$ScriptSelf = Join-Path $RootDir "setup.ps1"
 $EnvFile = Join-Path $RootDir ".env"
 $EnvExampleFile = Join-Path $RootDir ".env.example"
 $BuildComposeExampleFile = Join-Path $RootDir "docker-compose.build.yml.example"
@@ -92,9 +98,11 @@ function Get-MenuText {
         "en:token_rotate" { "Rotate web admin token"; break }
         "en:join_info" { "Show join info"; break }
         "en:backup" { "Backup saves"; break }
-        "en:update" { "Update images and restart"; break }
+        "en:update" { "Update images only and restart"; break }
         "en:create_save" { "Create new farm save"; break }
         "en:language" { "Language / 语言"; break }
+        "en:source_update" { "Update project scripts / admin panel"; break }
+        "en:full_update" { "Full update: scripts, images, restart"; break }
         "en:exit" { "Exit"; break }
         "en:choose" { "Choose an option"; break }
         "en:unknown" { "Unknown menu option"; break }
@@ -122,9 +130,11 @@ function Get-MenuText {
         "zh:token_rotate" { "轮换网页管理 Token"; break }
         "zh:join_info" { "显示加入信息"; break }
         "zh:backup" { "备份存档"; break }
-        "zh:update" { "更新镜像并重启"; break }
+        "zh:update" { "仅更新镜像并重启"; break }
         "zh:create_save" { "创建新农场存档"; break }
         "zh:language" { "语言 / Language"; break }
+        "zh:source_update" { "更新项目脚本 / 管理面板"; break }
+        "zh:full_update" { "完整更新：脚本、镜像并重启"; break }
         "zh:exit" { "退出"; break }
         "zh:choose" { "请选择"; break }
         "zh:unknown" { "未知菜单选项"; break }
@@ -1226,7 +1236,7 @@ function Invoke-CreateSaveCli {
         $env:SVSK_LANG = $configuredLang
     }
 
-    $cliScript = Join-Path $PSScriptRoot "admin-panel\create-save-cli.js"
+    $cliScript = Join-Path $ScriptRoot "admin-panel\create-save-cli.js"
     $args = @()
     if ($FarmName) {
         $args += "--farm-name"
@@ -1454,6 +1464,8 @@ function Invoke-InteractiveMenu {
         Write-Host ("16) {0}" -f (Get-MenuText "update"))
         Write-Host ("17) {0}" -f (Get-MenuText "create_save"))
         Write-Host ("18) {0}" -f (Get-MenuText "language"))
+        Write-Host ("19) {0}" -f (Get-MenuText "source_update"))
+        Write-Host ("20) {0}" -f (Get-MenuText "full_update"))
         Write-Host ("0) {0}" -f (Get-MenuText "exit"))
         Write-Host ""
 
@@ -1483,6 +1495,8 @@ function Invoke-InteractiveMenu {
                 Invoke-LanguageMenu
                 Pause-Menu
             }
+            "19" { Invoke-MenuAction "self-update" }
+            "20" { Invoke-MenuAction "full-update" }
             { $_ -in @("0", "q", "Q", "exit", "quit") } {
                 Write-Ok (Get-MenuText "bye")
                 return
@@ -1659,7 +1673,7 @@ function Invoke-NativeVncProxy {
     Assert-Command "node"
     Assert-Command "docker"
 
-    $proxyScript = Join-Path $PSScriptRoot "vnc-proxy.js"
+    $proxyScript = Join-Path $ScriptRoot "vnc-proxy.js"
     if (-not (Test-Path $proxyScript)) {
         Write-ErrorExit "VNC proxy script not found: $proxyScript"
     }
@@ -1676,7 +1690,7 @@ function Invoke-AdminPanel {
 
     Assert-Command "node"
 
-    $adminScript = Join-Path $PSScriptRoot "admin-panel.js"
+    $adminScript = Join-Path $ScriptRoot "admin-panel.js"
     if (-not (Test-Path $adminScript)) {
         Write-ErrorExit "Admin panel script not found: $adminScript"
     }
@@ -2468,6 +2482,104 @@ function Invoke-LocalImageBuild {
     Invoke-BuildCompose build @services
 }
 
+function Backup-EnvBeforeSourceUpdate {
+    if (-not (Test-Path $EnvFile)) {
+        return
+    }
+
+    New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $backupFile = Join-Path $BackupDir "env-before-source-update-$timestamp"
+    Copy-Item -LiteralPath $EnvFile -Destination $backupFile -Force
+    $isWindowsHost = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    if (-not $isWindowsHost) {
+        try {
+            & chmod 600 $backupFile 2>$null
+        }
+        catch {
+        }
+    }
+    Write-Ok ("Backed up .env to backups/{0}" -f (Split-Path -Leaf $backupFile))
+}
+
+function Invoke-ProjectSourceUpdate {
+    Write-Step "Updating project scripts / admin panel"
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-ErrorExit "Command not found: git. Cannot update project scripts automatically."
+    }
+
+    Push-Location $RootDir
+    try {
+        & git rev-parse --is-inside-work-tree *> $null
+        if ($LASTEXITCODE -ne 0) {
+            Write-ErrorExit "This directory is not a Git deployment. Use git clone, or download a newer release package and replace project files manually."
+        }
+
+        $trackedStatus = & git status --porcelain --untracked-files=no
+        if ($LASTEXITCODE -ne 0) {
+            Write-ErrorExit "Failed to inspect Git working tree."
+        }
+        if ($trackedStatus) {
+            Write-Warn "Git-tracked files have local changes; automatic update stopped:"
+            $trackedStatus | ForEach-Object { Write-Host $_ }
+            Write-ErrorExit "Commit or handle these local changes, then rerun self-update/source-update."
+        }
+
+        $upstream = & git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $upstream) {
+            Write-Warn "Current branch has no upstream. Current remotes:"
+            & git remote -v
+            Write-ErrorExit "Cannot decide which remote branch to update from. Configure upstream and retry."
+        }
+
+        Backup-EnvBeforeSourceUpdate
+
+        $before = (& git rev-parse --short HEAD).Trim()
+        Write-Step "Fetching latest project source from $upstream"
+        & git fetch --prune
+        if ($LASTEXITCODE -ne 0) {
+            Write-ErrorExit "git fetch failed."
+        }
+
+        $counts = (& git rev-list --left-right --count "HEAD...@{u}").Trim() -split "\s+"
+        $ahead = if ($counts.Count -ge 1) { $counts[0] } else { "0" }
+        $behind = if ($counts.Count -ge 2) { $counts[1] } else { "0" }
+        if ($ahead -ne "0" -and $behind -ne "0") {
+            Write-ErrorExit "Current branch diverged from $upstream; fast-forward update is not safe. Resolve manually and retry."
+        }
+        if ($ahead -ne "0" -and $behind -eq "0") {
+            Write-Warn "Local branch is $ahead commit(s) ahead of $upstream; the script will not roll it back."
+        }
+
+        Write-Step "Applying fast-forward source update"
+        & git merge --ff-only "@{u}"
+        if ($LASTEXITCODE -ne 0) {
+            Write-ErrorExit "git merge --ff-only failed."
+        }
+
+        $after = (& git rev-parse --short HEAD).Trim()
+        if ($before -eq $after) {
+            Write-Ok "Project scripts already up to date: $after"
+        }
+        else {
+            Write-Ok "Project scripts updated: $before -> $after"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Invoke-ImagesUpdateAndRestart {
+    Ensure-EnvFile
+    Write-Step "Updating images and restarting"
+    Invoke-ComposePullWithDiagnostics
+    Invoke-ComposeWithDiagnostics -Operation "Stopping server" -ComposeArgs @("down")
+    $upArgs = Get-UpArgs
+    Invoke-ComposeUpWithDiagnostics -UpArgs $upArgs
+    Show-AccessInfo
+}
+
 $dockerRequiredActions = @(
     "doctor", "check-env", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup",
     "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status",
@@ -2668,13 +2780,19 @@ switch ($Action) {
         Invoke-ComposeWithDiagnostics -Operation "Showing container status" -ComposeArgs @("ps")
     }
     "update" {
-        Ensure-EnvFile
-        Write-Step "Updating images and restarting"
-        Invoke-ComposePullWithDiagnostics
-        Invoke-ComposeWithDiagnostics -Operation "Stopping server" -ComposeArgs @("down")
-        $upArgs = Get-UpArgs
-        Invoke-ComposeUpWithDiagnostics -UpArgs $upArgs
-        Show-AccessInfo
+        Invoke-ImagesUpdateAndRestart
+    }
+    "self-update" {
+        Invoke-ProjectSourceUpdate
+    }
+    "source-update" {
+        Invoke-ProjectSourceUpdate
+    }
+    "full-update" {
+        Invoke-ProjectSourceUpdate
+        Write-Step "Checking Docker"
+        Assert-Docker
+        Invoke-ImagesUpdateAndRestart
     }
     "build-update" {
         Ensure-EnvFile

@@ -112,4 +112,15 @@ http://<服务器公网IP>:8088
 ./setup.sh admin-token-show
 ```
 
+更新入口分三种：
+
+```bash
+./setup.sh update       # 只更新 Docker 镜像并重启
+./setup.sh self-update  # 只更新项目脚本 / 网页管理面板
+./setup.sh full-update  # 先更新脚本，再更新镜像并重启
+```
+
+`self-update` 和 `full-update` 只适用于 Git 部署目录。它们会先备份 `.env`，
+并使用当前分支上游做快进更新；如果检测到受 Git 管理的文件有本地修改，会停止而不是强制覆盖。
+
 不要在这个普通用户发布包里执行 `setup-build`。本地构建和镜像发布请看源码仓库里的 docs/DEVELOPER_GUIDE.md。
