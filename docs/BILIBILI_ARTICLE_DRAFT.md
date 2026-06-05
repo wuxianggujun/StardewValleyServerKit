@@ -13,7 +13,13 @@ chmod +x ./setup.sh
 ./setup.sh
 ```
 
-脚本会自动完成这些事情：
+现在 `./setup.sh` 默认会弹出菜单，普通用户按顺序选择即可：
+
+1. 先选择 `Fill or update Steam username/password`，输入 Steam 账号密码。
+2. 再选择 `One-click setup / deploy / repair`，开始拉镜像、登录、下载和启动。
+3. 后续维护可以继续用菜单里的启动、重启、日志、备份和管理面板选项。
+
+一键部署动作会自动完成这些事情：
 
 - 生成或检查 `.env` 配置文件。
 - 拉取服务端、Steam 服务和可选 Discord Bot 镜像。
@@ -88,7 +94,9 @@ Steam 账号，用来下载正版游戏文件。
 ## 常用命令
 
 ```bash
+./setup.sh menu
 ./setup.sh doctor
+./setup.sh steam-config
 ./setup.sh status
 ./setup.sh logs
 ./setup.sh restart

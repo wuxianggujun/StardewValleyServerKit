@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "join-info", "admin", "admin-public", "admin-detect", "admin-token-rotate", "admin-service-install", "admin-service-install-public", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
+    [ValidateSet("menu", "doctor", "check-env", "steam-config", "access-info", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "join-info", "admin", "admin-public", "admin-detect", "admin-token-rotate", "admin-service-install", "admin-service-install-public", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
     [string]$Action = "setup",
 
     [string]$SteamUsername,
@@ -14,7 +14,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if (-not $PSBoundParameters.ContainsKey("Action") -and $PSBoundParameters.Count -eq 0 -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    $Action = "menu"
+}
+
 $RootDir = Split-Path -Parent $PSScriptRoot
+$ScriptSelf = Join-Path $PSScriptRoot "sdv-server.ps1"
 $EnvFile = Join-Path $RootDir ".env"
 $EnvExampleFile = Join-Path $RootDir ".env.example"
 $BuildComposeExampleFile = Join-Path $RootDir "docker-compose.build.yml.example"
@@ -1128,6 +1133,140 @@ function Prompt-AdminPanelAfterSetup {
     }
 }
 
+function Invoke-SteamCredentialConfig {
+    Ensure-AdminEnvFile
+
+    Write-Step "Steam credentials"
+    Write-Host "Current STEAM_USERNAME: $(Test-SecretValue (Get-EnvValue 'STEAM_USERNAME'))"
+    Write-Host "Current STEAM_PASSWORD: $(Test-SecretValue (Get-EnvValue 'STEAM_PASSWORD'))"
+    Write-Warn "Values are saved to local .env and are not printed."
+
+    if ($SteamUsername) {
+        Set-EnvValue "STEAM_USERNAME" $SteamUsername
+        Write-Ok "STEAM_USERNAME updated in .env"
+    }
+    elseif (Test-InteractiveTerminal) {
+        $inputName = Read-Host "Steam username (leave blank to keep current)"
+        if ($inputName) {
+            Set-EnvValue "STEAM_USERNAME" $inputName
+            Write-Ok "STEAM_USERNAME updated in .env"
+        }
+    }
+
+    if ($SteamPassword) {
+        Set-EnvValue "STEAM_PASSWORD" $SteamPassword
+        Write-Ok "STEAM_PASSWORD updated in .env"
+    }
+    elseif (Test-InteractiveTerminal) {
+        $inputPassword = ConvertTo-PlainText (Read-Host "Steam password (hidden; leave blank to keep current)" -AsSecureString)
+        if ($inputPassword) {
+            Set-EnvValue "STEAM_PASSWORD" $inputPassword
+            Write-Ok "STEAM_PASSWORD updated in .env"
+        }
+    }
+
+    if (-not (Get-EnvValue "STEAM_USERNAME") -or -not (Get-EnvValue "STEAM_PASSWORD")) {
+        if (-not (Test-InteractiveTerminal) -and -not $SteamUsername -and -not $SteamPassword) {
+            Write-ErrorExit "steam-config needs an interactive terminal or -SteamUsername/-SteamPassword."
+        }
+        Write-Warn "Steam username or password is still missing. Fill both before login/download."
+    }
+    else {
+        Write-Ok "Steam credentials are configured."
+    }
+}
+
+function Pause-Menu {
+    if (Test-InteractiveTerminal) {
+        [void](Read-Host "Press Enter to return to the menu")
+    }
+}
+
+function Invoke-MenuAction {
+    param([string]$MenuAction)
+
+    $powerShellExe = ""
+    try {
+        $powerShellExe = (Get-Process -Id $PID).Path
+    }
+    catch {
+        $powerShellExe = ""
+    }
+    if (-not $powerShellExe) {
+        if ($PSVersionTable.PSEdition -eq "Core") {
+            $powerShellExe = "pwsh"
+        }
+        else {
+            $powerShellExe = "powershell.exe"
+        }
+    }
+
+    $childArgs = @("-NoProfile")
+    if ($PSVersionTable.PSEdition -eq "Desktop") {
+        $childArgs += @("-ExecutionPolicy", "Bypass")
+    }
+    $childArgs += @("-File", $ScriptSelf, $MenuAction)
+
+    & $powerShellExe @childArgs
+    Pause-Menu
+}
+
+function Invoke-InteractiveMenu {
+    if (-not (Test-InteractiveTerminal)) {
+        Write-ErrorExit "The interactive menu requires a terminal. Use '.\setup.ps1 setup' for non-interactive deployment."
+    }
+
+    while ($true) {
+        Write-Host ""
+        Write-Host "== Stardew Valley Server Kit =="
+        Write-Host ""
+        Write-Host "1) One-click setup / deploy / repair"
+        Write-Host "2) Fill or update Steam username/password"
+        Write-Host "3) Run Steam login / Guard verification"
+        Write-Host "4) Download or update game files"
+        Write-Host "5) Start server"
+        Write-Host "6) Restart server"
+        Write-Host "7) Stop server"
+        Write-Host "8) Show status"
+        Write-Host "9) Follow logs"
+        Write-Host "10) Web admin detect / recommendation"
+        Write-Host "11) Web admin install / start wizard"
+        Write-Host "12) Show join info"
+        Write-Host "13) Backup saves"
+        Write-Host "14) Update images and restart"
+        Write-Host "0) Exit"
+        Write-Host ""
+
+        $choice = Read-Host "Choose an option"
+        switch ($choice) {
+            "1" { Invoke-MenuAction "setup" }
+            "2" { Invoke-MenuAction "steam-config" }
+            "3" { Invoke-MenuAction "login" }
+            "4" { Invoke-MenuAction "download" }
+            "5" { Invoke-MenuAction "start" }
+            "6" { Invoke-MenuAction "restart" }
+            "7" { Invoke-MenuAction "stop" }
+            "8" { Invoke-MenuAction "status" }
+            "9" { Invoke-MenuAction "logs" }
+            "10" { Invoke-MenuAction "admin-detect" }
+            "11" {
+                Prompt-AdminPanelAfterSetup
+                Pause-Menu
+            }
+            "12" { Invoke-MenuAction "join-info" }
+            "13" { Invoke-MenuAction "backup" }
+            "14" { Invoke-MenuAction "update" }
+            { $_ -in @("0", "q", "Q", "exit", "quit") } {
+                Write-Ok "Bye"
+                return
+            }
+            default {
+                Write-Warn "Unknown menu option: $choice"
+            }
+        }
+    }
+}
+
 function Show-JoinInfo {
     if (-not (Test-Path $EnvFile)) {
         Write-Warn ".env does not exist. Showing default ports; run setup before starting the real server."
@@ -2091,6 +2230,9 @@ if ($dockerRequiredActions -contains $Action) {
 }
 
 switch ($Action) {
+    "menu" {
+        Invoke-InteractiveMenu
+    }
     "doctor" {
         Write-Step "Checking Docker Compose"
         $composeVersion = Invoke-DockerForDiagnostics -DockerArgs @("compose", "version") -SuppressOutput
@@ -2141,6 +2283,13 @@ switch ($Action) {
     "check-env" {
         Write-Step "Checking Steam credential visibility"
         Show-CredentialStatus
+    }
+    "steam-config" {
+        Invoke-SteamCredentialConfig
+    }
+    "access-info" {
+        Ensure-AdminEnvFile
+        Show-AccessInfo
     }
     "login" {
         Ensure-EnvFile

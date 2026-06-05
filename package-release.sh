@@ -286,6 +286,11 @@ chmod +x ./setup.sh
 ./setup.sh
 \`\`\`
 
+\`./setup.sh\` without arguments opens an interactive menu. Use option 2 to
+fill or update Steam username/password, then option 1 to run the one-click
+setup/deploy/repair flow. Steam passwords are saved only in local \`.env\` and
+are not printed.
+
 If Docker is missing, install Docker Engine with Compose v2 first. On Ubuntu/Debian, the short path is:
 
 \`\`\`bash
@@ -303,7 +308,10 @@ brief interruption of other Docker containers. The script restores the original
 ## Useful commands
 
 \`\`\`bash
+./setup.sh menu
 ./setup.sh doctor
+./setup.sh steam-config
+./setup.sh access-info
 ./setup.sh status
 ./setup.sh logs
 ./setup.sh restart

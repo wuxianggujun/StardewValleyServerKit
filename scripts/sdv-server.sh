@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ACTION="${1:-setup}"
+if [[ $# -gt 0 ]]; then
+  ACTION="$1"
+elif [[ -t 0 && -t 1 ]]; then
+  ACTION="menu"
+else
+  ACTION="setup"
+fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT_DIR/.env"
 ENV_EXAMPLE_FILE="$ROOT_DIR/.env.example"
@@ -1239,6 +1245,38 @@ ensure_env_file() {
   fi
 }
 
+configure_steam_credentials() {
+  ensure_admin_env_file
+
+  local steam_username steam_password has_username has_password
+  has_username="$([[ -n "$(get_env_value STEAM_USERNAME)" ]] && printf set || printf missing)"
+  has_password="$([[ -n "$(get_env_value STEAM_PASSWORD)" ]] && printf set || printf missing)"
+
+  step "Steam credentials"
+  printf 'Current STEAM_USERNAME: %s\n' "$has_username"
+  printf 'Current STEAM_PASSWORD: %s\n' "$has_password"
+  warn "Values are saved to local .env and are not printed."
+
+  read -r -p "Steam username (leave blank to keep current): " steam_username
+  if [[ -n "$steam_username" ]]; then
+    set_env_value STEAM_USERNAME "$steam_username"
+    ok "STEAM_USERNAME updated in .env"
+  fi
+
+  read -r -s -p "Steam password (hidden; leave blank to keep current): " steam_password
+  printf '\n'
+  if [[ -n "$steam_password" ]]; then
+    set_env_value STEAM_PASSWORD "$steam_password"
+    ok "STEAM_PASSWORD updated in .env"
+  fi
+
+  if [[ -z "$(get_env_value STEAM_USERNAME)" || -z "$(get_env_value STEAM_PASSWORD)" ]]; then
+    warn "Steam username or password is still missing. Fill both before login/download."
+  else
+    ok "Steam credentials are configured."
+  fi
+}
+
 ensure_admin_env_file() {
   if [[ ! -f "$ENV_FILE" ]]; then
     cp "$ENV_EXAMPLE_FILE" "$ENV_FILE"
@@ -1420,6 +1458,102 @@ prompt_admin_panel_after_setup() {
       ok "Skipped admin panel. Run ./scripts/sdv-server.sh admin later when needed."
       ;;
   esac
+}
+
+pause_menu() {
+  interactive_terminal || return 0
+  local _
+  read -r -p "Press Enter to return to the menu..." _ || true
+}
+
+run_menu_action() {
+  local action="$1"
+  "$0" "$action"
+  pause_menu
+}
+
+interactive_menu() {
+  if ! interactive_terminal; then
+    die "The interactive menu requires a TTY. Use './setup.sh setup' for non-interactive deployment, or connect with ssh -t."
+  fi
+
+  local choice
+  while true; do
+    cat <<'MENU'
+
+== Stardew Valley Server Kit ==
+
+1) One-click setup / deploy / repair
+2) Fill or update Steam username/password
+3) Run Steam login / Guard verification
+4) Download or update game files
+5) Start server
+6) Restart server
+7) Stop server
+8) Show status
+9) Follow logs
+10) Web admin detect / recommendation
+11) Web admin install / start wizard
+12) Show join info
+13) Backup saves
+14) Update images and restart
+0) Exit
+
+MENU
+    read -r -p "Choose an option: " choice
+    case "$choice" in
+      1)
+        run_menu_action setup
+        ;;
+      2)
+        run_menu_action steam-config
+        ;;
+      3)
+        run_menu_action login
+        ;;
+      4)
+        run_menu_action download
+        ;;
+      5)
+        run_menu_action start
+        ;;
+      6)
+        run_menu_action restart
+        ;;
+      7)
+        run_menu_action stop
+        ;;
+      8)
+        run_menu_action status
+        ;;
+      9)
+        "$0" logs
+        ;;
+      10)
+        run_menu_action admin-detect
+        ;;
+      11)
+        prompt_admin_panel_after_setup
+        pause_menu
+        ;;
+      12)
+        run_menu_action join-info
+        ;;
+      13)
+        run_menu_action backup
+        ;;
+      14)
+        run_menu_action update
+        ;;
+      0|q|Q|exit|quit)
+        ok "Bye"
+        return 0
+        ;;
+      *)
+        warn "Unknown menu option: $choice"
+        ;;
+    esac
+  done
 }
 
 test_tcp_port() {
@@ -2170,7 +2304,7 @@ build_local_images() {
 }
 
 case "$ACTION" in
-  admin|admin-public|admin-detect|admin-token-rotate|admin-service-install|admin-service-install-public|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
+  menu|steam-config|access-info|admin|admin-public|admin-detect|admin-token-rotate|admin-service-install|admin-service-install-public|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
     ;;
   doctor)
     step "Checking Docker"
@@ -2183,6 +2317,9 @@ case "$ACTION" in
 esac
 
 case "$ACTION" in
+  menu)
+    interactive_menu
+    ;;
   doctor)
     step "Checking Docker Compose"
     require_docker_compose
@@ -2217,6 +2354,13 @@ case "$ACTION" in
     else
       printf 'WARN .env does not exist\n'
     fi
+    ;;
+  steam-config)
+    configure_steam_credentials
+    ;;
+  access-info)
+    ensure_admin_env_file
+    show_access_info
     ;;
   setup)
     step "Preparing .env"
@@ -2378,6 +2522,6 @@ case "$ACTION" in
     admin_service_logs
     ;;
   *)
-    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-detect/admin-token-rotate/admin-service-install/admin-service-install-public/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
+    die "Unknown command: $ACTION. Available: menu/doctor/check-env/steam-config/access-info/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-detect/admin-token-rotate/admin-service-install/admin-service-install-public/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
     ;;
 esac

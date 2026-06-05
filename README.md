@@ -109,7 +109,12 @@ cd <repo-root>
 .\setup.ps1
 ```
 
-脚本会完成：
+无参数运行会进入交互菜单。普通用户只需要按菜单选择操作，例如先选择
+`Fill or update Steam username/password` 写入 Steam 账号密码，再选择
+`One-click setup / deploy / repair` 完成部署。脚本只把凭据保存到本机 `.env`，
+不会打印密码或验证码。
+
+一键部署动作会完成：
 
 - 生成本地 `.env`
 - 自动生成 VNC 密码和 API Key
@@ -127,6 +132,10 @@ chmod +x ./setup.sh
 ./setup.sh
 ```
 
+Linux / macOS 同样是无参数进入菜单。需要自动化或写进文档时，也可以继续使用
+参数式直达命令，例如 `./setup.sh setup`、`./setup.sh steam-config`、
+`./setup.sh status`。
+
 如果 Linux 服务器访问 Docker Hub 很慢或超时，`setup.sh` 会先按正常方式拉取镜像；
 确认失败后，会在终端里询问是否临时配置 Docker 镜像加速地址并重启 Docker。
 只有输入 `yes` 才会继续。脚本会在镜像下载完成后恢复原来的
@@ -140,8 +149,11 @@ chmod +x ./setup.sh
 Windows：
 
 ```powershell
+.\setup.ps1 menu
 .\setup.ps1 doctor
 .\setup.ps1 check-env
+.\setup.ps1 steam-config
+.\setup.ps1 access-info
 .\setup.ps1 login
 .\setup.ps1 download
 .\setup.ps1 steamcmd-download
@@ -220,8 +232,11 @@ Steam Directory API 不可达，可以在 `.env` 中配置 `HTTP_PROXY`、`HTTPS
 Linux / macOS：
 
 ```bash
+./scripts/sdv-server.sh menu
 ./scripts/sdv-server.sh doctor
 ./scripts/sdv-server.sh check-env
+./scripts/sdv-server.sh steam-config
+./scripts/sdv-server.sh access-info
 ./scripts/sdv-server.sh login
 ./scripts/sdv-server.sh download
 ./scripts/sdv-server.sh steamcmd-download
