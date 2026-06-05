@@ -30,6 +30,36 @@ cd /opt/stardew-valley-server-kit
 
 如果用户不输入 `yes`，脚本不会重启 Docker，也不会自动修改 Docker daemon 配置。
 
+## 裸服务器 Web 管理面板
+
+阿里云新服务器可能没有 Nginx、1Panel 或任何反向代理。此时不能要求用户先配置反代，
+应使用公网直连管理面板：
+
+```bash
+cd /opt/stardew-valley-server-kit
+sudo ./scripts/sdv-server.sh admin-service-install-public
+sudo ./scripts/sdv-server.sh admin-service-status
+```
+
+该模式会设置：
+
+```env
+ADMIN_HOST=0.0.0.0
+ADMIN_ALLOW_PUBLIC_HTTP=true
+```
+
+然后在阿里云安全组和服务器防火墙放行 `8088/tcp`，浏览器访问：
+
+```text
+http://139.196.225.211:8088
+```
+
+登录使用服务器 `.env` 中的 `ADMIN_TOKEN`。不要把该令牌写进文档、聊天或截图。
+
+注意：`http://139.196.225.211:8080` 是 JunimoServer HTTP API，不是网页登录页。
+直接访问 `8080` 返回 `Unauthorized. Provide a valid Authorization header: Bearer <api-key>`
+是 API 鉴权的正常结果。
+
 ## Docker 重启影响
 
 重启 Docker 会短暂影响同一台服务器上的其他 Docker 容器，例如 1Panel、数据库、

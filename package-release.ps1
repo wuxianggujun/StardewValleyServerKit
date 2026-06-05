@@ -238,6 +238,7 @@ This package must contain these build inputs:
 ./setup-build.sh update
 ./setup-build.sh join-info
 ./scripts/sdv-server.sh admin-service-install
+./scripts/sdv-server.sh admin-service-install-public
 ```
 '@
     }
@@ -288,7 +289,13 @@ brief interruption of other Docker containers. The script restores the original
 ./setup.sh update
 ./setup.sh join-info
 ./scripts/sdv-server.sh admin-service-install
+./scripts/sdv-server.sh admin-service-install-public
 ```
+
+`admin-service-install` is for Nginx/1Panel reverse proxy mode on
+`127.0.0.1:8088`. `admin-service-install-public` is for a bare public
+server without reverse proxy; open TCP 8088 in the cloud security group and
+visit `http://<server-public-ip>:8088`.
 
 Do not use setup-build in this package. Source-build packages are separate and include Dockerfile directories.
 '@

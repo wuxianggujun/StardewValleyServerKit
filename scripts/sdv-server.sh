@@ -1181,12 +1181,29 @@ prompt_admin_panel_after_setup() {
   fi
 
   if [[ ! -t 0 || ! -t 1 ]]; then
-    warn "Run ./scripts/sdv-server.sh admin later if you want to open the local web admin panel."
+    warn "Run ./scripts/sdv-server.sh admin-service-install-public later if this is a bare public server without Nginx or 1Panel."
+    warn "Run ./scripts/sdv-server.sh admin-service-install later if you will use Nginx or 1Panel reverse proxy."
     return 0
   fi
 
   local answer
   step "Optional web admin panel"
+  if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] && [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    read -r -p "Install web admin as a public systemd service for direct browser access? This opens ADMIN_PORT over HTTP and still requires ADMIN_TOKEN. [y/N]: " answer
+    case "$answer" in
+      y|Y|yes|YES)
+        admin_service_install public
+        return 0
+        ;;
+      *)
+        warn "Skipped public admin service. For reverse proxy mode, run: sudo ./scripts/sdv-server.sh admin-service-install"
+        ;;
+    esac
+  elif [[ "$(uname -s)" == "Linux" ]] && command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    warn "For a bare public server, run: sudo ./scripts/sdv-server.sh admin-service-install-public"
+    warn "For Nginx or 1Panel reverse proxy mode, run: sudo ./scripts/sdv-server.sh admin-service-install"
+  fi
+
   read -r -p "Start the local web admin panel now? This keeps this terminal open. [y/N]: " answer
   case "$answer" in
     y|Y|yes|YES)
@@ -1359,12 +1376,22 @@ EOF
 }
 
 admin_service_install() {
+  local mode="${1:-local}"
   require_linux_systemd_root
   ensure_admin_env_file
   command -v node >/dev/null 2>&1 || die "Command not found: node. Please install Node.js first."
 
-  set_env_value ADMIN_HOST "127.0.0.1"
   set_env_value ADMIN_PORT "$(env_or_default ADMIN_PORT 8088)"
+  if [[ "$mode" == "public" ]]; then
+    set_env_value ADMIN_HOST "0.0.0.0"
+    set_env_value ADMIN_ALLOW_PUBLIC_HTTP "true"
+    warn "Installing direct public admin panel mode."
+    warn "Open TCP ADMIN_PORT in the cloud security group only for trusted source IPs when possible."
+  else
+    set_env_value ADMIN_HOST "127.0.0.1"
+    set_env_value ADMIN_ALLOW_PUBLIC_HTTP "false"
+    warn "Installing reverse-proxy admin panel mode on 127.0.0.1."
+  fi
 
   step "Installing systemd admin service"
   admin_service_file >"/etc/systemd/system/$SYSTEMD_SERVICE_NAME"
@@ -1400,7 +1427,8 @@ admin_service_restart() {
 
 admin_service_status() {
   require_linux_systemd
-  local admin_port
+  local admin_host admin_port
+  admin_host="$(env_or_default ADMIN_HOST 127.0.0.1)"
   admin_port="$(env_or_default ADMIN_PORT 8088)"
 
   step "Admin service status"
@@ -1417,7 +1445,14 @@ admin_service_status() {
     warn "Read logs with: journalctl -u $SYSTEMD_SERVICE_NAME -n 100 --no-pager"
   fi
 
-  warn "For 1Panel reverse proxy, proxy to http://127.0.0.1:$admin_port"
+  if [[ "$admin_host" == "0.0.0.0" ]]; then
+    warn "Direct public admin URL: http://<server-public-ip>:$admin_port"
+    warn "Login with ADMIN_TOKEN from .env. The token is not printed here."
+    warn "Also allow TCP $admin_port in the cloud security group and server firewall."
+  else
+    warn "For Nginx or 1Panel reverse proxy, proxy to http://127.0.0.1:$admin_port"
+    warn "For a bare server without reverse proxy, run: sudo ./scripts/sdv-server.sh admin-service-install-public"
+  fi
 }
 
 admin_service_logs() {
@@ -1928,7 +1963,7 @@ build_local_images() {
 }
 
 case "$ACTION" in
-  admin|admin-public|admin-token-rotate|admin-service-install|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
+  admin|admin-public|admin-token-rotate|admin-service-install|admin-service-install-public|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
     ;;
   doctor)
     step "Checking Docker"
@@ -2108,6 +2143,9 @@ case "$ACTION" in
   admin-service-install)
     admin_service_install
     ;;
+  admin-service-install-public)
+    admin_service_install public
+    ;;
   admin-service-start)
     admin_service_start
     ;;
@@ -2124,6 +2162,6 @@ case "$ACTION" in
     admin_service_logs
     ;;
   *)
-    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-token-rotate/admin-service-install/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
+    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-token-rotate/admin-service-install/admin-service-install-public/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
     ;;
 esac

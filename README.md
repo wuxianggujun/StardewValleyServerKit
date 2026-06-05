@@ -242,6 +242,7 @@ Linux / macOS：
 ./scripts/sdv-server.sh admin
 ./scripts/sdv-server.sh admin-public
 ./scripts/sdv-server.sh admin-service-install
+./scripts/sdv-server.sh admin-service-install-public
 ./scripts/sdv-server.sh admin-service-start
 ./scripts/sdv-server.sh admin-service-stop
 ./scripts/sdv-server.sh admin-service-restart
@@ -355,8 +356,8 @@ dist/stardew-valley-server-kit-source-build-<version>.zip
 ## 访问入口
 
 - Web noVNC：`http://localhost:5800`
-- HTTP API：`http://localhost:8080`
-- Web 管理面板：本机 `http://127.0.0.1:8088`，公网服务器建议通过 1Panel 域名反代访问
+- HTTP API：`http://localhost:8080`，这是后端 API，不是网页登录页
+- Web 管理面板：`http://127.0.0.1:8088`；裸服务器公网直连是 `http://<server-public-ip>:8088`
 - 游戏 UDP 端口：`24642`
 - 查询 UDP 端口：`27015`
 
@@ -405,9 +406,26 @@ sudo ./scripts/sdv-server.sh admin-service-status
 sudo ./scripts/sdv-server.sh admin-service-logs
 ```
 
-systemd 模式默认监听 `127.0.0.1:8088`，再在 1Panel 里把
+systemd 常驻分两种模式：
+
+```bash
+# 有 Nginx / 1Panel / HTTPS 反向代理时使用，面板只监听本机
+sudo ./scripts/sdv-server.sh admin-service-install
+
+# 新买的裸服务器没有反向代理时使用，面板直接监听公网 8088
+sudo ./scripts/sdv-server.sh admin-service-install-public
+```
+
+`admin-service-install` 模式监听 `127.0.0.1:8088`，再在 1Panel 或 Nginx 里把
 `sdv.example.com` 反向代理到 `http://127.0.0.1:8088`。HTTPS 证书配置在
-1Panel 网站层，反代目标仍然使用 HTTP。首次启动会在 `.env` 中生成
+反向代理层，反代目标仍然使用 HTTP。
+
+`admin-service-install-public` 模式监听 `0.0.0.0:8088`，适合没有 Nginx、
+没有 1Panel 的新服务器。使用这个模式时，需要在云厂商安全组和服务器防火墙放行
+`8088/tcp`，然后访问 `http://<server-public-ip>:8088`。登录页使用 `.env`
+里的 `ADMIN_TOKEN`，脚本不会把令牌打印到终端或日志。
+
+首次启动会在 `.env` 中生成
 `ADMIN_TOKEN`，面板登录时从 `.env` 复制该值；终端和 systemd 日志不会打印完整令牌。管理面板可以查看
 容器健康状态、加入地址、在线玩家名称、最近日志，保存农场地图、人数、小屋数量、
 端口、进服密码、管理员 Steam64 ID 等配置，管理当前 saves volume 里的存档和备份，
@@ -417,12 +435,13 @@ systemd 模式默认监听 `127.0.0.1:8088`，再在 1Panel 里把
 面板右上角可以切换简体中文 / English。前端文案集中在
 `scripts/admin-panel/i18n.js`，新增语言时按现有 key 补齐一份字典即可。
 
-安全默认值会拒绝把 Web 管理面板以明文 HTTP 直接监听到公网地址。推荐保持
-`ADMIN_HOST=127.0.0.1`，由 1Panel 或其他 HTTPS 反向代理访问。如果只在可信内网
-临时直连 `0.0.0.0`，需要显式设置 `ADMIN_ALLOW_PUBLIC_HTTP=true`。
+安全默认值会拒绝把 Web 管理面板以明文 HTTP 直接监听到公网地址。推荐有条件时保持
+`ADMIN_HOST=127.0.0.1`，由 1Panel、Nginx 或其他 HTTPS 反向代理访问。裸服务器没有
+反向代理时，使用 `admin-service-install-public` 显式切换到公网直连模式。
 
-首次执行 `setup` 结束后，脚本会询问是否立即启动 Web 管理面板。选择 `y`
-会保持当前终端用于运行面板；跳过后也可以随时执行上面的 `admin` 命令再打开。
+首次执行 `setup` 结束后，交互式 Linux root 终端会先询问是否安装公网常驻管理面板；
+其他环境会询问是否以前台临时模式启动 Web 管理面板。前台模式选择 `y` 会保持当前终端
+用于运行面板；跳过后也可以随时执行上面的 `admin` 或 systemd 命令再打开。
 如果 `ADMIN_TOKEN` 已经泄露，执行：
 
 ```bash
@@ -431,7 +450,7 @@ sudo ./scripts/sdv-server.sh admin-service-restart
 ```
 
 保存配置不会热更新游戏进程。端口、人数、IP 直连等运行配置需要重启游戏服务端后生效；农场地图、农场名、初始小屋数量、利润比例只对新建农场生效。重启
-`sdv-admin.service` 只会重启网页面板，不会让 SMAPI 重新加载 Mod 或配置。要创建新地图，请在“存档管理”里点击“创建地图”，填写独立的新地图表单后确认开服；旧存档不会删除。要切换已有存档，请在“存档管理”里选择下次加载的存档，然后重启服务端。要删除单个可加载存档，请在“存档管理”里点击该存档的“删除”；面板会先自动备份整个 saves volume，再只删除选中的存档目录。恢复备份会覆盖整个 saves volume，面板会在恢复前自动创建一份当前状态备份。公网服务器优先只开放 80/443 给 1Panel；除非你明确需要直连管理端口，否则不要把 `ADMIN_PORT` 暴露到公网。
+`sdv-admin.service` 只会重启网页面板，不会让 SMAPI 重新加载 Mod 或配置。要创建新地图，请在“存档管理”里点击“创建地图”，填写独立的新地图表单后确认开服；旧存档不会删除。要切换已有存档，请在“存档管理”里选择下次加载的存档，然后重启服务端。要删除单个可加载存档，请在“存档管理”里点击该存档的“删除”；面板会先自动备份整个 saves volume，再只删除选中的存档目录。恢复备份会覆盖整个 saves volume，面板会在恢复前自动创建一份当前状态备份。有反向代理时公网服务器优先只开放 80/443；裸服务器直连模式需要开放 `ADMIN_PORT`，并使用 `.env` 的 `ADMIN_TOKEN` 登录。
 
 游戏本身会自动保存到 Docker saves volume；Web 管理面板的“备份”是额外导出的
 `backups/saves-*.tar.gz` 压缩包。可以在“存档管理”里开启自动备份，配置备份间隔
@@ -504,8 +523,9 @@ RealVNC 如果能看到画面但不能点击，先确认 Viewer 没有开启 `Vi
 - 日志中没有持续刷出的 `Callback dispatcher is not initialized`
 
 如果部署在公网服务器，需要在防火墙和云厂商安全组中放行对应端口。
-Web 管理面板建议通过 1Panel 站点反向代理访问，不直接开放 `8088/tcp`；
-公网玩家直连游戏时重点放行 `24642/udp` 和 `27015/udp`。
+裸服务器直连管理面板时放行 `8088/tcp`；有 Nginx/1Panel 时优先只开放
+`80/tcp` 和 `443/tcp` 给反向代理。公网玩家直连游戏时重点放行
+`24642/udp` 和 `27015/udp`。
 
 ## 配置说明
 
@@ -531,7 +551,7 @@ Web 管理面板建议通过 1Panel 站点反向代理访问，不直接开放 `
 - `API_KEY`：HTTP API 密钥。
 - `ADMIN_TOKEN`：Web 管理面板令牌。
 - `ADMIN_HOST` / `ADMIN_PORT`：Web 管理面板监听地址和端口。
-- `ADMIN_ALLOW_PUBLIC_HTTP`：是否允许管理面板明文 HTTP 监听非本机地址。默认关闭；公网建议走 HTTPS 反向代理。
+- `ADMIN_ALLOW_PUBLIC_HTTP`：是否允许管理面板明文 HTTP 监听非本机地址。默认关闭；`admin-service-install-public` 会显式开启它。
 - `SERVER_PASSWORD`：玩家进服后的登录密码，留空表示关闭。
 - `GAME_PORT` / `QUERY_PORT`：游戏连接和查询端口。
 - `AUTO_BACKUP_ENABLED`：是否由 Web 管理面板定时导出 saves volume 备份。

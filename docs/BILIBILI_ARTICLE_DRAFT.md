@@ -24,6 +24,31 @@ chmod +x ./setup.sh
 Steam 账号、密码、验证码都只应该输入到自己的终端里，不要发到聊天、评论区、Issue
 或截图里。
 
+## 没有 Nginx / 1Panel 怎么打开网页面板
+
+新买的裸服务器可以直接安装公网常驻管理面板：
+
+```bash
+sudo ./scripts/sdv-server.sh admin-service-install-public
+```
+
+然后在云厂商安全组和服务器防火墙放行 `8088/tcp`，浏览器访问：
+
+```text
+http://<服务器公网IP>:8088
+```
+
+登录使用服务器 `.env` 里的 `ADMIN_TOKEN`。`8080` 是服务端 HTTP API，不是网页登录页；
+直接用浏览器打开 `8080` 看到 `Unauthorized` 属于正常现象。
+
+如果已经有 Nginx、1Panel 或 HTTPS 反向代理，则使用更安全的本地监听模式：
+
+```bash
+sudo ./scripts/sdv-server.sh admin-service-install
+```
+
+再把域名反向代理到 `http://127.0.0.1:8088`。
+
 ## Docker Hub 下载失败怎么办
 
 国内云服务器经常会遇到 Docker Hub 下载很慢或超时，尤其是阿里云、腾讯云等公网环境。
@@ -74,7 +99,8 @@ RETRIES=5 ./scripts/sdv-server.sh steamcmd-download
 
 - 不要提交 `.env`。
 - 不要把 Steam 密码、Steam Guard 验证码、API Key 或管理令牌发给任何人。
-- 管理面板建议通过 1Panel 或 Nginx 反向代理走 HTTPS。
+- 有 Nginx/1Panel 时，管理面板建议通过反向代理走 HTTPS。
+- 没有反向代理的裸服务器，可以用 `admin-service-install-public` 直连 `8088`，但必须保护好 `ADMIN_TOKEN`。
 - 公网只放行必要端口，游戏端口按需求开放。
 - 修改 Mod 或升级镜像前先备份。
 
