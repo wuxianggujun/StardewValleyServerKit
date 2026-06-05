@@ -34,6 +34,90 @@ die() {
   exit 1
 }
 
+svsk_lang() {
+  local lang="${SVSK_LANG:-}"
+  if [[ -z "$lang" && -f "$ENV_FILE" ]]; then
+    lang="$(get_env_value SVSK_LANG || true)"
+  fi
+  case "${lang,,}" in
+    en|en-*|en_*)
+      printf 'en'
+      ;;
+    *)
+      printf 'zh'
+      ;;
+  esac
+}
+
+menu_text() {
+  local key="$1"
+  local lang
+  lang="$(svsk_lang)"
+  case "$lang:$key" in
+    en:title) printf 'Stardew Valley Server Kit' ;;
+    en:setup) printf 'One-click setup / deploy / repair' ;;
+    en:steam_config) printf 'Fill or update Steam username/password' ;;
+    en:login) printf 'Run Steam login / Guard verification' ;;
+    en:download) printf 'Download or update game files' ;;
+    en:start) printf 'Start server' ;;
+    en:restart) printf 'Restart server' ;;
+    en:stop) printf 'Stop server' ;;
+    en:status) printf 'Show status' ;;
+    en:logs) printf 'Follow logs' ;;
+    en:admin_detect) printf 'Web admin detect / recommendation' ;;
+    en:admin_wizard) printf 'Web admin wizard / proxy / token' ;;
+    en:token_show) printf 'Show web admin token' ;;
+    en:token_rotate) printf 'Rotate web admin token' ;;
+    en:join_info) printf 'Show join info' ;;
+    en:backup) printf 'Backup saves' ;;
+    en:update) printf 'Update images and restart' ;;
+    en:create_save) printf 'Create new farm save' ;;
+    en:language) printf 'Language / 语言' ;;
+    en:exit) printf 'Exit' ;;
+    en:choose) printf 'Choose an option' ;;
+    en:unknown) printf 'Unknown menu option' ;;
+    en:bye) printf 'Bye' ;;
+    en:pause) printf 'Press Enter to return to the menu...' ;;
+    en:language_title) printf 'Menu language' ;;
+    en:language_current) printf 'Current language' ;;
+    en:language_zh) printf 'Simplified Chinese' ;;
+    en:language_en) printf 'English' ;;
+    en:language_saved) printf 'Menu language saved' ;;
+    en:language_skipped) printf 'Skipped language change.' ;;
+    zh:title) printf '星露谷服务器套件' ;;
+    zh:setup) printf '一键安装 / 部署 / 修复' ;;
+    zh:steam_config) printf '填写或更新 Steam 用户名/密码' ;;
+    zh:login) printf '运行 Steam 登录 / Guard 验证' ;;
+    zh:download) printf '下载或更新游戏文件' ;;
+    zh:start) printf '启动服务端' ;;
+    zh:restart) printf '重启服务端' ;;
+    zh:stop) printf '停止服务端' ;;
+    zh:status) printf '查看状态' ;;
+    zh:logs) printf '跟随日志' ;;
+    zh:admin_detect) printf '网页管理面板检测 / 推荐' ;;
+    zh:admin_wizard) printf '网页管理面板向导 / 代理 / Token' ;;
+    zh:token_show) printf '显示网页管理 Token' ;;
+    zh:token_rotate) printf '轮换网页管理 Token' ;;
+    zh:join_info) printf '显示加入信息' ;;
+    zh:backup) printf '备份存档' ;;
+    zh:update) printf '更新镜像并重启' ;;
+    zh:create_save) printf '创建新农场存档' ;;
+    zh:language) printf '语言 / Language' ;;
+    zh:exit) printf '退出' ;;
+    zh:choose) printf '请选择' ;;
+    zh:unknown) printf '未知菜单选项' ;;
+    zh:bye) printf '再见' ;;
+    zh:pause) printf '按 Enter 返回菜单...' ;;
+    zh:language_title) printf '菜单语言' ;;
+    zh:language_current) printf '当前语言' ;;
+    zh:language_zh) printf '简体中文' ;;
+    zh:language_en) printf '英文' ;;
+    zh:language_saved) printf '菜单语言已保存' ;;
+    zh:language_skipped) printf '已跳过语言切换。' ;;
+    *) printf '%s' "$key" ;;
+  esac
+}
+
 docker_output_suggests_daemon_unavailable() {
   local output="$1"
   printf '%s' "$output" | grep -Eiq 'cannot connect to the docker daemon|is the docker daemon running|dockerDesktopLinuxEngine|docker_engine|error during connect|failed to connect to .*docker|open (//|\.\./|\\\\\.)?/?\.?/pipe/docker|The system cannot find the file specified|no such file or directory.*docker\.sock|permission denied.*docker\.sock'
@@ -1504,16 +1588,76 @@ prompt_admin_panel_after_setup() {
   esac
 }
 
+create_save_cli() {
+  ensure_admin_env_file
+  ensure_node_available
+  local configured_lang
+  configured_lang="$(get_env_value SVSK_LANG || true)"
+  [[ -z "$configured_lang" ]] || export SVSK_LANG="$configured_lang"
+  node "$ROOT_DIR/scripts/admin-panel/create-save-cli.js" "$@"
+}
+
+prompt_create_save_after_setup() {
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    warn "Run ./scripts/sdv-server.sh create-save later if you want the script to create the first farm save."
+    return 0
+  fi
+
+  step "Optional first farm save"
+  warn "A default map is not required. The script can create a real farm save through the same flow used by the web panel."
+  local answer
+  read -r -p "Create a new farm save now? [y/N]: " answer
+  case "$answer" in
+    y|Y|yes|YES)
+      create_save_cli
+      ;;
+    *)
+      ok "Skipped farm creation. Use ./scripts/sdv-server.sh create-save later when needed."
+      ;;
+  esac
+}
+
 pause_menu() {
   interactive_terminal || return 0
   local _
-  read -r -p "Press Enter to return to the menu..." _ || true
+  read -r -p "$(menu_text pause)" _ || true
 }
 
 run_menu_action() {
   local action="$1"
   "$0" "$action"
   pause_menu
+}
+
+language_menu() {
+  if ! interactive_terminal; then
+    die "The language menu requires a TTY."
+  fi
+
+  ensure_admin_env_file
+  local choice lang
+  lang="$(svsk_lang)"
+  step "$(menu_text language_title)"
+  printf '%s: %s\n' "$(menu_text language_current)" "$lang"
+  printf '1) %s\n' "$(menu_text language_zh)"
+  printf '2) %s\n' "$(menu_text language_en)"
+  printf '0) %s\n' "$(menu_text exit)"
+  read -r -p "$(menu_text choose): " choice
+  case "$choice" in
+    1)
+      set_env_value SVSK_LANG "zh"
+      export SVSK_LANG="zh"
+      ok "$(menu_text language_saved): zh"
+      ;;
+    2)
+      set_env_value SVSK_LANG "en"
+      export SVSK_LANG="en"
+      ok "$(menu_text language_saved): en"
+      ;;
+    *)
+      ok "$(menu_text language_skipped)"
+      ;;
+  esac
 }
 
 interactive_menu() {
@@ -1523,30 +1667,27 @@ interactive_menu() {
 
   local choice
   while true; do
-    cat <<'MENU'
-
-== Stardew Valley Server Kit ==
-
-1) One-click setup / deploy / repair
-2) Fill or update Steam username/password
-3) Run Steam login / Guard verification
-4) Download or update game files
-5) Start server
-6) Restart server
-7) Stop server
-8) Show status
-9) Follow logs
-10) Web admin detect / recommendation
-11) Web admin wizard / proxy / token
-12) Show web admin token
-13) Rotate web admin token
-14) Show join info
-15) Backup saves
-16) Update images and restart
-0) Exit
-
-MENU
-    read -r -p "Choose an option: " choice
+    printf '\n== %s ==\n\n' "$(menu_text title)"
+    printf '1) %s\n' "$(menu_text setup)"
+    printf '2) %s\n' "$(menu_text steam_config)"
+    printf '3) %s\n' "$(menu_text login)"
+    printf '4) %s\n' "$(menu_text download)"
+    printf '5) %s\n' "$(menu_text start)"
+    printf '6) %s\n' "$(menu_text restart)"
+    printf '7) %s\n' "$(menu_text stop)"
+    printf '8) %s\n' "$(menu_text status)"
+    printf '9) %s\n' "$(menu_text logs)"
+    printf '10) %s\n' "$(menu_text admin_detect)"
+    printf '11) %s\n' "$(menu_text admin_wizard)"
+    printf '12) %s\n' "$(menu_text token_show)"
+    printf '13) %s\n' "$(menu_text token_rotate)"
+    printf '14) %s\n' "$(menu_text join_info)"
+    printf '15) %s\n' "$(menu_text backup)"
+    printf '16) %s\n' "$(menu_text update)"
+    printf '17) %s\n' "$(menu_text create_save)"
+    printf '18) %s\n' "$(menu_text language)"
+    printf '0) %s\n\n' "$(menu_text exit)"
+    read -r -p "$(menu_text choose): " choice
     case "$choice" in
       1)
         run_menu_action setup
@@ -1597,12 +1738,19 @@ MENU
       16)
         run_menu_action update
         ;;
+      17)
+        run_menu_action create-save
+        ;;
+      18)
+        language_menu
+        pause_menu
+        ;;
       0|q|Q|exit|quit)
-        ok "Bye"
+        ok "$(menu_text bye)"
         return 0
         ;;
       *)
-        warn "Unknown menu option: $choice"
+        warn "$(menu_text unknown): $choice"
         ;;
     esac
   done
@@ -2356,7 +2504,7 @@ build_local_images() {
 }
 
 case "$ACTION" in
-  menu|steam-config|access-info|admin|admin-public|admin-detect|admin-token-show|admin-token-rotate|admin-service-install|admin-service-install-public|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
+  menu|language|steam-config|access-info|admin|admin-public|admin-detect|admin-token-show|admin-token-rotate|admin-service-install|admin-service-install-public|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
     ;;
   doctor)
     step "Checking Docker"
@@ -2371,6 +2519,9 @@ esac
 case "$ACTION" in
   menu)
     interactive_menu
+    ;;
+  language)
+    language_menu
     ;;
   doctor)
     step "Checking Docker Compose"
@@ -2427,6 +2578,7 @@ case "$ACTION" in
     run_steam_auth_download_or_fallback
     smoke_test
     prompt_admin_panel_after_setup
+    prompt_create_save_after_setup
     ;;
   build)
     ensure_env_file
@@ -2444,6 +2596,7 @@ case "$ACTION" in
     run_steam_auth_download_or_fallback
     smoke_test
     prompt_admin_panel_after_setup
+    prompt_create_save_after_setup
     ;;
   login)
     ensure_env_file
@@ -2533,6 +2686,9 @@ case "$ACTION" in
   backup)
     backup_saves
     ;;
+  create-save)
+    create_save_cli "${@:2}"
+    ;;
   join-info)
     join_info
     ;;
@@ -2579,6 +2735,6 @@ case "$ACTION" in
     admin_service_logs
     ;;
   *)
-    die "Unknown command: $ACTION. Available: menu/doctor/check-env/steam-config/access-info/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-detect/admin-token-show/admin-token-rotate/admin-service-install/admin-service-install-public/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
+    die "Unknown command: $ACTION. Available: menu/language/doctor/check-env/steam-config/access-info/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/create-save/join-info/admin/admin-public/admin-detect/admin-token-show/admin-token-rotate/admin-service-install/admin-service-install-public/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
     ;;
 esac

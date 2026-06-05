@@ -1,12 +1,18 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("menu", "doctor", "check-env", "steam-config", "access-info", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "join-info", "admin", "admin-public", "admin-detect", "admin-token-show", "admin-token-rotate", "admin-service-install", "admin-service-install-public", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
+    [ValidateSet("menu", "language", "doctor", "check-env", "steam-config", "access-info", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "create-save", "join-info", "admin", "admin-public", "admin-detect", "admin-token-show", "admin-token-rotate", "admin-service-install", "admin-service-install-public", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
     [string]$Action = "setup",
 
     [string]$SteamUsername,
     [string]$SteamPassword,
     [string]$ServerPassword,
+    [string]$FarmName,
+    [int]$FarmType = -1,
+    [int]$StartingCabins = -1,
+    [int]$MaxPlayers = -1,
+    [switch]$Force,
+    [string]$Lang,
     [int]$Retries = 5,
     [switch]$EnableDiscord,
     [switch]$NoStart
@@ -52,6 +58,86 @@ function Write-Ok {
 function Write-Warn {
     param([string]$Message)
     Write-Host "WARN $Message" -ForegroundColor Yellow
+}
+
+function Get-SvskLang {
+    $lang = $env:SVSK_LANG
+    if (-not $lang -and (Test-Path $EnvFile)) {
+        $lang = Get-EnvValue "SVSK_LANG"
+    }
+    if ($lang -match '^(?i:en)(-|_|$)') {
+        return "en"
+    }
+    return "zh"
+}
+
+function Get-MenuText {
+    param([string]$Key)
+
+    $lang = Get-SvskLang
+    switch ("${lang}:$Key") {
+        "en:title" { "Stardew Valley Server Kit"; break }
+        "en:setup" { "One-click setup / deploy / repair"; break }
+        "en:steam_config" { "Fill or update Steam username/password"; break }
+        "en:login" { "Run Steam login / Guard verification"; break }
+        "en:download" { "Download or update game files"; break }
+        "en:start" { "Start server"; break }
+        "en:restart" { "Restart server"; break }
+        "en:stop" { "Stop server"; break }
+        "en:status" { "Show status"; break }
+        "en:logs" { "Follow logs"; break }
+        "en:admin_detect" { "Web admin detect / recommendation"; break }
+        "en:admin_wizard" { "Web admin wizard / proxy / token"; break }
+        "en:token_show" { "Show web admin token"; break }
+        "en:token_rotate" { "Rotate web admin token"; break }
+        "en:join_info" { "Show join info"; break }
+        "en:backup" { "Backup saves"; break }
+        "en:update" { "Update images and restart"; break }
+        "en:create_save" { "Create new farm save"; break }
+        "en:language" { "Language / 语言"; break }
+        "en:exit" { "Exit"; break }
+        "en:choose" { "Choose an option"; break }
+        "en:unknown" { "Unknown menu option"; break }
+        "en:bye" { "Bye"; break }
+        "en:pause" { "Press Enter to return to the menu"; break }
+        "en:language_title" { "Menu language"; break }
+        "en:language_current" { "Current language"; break }
+        "en:language_zh" { "Simplified Chinese"; break }
+        "en:language_en" { "English"; break }
+        "en:language_saved" { "Menu language saved"; break }
+        "en:language_skipped" { "Skipped language change."; break }
+        "zh:title" { "星露谷服务器套件"; break }
+        "zh:setup" { "一键安装 / 部署 / 修复"; break }
+        "zh:steam_config" { "填写或更新 Steam 用户名/密码"; break }
+        "zh:login" { "运行 Steam 登录 / Guard 验证"; break }
+        "zh:download" { "下载或更新游戏文件"; break }
+        "zh:start" { "启动服务端"; break }
+        "zh:restart" { "重启服务端"; break }
+        "zh:stop" { "停止服务端"; break }
+        "zh:status" { "查看状态"; break }
+        "zh:logs" { "跟随日志"; break }
+        "zh:admin_detect" { "网页管理面板检测 / 推荐"; break }
+        "zh:admin_wizard" { "网页管理面板向导 / 代理 / Token"; break }
+        "zh:token_show" { "显示网页管理 Token"; break }
+        "zh:token_rotate" { "轮换网页管理 Token"; break }
+        "zh:join_info" { "显示加入信息"; break }
+        "zh:backup" { "备份存档"; break }
+        "zh:update" { "更新镜像并重启"; break }
+        "zh:create_save" { "创建新农场存档"; break }
+        "zh:language" { "语言 / Language"; break }
+        "zh:exit" { "退出"; break }
+        "zh:choose" { "请选择"; break }
+        "zh:unknown" { "未知菜单选项"; break }
+        "zh:bye" { "再见"; break }
+        "zh:pause" { "按 Enter 返回菜单"; break }
+        "zh:language_title" { "菜单语言"; break }
+        "zh:language_current" { "当前语言"; break }
+        "zh:language_zh" { "简体中文"; break }
+        "zh:language_en" { "英文"; break }
+        "zh:language_saved" { "菜单语言已保存"; break }
+        "zh:language_skipped" { "已跳过语言切换。"; break }
+        default { $Key; break }
+    }
 }
 
 function Write-ErrorExit {
@@ -1132,6 +1218,93 @@ function Prompt-AdminPanelAfterSetup {
     }
 }
 
+function Invoke-CreateSaveCli {
+    Ensure-AdminEnvFile
+    Assert-Command "node"
+    $configuredLang = Get-EnvValue "SVSK_LANG"
+    if ($configuredLang) {
+        $env:SVSK_LANG = $configuredLang
+    }
+
+    $cliScript = Join-Path $PSScriptRoot "admin-panel\create-save-cli.js"
+    $args = @()
+    if ($FarmName) {
+        $args += "--farm-name"
+        $args += $FarmName
+    }
+    if ($FarmType -ge 0) {
+        $args += "--farm-type"
+        $args += [string]$FarmType
+    }
+    if ($StartingCabins -ge 0) {
+        $args += "--starting-cabins"
+        $args += [string]$StartingCabins
+    }
+    if ($MaxPlayers -ge 0) {
+        $args += "--max-players"
+        $args += [string]$MaxPlayers
+    }
+    if ($Force) {
+        $args += "--force"
+    }
+    if ($Lang) {
+        $args += "--lang"
+        $args += $Lang
+    }
+
+    & node $cliScript @args
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
+function Prompt-CreateSaveAfterSetup {
+    if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) {
+        Write-Warn "Run '.\setup.ps1 create-save' later if you want the script to create the first farm save."
+        return
+    }
+
+    Write-Step "Optional first farm save"
+    Write-Warn "A default map is not required. The script can create a real farm save through the same flow used by the web panel."
+    Write-Host "Create a new farm save now? [y/N]: " -NoNewline
+    $answer = Read-Host
+    if ($answer -match '^(y|yes)$') {
+        Invoke-CreateSaveCli
+    }
+    else {
+        Write-Ok "Skipped farm creation. Use '.\setup.ps1 create-save' later when needed."
+    }
+}
+
+function Invoke-LanguageMenu {
+    if (-not (Test-InteractiveTerminal)) {
+        Write-ErrorExit "The language menu requires a terminal."
+    }
+
+    Ensure-AdminEnvFile
+    Write-Step (Get-MenuText "language_title")
+    Write-Host ("{0}: {1}" -f (Get-MenuText "language_current"), (Get-SvskLang))
+    Write-Host ("1) {0}" -f (Get-MenuText "language_zh"))
+    Write-Host ("2) {0}" -f (Get-MenuText "language_en"))
+    Write-Host ("0) {0}" -f (Get-MenuText "exit"))
+    $choice = Read-Host (Get-MenuText "choose")
+    switch ($choice) {
+        "1" {
+            Set-EnvValue "SVSK_LANG" "zh"
+            $env:SVSK_LANG = "zh"
+            Write-Ok ("{0}: zh" -f (Get-MenuText "language_saved"))
+        }
+        "2" {
+            Set-EnvValue "SVSK_LANG" "en"
+            $env:SVSK_LANG = "en"
+            Write-Ok ("{0}: en" -f (Get-MenuText "language_saved"))
+        }
+        default {
+            Write-Ok (Get-MenuText "language_skipped")
+        }
+    }
+}
+
 function Invoke-WebAdminWizard {
     if (-not (Test-InteractiveTerminal)) {
         Write-ErrorExit "The web admin wizard requires an interactive terminal."
@@ -1221,7 +1394,7 @@ function Invoke-SteamCredentialConfig {
 
 function Pause-Menu {
     if (Test-InteractiveTerminal) {
-        [void](Read-Host "Press Enter to return to the menu")
+        [void](Read-Host (Get-MenuText "pause"))
     }
 }
 
@@ -1261,28 +1434,30 @@ function Invoke-InteractiveMenu {
 
     while ($true) {
         Write-Host ""
-        Write-Host "== Stardew Valley Server Kit =="
+        Write-Host ("== {0} ==" -f (Get-MenuText "title"))
         Write-Host ""
-        Write-Host "1) One-click setup / deploy / repair"
-        Write-Host "2) Fill or update Steam username/password"
-        Write-Host "3) Run Steam login / Guard verification"
-        Write-Host "4) Download or update game files"
-        Write-Host "5) Start server"
-        Write-Host "6) Restart server"
-        Write-Host "7) Stop server"
-        Write-Host "8) Show status"
-        Write-Host "9) Follow logs"
-        Write-Host "10) Web admin detect / recommendation"
-        Write-Host "11) Web admin wizard / proxy / token"
-        Write-Host "12) Show web admin token"
-        Write-Host "13) Rotate web admin token"
-        Write-Host "14) Show join info"
-        Write-Host "15) Backup saves"
-        Write-Host "16) Update images and restart"
-        Write-Host "0) Exit"
+        Write-Host ("1) {0}" -f (Get-MenuText "setup"))
+        Write-Host ("2) {0}" -f (Get-MenuText "steam_config"))
+        Write-Host ("3) {0}" -f (Get-MenuText "login"))
+        Write-Host ("4) {0}" -f (Get-MenuText "download"))
+        Write-Host ("5) {0}" -f (Get-MenuText "start"))
+        Write-Host ("6) {0}" -f (Get-MenuText "restart"))
+        Write-Host ("7) {0}" -f (Get-MenuText "stop"))
+        Write-Host ("8) {0}" -f (Get-MenuText "status"))
+        Write-Host ("9) {0}" -f (Get-MenuText "logs"))
+        Write-Host ("10) {0}" -f (Get-MenuText "admin_detect"))
+        Write-Host ("11) {0}" -f (Get-MenuText "admin_wizard"))
+        Write-Host ("12) {0}" -f (Get-MenuText "token_show"))
+        Write-Host ("13) {0}" -f (Get-MenuText "token_rotate"))
+        Write-Host ("14) {0}" -f (Get-MenuText "join_info"))
+        Write-Host ("15) {0}" -f (Get-MenuText "backup"))
+        Write-Host ("16) {0}" -f (Get-MenuText "update"))
+        Write-Host ("17) {0}" -f (Get-MenuText "create_save"))
+        Write-Host ("18) {0}" -f (Get-MenuText "language"))
+        Write-Host ("0) {0}" -f (Get-MenuText "exit"))
         Write-Host ""
 
-        $choice = Read-Host "Choose an option"
+        $choice = Read-Host (Get-MenuText "choose")
         switch ($choice) {
             "1" { Invoke-MenuAction "setup" }
             "2" { Invoke-MenuAction "steam-config" }
@@ -1303,12 +1478,17 @@ function Invoke-InteractiveMenu {
             "14" { Invoke-MenuAction "join-info" }
             "15" { Invoke-MenuAction "backup" }
             "16" { Invoke-MenuAction "update" }
+            "17" { Invoke-MenuAction "create-save" }
+            "18" {
+                Invoke-LanguageMenu
+                Pause-Menu
+            }
             { $_ -in @("0", "q", "Q", "exit", "quit") } {
-                Write-Ok "Bye"
+                Write-Ok (Get-MenuText "bye")
                 return
             }
             default {
-                Write-Warn "Unknown menu option: $choice"
+                Write-Warn ("{0}: {1}" -f (Get-MenuText "unknown"), $choice)
             }
         }
     }
@@ -2291,7 +2471,7 @@ function Invoke-LocalImageBuild {
 $dockerRequiredActions = @(
     "doctor", "check-env", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup",
     "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status",
-    "update", "build-update", "backup", "join-info",
+    "update", "build-update", "backup", "create-save", "join-info",
     "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility"
 )
 
@@ -2303,6 +2483,9 @@ if ($dockerRequiredActions -contains $Action) {
 switch ($Action) {
     "menu" {
         Invoke-InteractiveMenu
+    }
+    "language" {
+        Invoke-LanguageMenu
     }
     "doctor" {
         Write-Step "Checking Docker Compose"
@@ -2411,6 +2594,7 @@ switch ($Action) {
             Show-AccessInfo
         }
         Prompt-AdminPanelAfterSetup
+        Prompt-CreateSaveAfterSetup
     }
     "build" {
         Ensure-EnvFile
@@ -2442,6 +2626,7 @@ switch ($Action) {
             Show-AccessInfo
         }
         Prompt-AdminPanelAfterSetup
+        Prompt-CreateSaveAfterSetup
     }
     "start" {
         Ensure-EnvFile
@@ -2502,6 +2687,9 @@ switch ($Action) {
     }
     "backup" {
         Invoke-SavesBackup
+    }
+    "create-save" {
+        Invoke-CreateSaveCli
     }
     "join-info" {
         Show-JoinInfo

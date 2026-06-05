@@ -1241,11 +1241,15 @@ async function patchSaveCabins(saveName, targetCabins) {
 }
 
 function addOperationStep(steps, label, detail = "") {
-  steps.push({
+  const step = {
     at: new Date().toISOString(),
     label,
     detail,
-  });
+  };
+  steps.push(step);
+  if (typeof steps.onStep === "function") {
+    steps.onStep(step);
+  }
 }
 
 async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps = [], options = {}) {
@@ -2612,6 +2616,9 @@ async function selectSave(payload) {
 async function createNewGame(payload) {
   const farmName = cleanText(payload.farmName, 48, "Junimo");
   const steps = [];
+  if (typeof payload.onStep === "function") {
+    steps.onStep = payload.onStep;
+  }
   const requestedTargetCabins = intInRange(payload.startingCabins, "Starting cabins", 0, 9);
 
   const wasRunning = await isServerContainerRunning();
@@ -3212,6 +3219,12 @@ if (require.main === module) {
 }
 
 module.exports = {
+  __cli: {
+    FARM_TYPES,
+    ensureAdminFiles,
+    createNewGame,
+    listSaves,
+  },
   __test: {
     parseEnv,
     patchEnvText,
