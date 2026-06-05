@@ -4,6 +4,15 @@
 普通用户不需要理解 Docker Compose、SteamCMD、镜像标签这些细节，拿到发布包后运行一个
 脚本就能部署。
 
+项目地址：
+
+```text
+GitHub: https://github.com/wuxianggujun/StardewValleyServerKit
+Gitee:  https://gitee.com/wuxianggujun/StardewValleyServerKit
+```
+
+国内服务器如果访问 GitHub 不稳定，优先使用 Gitee 地址。
+
 ## 一键部署入口
 
 Linux 服务器上进入项目目录后执行：

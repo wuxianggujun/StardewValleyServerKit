@@ -248,6 +248,10 @@ This package must contain these build inputs:
 
 This package is for normal server owners. It pulls published Docker images and does not require source code.
 
+Project mirror for China users:
+
+- Gitee: https://gitee.com/wuxianggujun/StardewValleyServerKit
+
 Images configured in this package:
 
 - __IMAGE_NAMESPACE__/server:__IMAGE_VERSION__

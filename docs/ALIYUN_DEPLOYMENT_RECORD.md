@@ -10,6 +10,11 @@ Steam 账号、密码、验证码、API Key 或管理令牌。
 - 部署目录：`/opt/stardew-valley-server-kit`
 - 发布包目录：`/opt/stardew-valley-server-kit-releases`
 - 部署入口：`./setup.sh`
+- GitHub 仓库：`https://github.com/wuxianggujun/StardewValleyServerKit`
+- Gitee 国内镜像：`https://gitee.com/wuxianggujun/StardewValleyServerKit`
+
+阿里云服务器如果访问 GitHub 不稳定，可以优先从 Gitee 拉取项目；服务器端也可以把
+`origin` 设置为 Gitee 或 GitHub 代理地址。
 
 ## 当前部署策略
 

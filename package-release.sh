@@ -269,6 +269,10 @@ EOF
 
 This package is for normal server owners. It pulls published Docker images and does not require source code.
 
+Project mirror for China users:
+
+- Gitee: https://gitee.com/wuxianggujun/StardewValleyServerKit
+
 Images configured in this package:
 
 - ${IMAGE_NAMESPACE}/server:${IMAGE_VERSION}

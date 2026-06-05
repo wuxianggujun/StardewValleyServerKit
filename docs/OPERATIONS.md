@@ -1,5 +1,12 @@
 # 日常维护
 
+项目地址：
+
+- GitHub：`https://github.com/wuxianggujun/StardewValleyServerKit`
+- Gitee 国内镜像：`https://gitee.com/wuxianggujun/StardewValleyServerKit`
+
+国内服务器如果访问 GitHub 不稳定，可以优先使用 Gitee 地址拉取项目。
+
 最简单的入口是直接运行菜单：
 
 ```powershell

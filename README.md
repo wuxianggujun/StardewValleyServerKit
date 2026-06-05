@@ -5,6 +5,17 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-required-2496ED.svg)](https://www.docker.com/)
 
+## 项目地址
+
+- GitHub：`https://github.com/wuxianggujun/StardewValleyServerKit`
+- Gitee 国内镜像：`https://gitee.com/wuxianggujun/StardewValleyServerKit`
+
+国内服务器如果访问 GitHub 不稳定，可以优先从 Gitee 拉取项目：
+
+```bash
+git clone https://gitee.com/wuxianggujun/StardewValleyServerKit.git
+```
+
 ## 界面预览
 
 <table>
