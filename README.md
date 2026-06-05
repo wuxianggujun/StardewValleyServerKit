@@ -253,9 +253,9 @@ Windows 本地测试对应：
 
 如果这个工具帮你省了时间，可以扫下面的二维码支持一下。
 
-![微信赞赏码](docs/assets/donation/weixin.png)
-
-![支付宝收款码](docs/assets/donation/zhifubao.jpg)
+| 微信赞赏码 | 支付宝收款码 |
+| :---: | :---: |
+| ![微信赞赏码](docs/assets/donation/weixin-display.png) | ![支付宝收款码](docs/assets/donation/zhifubao-display.jpg) |
 
 ## 上游项目
 
