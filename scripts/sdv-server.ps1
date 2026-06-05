@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "join-info", "admin", "admin-public", "admin-token-rotate", "admin-service-install", "admin-service-install-public", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
+    [ValidateSet("doctor", "check-env", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "join-info", "admin", "admin-public", "admin-detect", "admin-token-rotate", "admin-service-install", "admin-service-install-public", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
     [string]$Action = "setup",
 
     [string]$SteamUsername,
@@ -2291,6 +2291,9 @@ switch ($Action) {
     }
     "admin-public" {
         Invoke-AdminPanel -Public
+    }
+    "admin-detect" {
+        Invoke-AdminSystemdUnsupported
     }
     "admin-token-rotate" {
         Invoke-AdminTokenRotate

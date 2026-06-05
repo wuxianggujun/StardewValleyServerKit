@@ -2170,7 +2170,7 @@ build_local_images() {
 }
 
 case "$ACTION" in
-  admin|admin-public|admin-token-rotate|admin-service-install|admin-service-install-public|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
+  admin|admin-public|admin-detect|admin-token-rotate|admin-service-install|admin-service-install-public|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
     ;;
   doctor)
     step "Checking Docker"
@@ -2344,6 +2344,15 @@ case "$ACTION" in
   admin-public)
     admin_panel 1
     ;;
+  admin-detect)
+    findings="$(detect_reverse_proxy_candidates | sort -u)"
+    show_admin_service_recommendation "$findings"
+    if [[ -n "$findings" ]]; then
+      printf '%s\n' "Recommended command: sudo ./scripts/sdv-server.sh admin-service-install"
+    else
+      printf '%s\n' "Recommended command: sudo ./scripts/sdv-server.sh admin-service-install-public"
+    fi
+    ;;
   admin-token-rotate)
     admin_token_rotate
     ;;
@@ -2369,6 +2378,6 @@ case "$ACTION" in
     admin_service_logs
     ;;
   *)
-    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-token-rotate/admin-service-install/admin-service-install-public/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
+    die "Unknown command: $ACTION. Available: doctor/check-env/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-detect/admin-token-rotate/admin-service-install/admin-service-install-public/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
     ;;
 esac

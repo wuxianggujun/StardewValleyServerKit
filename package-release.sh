@@ -309,6 +309,7 @@ brief interruption of other Docker containers. The script restores the original
 ./setup.sh restart
 ./setup.sh update
 ./setup.sh join-info
+./scripts/sdv-server.sh admin-detect
 ./scripts/sdv-server.sh admin-service-install
 ./scripts/sdv-server.sh admin-service-install-public
 \`\`\`

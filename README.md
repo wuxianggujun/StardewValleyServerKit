@@ -241,6 +241,7 @@ Linux / macOS：
 ./scripts/sdv-server.sh join-info
 ./scripts/sdv-server.sh admin
 ./scripts/sdv-server.sh admin-public
+./scripts/sdv-server.sh admin-detect
 ./scripts/sdv-server.sh admin-service-install
 ./scripts/sdv-server.sh admin-service-install-public
 ./scripts/sdv-server.sh admin-service-start
@@ -434,6 +435,8 @@ sudo ./scripts/sdv-server.sh admin-service-install-public
 
 检测到“已安装反向代理”不代表已经为本项目配置好了站点，所以脚本不会静默替你决定；
 它会列出候选项并让你选择 `1/2/3`。
+
+也可以随时运行 `./scripts/sdv-server.sh admin-detect` 只读查看检测结果和推荐命令。
 
 如果服务器没有 Node.js 18+，Linux 脚本会询问是否下载项目本地 Node.js 到
 `.svsk-tools/`。非交互部署可在 `.env` 中设置 `SVSK_AUTO_INSTALL_NODE=true`，
