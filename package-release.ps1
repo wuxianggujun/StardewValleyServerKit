@@ -320,6 +320,20 @@ The web admin login uses ADMIN_TOKEN from local .env. To copy it without opening
 .env manually, run `./setup.sh admin-token-show` from an interactive terminal
 and type `SHOW`. The token is not printed during normal setup, status, or logs.
 
+## Saves and custom farms
+
+After deployment, open the web admin panel and use the Saves page instead of
+editing Docker volumes by hand.
+
+- To create your real farm, click Create map, fill the farm name, map type,
+  cabin/player settings, and profit margin, then confirm.
+- To switch saves, select the save for next load and restart the game server.
+- To delete the default/test save, make sure players are offline, click Delete
+  on that save, and type the full save name to confirm.
+- Before deleting a save, the panel backs up the whole saves volume and then
+  removes only the selected save directory.
+- Restoring a backup replaces the whole saves volume, not just one save.
+
 If the server has no Node.js 18+, the Linux script can download a project-local
 Node.js runtime into `.svsk-tools/`. Interactive runs ask first; non-interactive
 runs can set `SVSK_AUTO_INSTALL_NODE=true`.
