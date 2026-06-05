@@ -211,6 +211,15 @@ async function main() {
     );
     assert.equal(__test.smapiCommandSettleSeconds({ settleMs: 10000 }), 10);
     assert.equal(__test.smapiCommandSettleSeconds({ settleMs: 60000 }), 30);
+    assert.deepEqual(__test.parsePublishedPortLine("5800/tcp -> 0.0.0.0:5800"), {
+      labelKey: "overview.port.noVnc",
+      target: "5800/tcp",
+      endpoint: "0.0.0.0:5800",
+      raw: "5800/tcp -> 0.0.0.0:5800",
+    });
+    assert.equal(__test.parsePublishedPortLine("8080/tcp -> [::]:8080").labelKey, "overview.port.serverApi");
+    assert.equal(__test.parsePublishedPortLine("24642/udp -> 0.0.0.0:24642").labelKey, "overview.port.game");
+    assert.equal(__test.parsePublishedPortLine("27015/udp -> [::]:27015").labelKey, "overview.port.query");
     assert.match(__test.DOCKER_INSPECT_API_FORMAT, /printf "\\t"/);
     assert.match(__test.DOCKER_INSPECT_API_FORMAT, /json \.Mounts/);
     const steamLoginReport = __test.buildSteamAuthLogReport([

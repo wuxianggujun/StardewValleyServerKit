@@ -2371,8 +2371,22 @@ const PAGE = String.raw`<!doctype html>
 
       renderPlayerManagement(data.playerManagement || {});
 
+      function renderPortMapping(item, index) {
+        if (typeof item === "string") {
+          return row(t("overview.mapping", { index: index + 1 }), escapeHtml(item));
+        }
+        const target = item?.target || "";
+        const endpoint = item?.endpoint || "";
+        const raw = item?.raw || "";
+        const value = target && endpoint ? target + " -> " + endpoint : raw;
+        return row(
+          t(item?.labelKey || "overview.port.other", { index: index + 1, target: target || raw || "n/a" }),
+          escapeHtml(value || "n/a"),
+        );
+      }
+
       document.querySelector("#ports").innerHTML = data.publishedPorts.length
-        ? data.publishedPorts.map((line, index) => row(t("overview.mapping", { index: index + 1 }), escapeHtml(line))).join("")
+        ? data.publishedPorts.map((item, index) => renderPortMapping(item, index)).join("")
         : '<p class="muted">' + escapeHtml(t("overview.noPorts")) + '</p>';
 
       document.querySelector("#stats").innerHTML = data.stats.length

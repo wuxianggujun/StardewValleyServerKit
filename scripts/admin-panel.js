@@ -1625,6 +1625,50 @@ async function runtimeSignals() {
   };
 }
 
+function publishedPortPurpose(targetPort, protocol) {
+  const key = `${targetPort}/${String(protocol || "").toLowerCase()}`;
+  switch (key) {
+    case "5800/tcp":
+      return "overview.port.noVnc";
+    case "5900/tcp":
+      return "overview.port.vnc";
+    case "8080/tcp":
+      return "overview.port.serverApi";
+    case "24642/udp":
+      return "overview.port.game";
+    case "27015/udp":
+      return "overview.port.query";
+    default:
+      return "overview.port.other";
+  }
+}
+
+function parsePublishedPortLine(line) {
+  const raw = String(line || "").trim();
+  const match = raw.match(/^(\d+)\/([A-Za-z]+)\s+->\s+(.+)$/);
+  if (!match) {
+    return {
+      labelKey: "overview.port.other",
+      target: "",
+      endpoint: "",
+      raw,
+    };
+  }
+  const targetPort = Number.parseInt(match[1], 10);
+  const protocol = match[2].toLowerCase();
+  const target = `${targetPort}/${protocol}`;
+  return {
+    labelKey: publishedPortPurpose(targetPort, protocol),
+    target,
+    endpoint: match[3].trim(),
+    raw,
+  };
+}
+
+function parsePublishedPorts(lines) {
+  return lines.map((line) => parsePublishedPortLine(line)).filter((item) => item.raw);
+}
+
 async function getStatus() {
   const env = await readEnv();
   const settings = await readSettings();
@@ -1680,7 +1724,7 @@ async function getStatus() {
       const [name, cpu, memory] = line.split("\t");
       return { name, cpu, memory };
     }),
-    publishedPorts: parseTableLines(ports.stdout),
+    publishedPorts: parsePublishedPorts(parseTableLines(ports.stdout)),
     lanAddresses: listLanAddresses(),
     join: {
       sameMachine: "127.0.0.1",
@@ -2406,7 +2450,7 @@ async function getDiagnosticReport() {
       composePs,
       running: Boolean(status.stackRunning),
       health: status.health || [],
-      publishedPorts: status.publishedPorts || [],
+    publishedPorts: status.publishedPorts || [],
     },
     serverApi: apiDiagnostic,
     steamAuth,
@@ -3259,6 +3303,8 @@ module.exports = {
     quoteUnsafeJsonIntegers,
     parseJsonPreservingUnsafeIntegers,
     diagnosticSummary,
+    parsePublishedPortLine,
+    parsePublishedPorts,
     DOCKER_INSPECT_API_FORMAT,
   },
 };
