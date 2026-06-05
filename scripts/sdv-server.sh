@@ -978,6 +978,47 @@ steamcmd_output_requires_interactive_guard() {
   grep -Eiq 'Steam Guard code|This computer has not been authenticated|set_steam_guard_code' "$output_file"
 }
 
+steamcmd_redact_line() {
+  local line="$1"
+  shift || true
+
+  local secret
+  for secret in "$@"; do
+    [[ -z "$secret" ]] && continue
+    line="${line//"$secret"/<redacted>}"
+  done
+
+  printf '%s\n' "$line"
+}
+
+steamcmd_stream_to_log() {
+  local log_file="$1"
+  shift || true
+
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    steamcmd_redact_line "$line" "$@"
+  done | tee "$log_file"
+}
+
+prompt_steam_guard_code() {
+  local guard_code
+
+  interactive_terminal || return 1
+  printf '\nWARN SteamCMD requested Steam Guard verification.\n' >&2
+  printf 'WARN Enter the newest code from email or Steam Mobile. Input is hidden and will not be saved or printed.\n' >&2
+  printf 'Steam Guard code: ' >&2
+  IFS= read -r -s guard_code || return 1
+  printf '\n' >&2
+
+  guard_code="${guard_code//$'\r'/}"
+  guard_code="${guard_code#"${guard_code%%[![:space:]]*}"}"
+  guard_code="${guard_code%"${guard_code##*[![:space:]]}"}"
+  [[ -n "$guard_code" ]] || return 1
+
+  printf '%s' "$guard_code"
+}
+
 new_secret() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'
@@ -1725,19 +1766,29 @@ steamcmd_download() {
   local game_volume="stardew-valley-server-kit_game-data"
   local steamcmd_volume="stardew-valley-server-kit_steamcmd"
   local download_command='/home/steam/steamcmd/steamcmd.sh +@sSteamCmdForcePlatformType linux +force_install_dir /data/game +login "$STEAM_USERNAME" "$STEAM_PASSWORD" +app_update 413150 validate +quit'
-  local docker_tty_args=()
+  local steamcmd_redactions=("$steam_user" "$steam_pass")
+  local redaction_value
 
   step "Downloading game files with SteamCMD"
   check_steam_network_connectivity || true
   load_steam_proxy_docker_args
+  for redaction_value in \
+    "$(steam_proxy_value HTTP_PROXY)" \
+    "$(steam_proxy_value HTTPS_PROXY)" \
+    "$(steam_proxy_value ALL_PROXY)" \
+    "$(steam_proxy_value NO_PROXY)" \
+    "$(steam_proxy_value http_proxy HTTP_PROXY)" \
+    "$(steam_proxy_value https_proxy HTTPS_PROXY)" \
+    "$(steam_proxy_value all_proxy ALL_PROXY)" \
+    "$(steam_proxy_value no_proxy NO_PROXY)"; do
+    [[ -z "$redaction_value" ]] || steamcmd_redactions+=("$redaction_value")
+  done
   if steam_proxy_configured; then
     ok "Steam proxy variables are configured; values are not printed"
   fi
-  printf 'WARN Steam Guard codes must be typed into this terminal. Do not paste codes into chat or issues.\n'
-  printf 'WARN If SteamCMD shows "Steam Guard code:", type the newest code here and press Enter.\n'
-  if interactive_terminal; then
-    docker_tty_args=(-it)
-  else
+  printf 'WARN If Steam Guard is requested, the script will ask for the code with hidden input.\n'
+  printf 'WARN Do not paste Steam passwords, Steam Guard codes, or tokens into chat, issues, or screenshots.\n'
+  if ! interactive_terminal; then
     warn "No interactive terminal detected; SteamCMD will run without TTY."
     warn "If Steam Guard is requested, rerun this command from an SSH session with a TTY."
   fi
@@ -1751,14 +1802,15 @@ steamcmd_download() {
 
     step "SteamCMD attempt $attempt of $max_attempts"
     set +e
-    docker run --rm "${docker_tty_args[@]}" \
+    STEAM_USERNAME="$steam_user" STEAM_PASSWORD="$steam_pass" \
+      docker run --rm \
       "${STEAM_PROXY_DOCKER_ARGS[@]}" \
       -v "$game_volume:/data/game" \
       -v "$steamcmd_volume:/home/steam/Steam" \
-      -e "STEAM_USERNAME=$steam_user" \
-      -e "STEAM_PASSWORD=$steam_pass" \
+      -e STEAM_USERNAME \
+      -e STEAM_PASSWORD \
       "$image" \
-      bash -lc "$download_command" 2>&1 | tee "$attempt_log"
+      bash -lc "$download_command" 2>&1 | steamcmd_stream_to_log "$attempt_log" "${steamcmd_redactions[@]}"
     docker_status="${PIPESTATUS[0]}"
     set -e
 
@@ -1770,9 +1822,48 @@ steamcmd_download() {
       return 0
     fi
 
-    if ! interactive_terminal && steamcmd_output_requires_interactive_guard "$attempt_log"; then
+    if steamcmd_output_requires_interactive_guard "$attempt_log"; then
+      if ! interactive_terminal; then
+        rm -f "$attempt_log"
+        die "SteamCMD requires Steam Guard, but this terminal is non-interactive. Rerun from an SSH session with TTY, for example: ssh -t root@server 'cd /opt/stardew-valley-server-kit && ./setup.sh steamcmd-download'"
+      fi
+
+      local guard_code guard_log
+      guard_code="$(prompt_steam_guard_code)" || {
+        rm -f "$attempt_log"
+        die "Steam Guard code was not entered."
+      }
+      guard_log="$(mktemp "${TMPDIR:-/tmp}/svsk-steamcmd-guard.XXXXXX.log")"
+
+      step "SteamCMD Steam Guard retry"
+      set +e
+      { printf '%s\n' "$guard_code"; } | STEAM_USERNAME="$steam_user" STEAM_PASSWORD="$steam_pass" \
+        docker run --rm -i \
+        "${STEAM_PROXY_DOCKER_ARGS[@]}" \
+        -v "$game_volume:/data/game" \
+        -v "$steamcmd_volume:/home/steam/Steam" \
+        -e STEAM_USERNAME \
+        -e STEAM_PASSWORD \
+        "$image" \
+        bash -lc "$download_command" 2>&1 | steamcmd_stream_to_log "$guard_log" "${steamcmd_redactions[@]}" "$guard_code"
+      docker_status="${PIPESTATUS[1]}"
+      set -e
+      guard_code=""
+      unset guard_code
+
+      if (( docker_status == 0 )); then
+        rm -f "$attempt_log" "$guard_log"
+        assert_game_data_installed "$game_volume" "$steamcmd_volume"
+        install_steamworks_sdk "$image" "$game_volume" "$steamcmd_volume"
+        ok "SteamCMD download completed"
+        return 0
+      fi
+
       rm -f "$attempt_log"
-      die "SteamCMD requires Steam Guard, but this terminal is non-interactive. Rerun from an SSH session with TTY, for example: ssh -t root@server 'cd /opt/stardew-valley-server-kit && ./setup.sh steamcmd-download'"
+      attempt_log="$guard_log"
+      if steamcmd_output_requires_interactive_guard "$attempt_log"; then
+        warn "Steam Guard verification did not complete. The code may be expired or incorrect."
+      fi
     fi
     rm -f "$attempt_log"
 

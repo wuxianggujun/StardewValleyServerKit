@@ -136,14 +136,15 @@ docker run --rm -it `
 
 ## Steam Guard 验证码怎么输入
 
-如果终端显示：
+如果 SteamCMD 触发 Steam Guard，脚本会显示：
 
 ```text
 Steam Guard code:
 ```
 
-就在同一个 PowerShell 窗口直接输入邮箱或 Steam Mobile 中看到的验证码，
-然后按回车。
+就在同一个 PowerShell / SSH 终端输入邮箱或 Steam Mobile 中看到的验证码，
+然后按回车。输入会隐藏，脚本只会把验证码通过 stdin 传给 SteamCMD，
+不会写入 `.env`，也不会打印到日志。
 
 不要把验证码复制到聊天、Issue 或文档里。
 
@@ -244,6 +245,9 @@ state is 0x402 after update job
 脚本会自动重试，并复用已经下载到 `game-data` volume 的部分文件。
 
 ### 不确定是否还在等待验证码
+
+正常情况下不需要手动接回容器；脚本会检测 Guard 并提示输入验证码。
+只有终端异常断开、且你确认 SteamCMD 容器仍在运行时，再使用下面的兜底方式。
 
 查看日志：
 

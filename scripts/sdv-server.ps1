@@ -906,7 +906,10 @@ function Show-CredentialStatus {
 }
 
 function Protect-LogLine {
-    param([string]$Line)
+    param(
+        [string]$Line,
+        [string[]]$ExtraSecrets = @()
+    )
 
     $protected = $Line -replace '\x1B\[[0-9;?]*[ -/]*[@-~]', ''
     foreach ($key in @("STEAM_USERNAME", "STEAM_PASSWORD", "STEAM_REFRESH_TOKEN", "VNC_PASSWORD", "API_KEY", "ADMIN_TOKEN", "SERVER_PASSWORD", "DISCORD_BOT_TOKEN", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")) {
@@ -915,8 +918,70 @@ function Protect-LogLine {
             $protected = $protected.Replace($value, "<redacted>")
         }
     }
+    foreach ($value in $ExtraSecrets) {
+        if ($value) {
+            $protected = $protected.Replace($value, "<redacted>")
+        }
+    }
 
     return $protected
+}
+
+function Test-InteractiveTerminal {
+    return ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)
+}
+
+function Test-SteamCmdOutputRequiresInteractiveGuard {
+    param([string]$Text)
+    return ($Text -match "Steam Guard code|This computer has not been authenticated|set_steam_guard_code")
+}
+
+function Read-SteamGuardCode {
+    Write-Warn "SteamCMD requested Steam Guard verification."
+    Write-Warn "Enter the newest code from email or Steam Mobile. Input is hidden and will not be saved or printed."
+    $code = ConvertTo-PlainText (Read-Host "Steam Guard code" -AsSecureString)
+    $code = ($code -replace "`r", "").Trim()
+    if (-not $code) {
+        Write-ErrorExit "Steam Guard code was not entered."
+    }
+
+    return $code
+}
+
+function Invoke-SteamCmdDockerRun {
+    param(
+        [string[]]$DockerArgs,
+        [string]$LogFile,
+        [string[]]$ExtraSecrets = @(),
+        [AllowNull()]
+        [string]$StandardInput = $null
+    )
+
+    $oldPreference = $ErrorActionPreference
+    $exitCode = 1
+    try {
+        $ErrorActionPreference = "Continue"
+        if ($null -ne $StandardInput) {
+            $StandardInput | & docker @DockerArgs 2>&1 | ForEach-Object {
+                    $line = Protect-LogLine -Line ([string]$_) -ExtraSecrets $ExtraSecrets
+                    Add-Content -LiteralPath $LogFile -Value $line -Encoding utf8
+                    Write-Host $line
+                }
+        }
+        else {
+            & docker @DockerArgs 2>&1 | ForEach-Object {
+                    $line = Protect-LogLine -Line ([string]$_) -ExtraSecrets $ExtraSecrets
+                    Add-Content -LiteralPath $LogFile -Value $line -Encoding utf8
+                    Write-Host $line
+                }
+        }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $oldPreference
+    }
+
+    return $exitCode
 }
 
 function Test-TcpPort {
@@ -1687,23 +1752,21 @@ function Invoke-SteamCmdDownload {
     if (Test-SteamProxyConfigured) {
         Write-Ok "Steam proxy variables are configured; values are not printed"
     }
-    Write-Warn "Steam Guard codes must be typed into this terminal. Do not paste codes into chat or issues."
-    Write-Warn "If SteamCMD shows 'Steam Guard code:', type the newest code here and press Enter."
+    Write-Warn "If Steam Guard is requested, the script will ask for the code with hidden input."
+    Write-Warn "Do not paste Steam passwords, Steam Guard codes, or tokens into chat, issues, or screenshots."
     Initialize-SteamCmdVolumes $image $gameVolume $steamCmdVolume
 
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         Write-Step "SteamCMD attempt $attempt of $maxAttempts"
         $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
         $logFile = Join-Path $LogDir "steamcmd-download-$timestamp-attempt-$attempt.log"
-        $oldPreference = $ErrorActionPreference
         $oldSteamUsername = $env:STEAM_USERNAME
         $oldSteamPassword = $env:STEAM_PASSWORD
         $exitCode = 1
         try {
-            $ErrorActionPreference = "Continue"
             $env:STEAM_USERNAME = $steamUser
             $env:STEAM_PASSWORD = $steamPass
-            $dockerArgs = @("run", "--rm", "-i") +
+            $dockerArgs = @("run", "--rm") +
                 $steamProxyArgs +
                 @(
                     "-v", "${gameVolume}:/data/game",
@@ -1714,15 +1777,9 @@ function Invoke-SteamCmdDownload {
                     "bash", "-lc", $downloadCommand
                 )
 
-            & docker @dockerArgs 2>&1 | ForEach-Object {
-                    $line = Protect-LogLine ([string]$_)
-                    Add-Content -LiteralPath $logFile -Value $line -Encoding utf8
-                    Write-Host $line
-                }
-            $exitCode = $LASTEXITCODE
+            $exitCode = Invoke-SteamCmdDockerRun -DockerArgs $dockerArgs -LogFile $logFile
         }
         finally {
-            $ErrorActionPreference = $oldPreference
             if ($null -eq $oldSteamUsername) {
                 Remove-Item Env:\STEAM_USERNAME -ErrorAction SilentlyContinue
             }
@@ -1749,9 +1806,64 @@ function Invoke-SteamCmdDownload {
         if (Test-Path -LiteralPath $logFile) {
             $logText = Get-Content -LiteralPath $logFile -Raw
         }
-        if ((-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) -and
-            $logText -match "Steam Guard code|This computer has not been authenticated|set_steam_guard_code") {
-            Write-ErrorExit "SteamCMD requires Steam Guard, but this terminal is non-interactive. Rerun from a terminal with TTY, for example: ssh -t root@server `"cd /opt/stardew-valley-server-kit && ./setup.sh steamcmd-download`""
+        if (Test-SteamCmdOutputRequiresInteractiveGuard $logText) {
+            if (-not (Test-InteractiveTerminal)) {
+                Write-ErrorExit "SteamCMD requires Steam Guard, but this terminal is non-interactive. Rerun from a terminal with TTY, for example: ssh -t root@server `"cd /opt/stardew-valley-server-kit && ./setup.sh steamcmd-download`""
+            }
+
+            $guardCode = Read-SteamGuardCode
+            $guardLogFile = Join-Path $LogDir "steamcmd-download-$timestamp-attempt-$attempt-guard.log"
+            $oldSteamUsername = $env:STEAM_USERNAME
+            $oldSteamPassword = $env:STEAM_PASSWORD
+            try {
+                $env:STEAM_USERNAME = $steamUser
+                $env:STEAM_PASSWORD = $steamPass
+                $guardDockerArgs = @("run", "--rm", "-i") +
+                    $steamProxyArgs +
+                    @(
+                        "-v", "${gameVolume}:/data/game",
+                        "-v", "${steamCmdVolume}:/home/steam/Steam",
+                        "-e", "STEAM_USERNAME",
+                        "-e", "STEAM_PASSWORD",
+                        $image,
+                        "bash", "-lc", $downloadCommand
+                    )
+
+                Write-Step "SteamCMD Steam Guard retry"
+                $exitCode = Invoke-SteamCmdDockerRun -DockerArgs $guardDockerArgs -LogFile $guardLogFile -ExtraSecrets @($guardCode) -StandardInput $guardCode
+            }
+            finally {
+                if ($null -eq $oldSteamUsername) {
+                    Remove-Item Env:\STEAM_USERNAME -ErrorAction SilentlyContinue
+                }
+                else {
+                    $env:STEAM_USERNAME = $oldSteamUsername
+                }
+                if ($null -eq $oldSteamPassword) {
+                    Remove-Item Env:\STEAM_PASSWORD -ErrorAction SilentlyContinue
+                }
+                else {
+                    $env:STEAM_PASSWORD = $oldSteamPassword
+                }
+                $guardCode = $null
+            }
+
+            if ($exitCode -eq 0) {
+                Assert-GameDataInstalled $gameVolume $steamCmdVolume
+                Install-SteamworksSdk $image $gameVolume $steamCmdVolume
+                Write-Ok "SteamCMD download completed"
+                Write-Ok "Log written: logs\$(Split-Path -Leaf $guardLogFile)"
+                return
+            }
+
+            $logFile = $guardLogFile
+            $logText = ""
+            if (Test-Path -LiteralPath $logFile) {
+                $logText = Get-Content -LiteralPath $logFile -Raw
+            }
+            if (Test-SteamCmdOutputRequiresInteractiveGuard $logText) {
+                Write-Warn "Steam Guard verification did not complete. The code may be expired or incorrect."
+            }
         }
 
         Write-Warn "SteamCMD failed with exit code $exitCode"

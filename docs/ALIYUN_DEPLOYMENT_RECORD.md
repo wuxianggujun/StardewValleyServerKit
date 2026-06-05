@@ -105,13 +105,13 @@ CM 端口和 SteamCMD 匿名登录，不读取 Steam 账号密码，也不会触
 - 已通过 SSH 重启 Docker，确认该动作会让当前项目栈短暂重建。
 - 已执行 `./setup.sh start`，`sdv-server` 和 `sdv-steam-auth` 能正常拉起。
 - 已执行 `./setup.sh login`，当前报错点是 `The SteamClient instance must be connected`。
-- 已执行 `./setup.sh steamcmd-download`，SteamCMD 能连接 Steam Public，并停在 Steam Guard
-  验证码输入阶段；非交互 SSH 无法输入验证码，所以脚本会停止重试。
+- 已执行 `./setup.sh steamcmd-download`，SteamCMD 能连接 Steam Public，并进入 Steam Guard
+  验证阶段；脚本现在会在带 TTY 的终端隐藏读取验证码，并通过 stdin 传给 SteamCMD。
 - 已补充部署脚本：Steam Directory API 预检、Steam 代理变量透传、SteamCMD 代理透传、
   `steam-network` 无账号公共链路诊断。
 
 这次验证说明：Docker、Compose、脚本入口和 SteamCMD 回退链路都能跑通；当前剩下的是
-从带 TTY 的 SSH 终端输入 Steam Guard 验证码，让服务器这台设备完成 SteamCMD 授权。
+从带 TTY 的 SSH 终端按脚本提示输入 Steam Guard 验证码，让服务器这台设备完成 SteamCMD 授权。
 
 ## 哔站文章二维码
 

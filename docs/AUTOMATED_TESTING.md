@@ -47,9 +47,9 @@ stardew-valley-server-kit_steam-session
 如果 SteamCMD 出现 `state is 0x402 after update job`，脚本会自动重试。
 已经下载到 `game-data` volume 的部分文件会被复用。
 
-SteamCMD 备用流程可能再次要求 Steam Guard。验证码输入位置是运行
-SteamCMD 的本机终端；如果终端断开但容器仍在等待，可用
-`docker attach <container-id>` 接回后输入验证码。
+SteamCMD 备用流程可能再次要求 Steam Guard。脚本检测到 Guard 后会在运行
+SteamCMD 的本机终端提示输入验证码；输入会隐藏，并只通过 stdin 传给 SteamCMD。
+如果终端断开但容器仍在等待，可用 `docker attach <container-id>` 兜底接回。
 
 `smoke` 会执行：
 
@@ -136,7 +136,7 @@ node scripts/admin-panel/auth.self-test.js
 常见原因：
 
 - 邮箱验证码过期
-- Steam Guard 输入到了错误终端
+- Steam Guard 输入到了错误终端，或远程 SSH 没有分配 TTY
 - Steam 临时返回 `TryAnotherCM`
 - manifest 下载返回 `403 (Forbidden)`
 - SteamCMD 返回 `state is 0x402 after update job`

@@ -185,6 +185,10 @@ Linux / macOS：
 RETRIES=5 ./scripts/sdv-server.sh steamcmd-download
 ```
 
+如果 SteamCMD 触发 Steam Guard，脚本会在带 TTY 的终端里提示输入验证码。
+输入会隐藏，只通过 stdin 传给 SteamCMD，不写入 `.env`，也不会打印到日志。
+如果是远程服务器，请用 `ssh -t` 进入服务器后运行该命令。
+
 如果只是想判断服务器到底能不能访问 Steam 公共链路，先执行无账号诊断：
 
 ```powershell

@@ -127,8 +127,9 @@ This computer has not been authenticated for your account using Steam Guard.
 Steam Guard code:
 ```
 
-说明 SteamCMD 已经连上 Steam Public，并且账号已被识别。此时在同一个服务器终端
-输入最新的 Steam Guard 验证码并回车。不要把验证码发到聊天、Issue 或截图里。
+说明 SteamCMD 已经连上 Steam Public，并且账号已被识别。脚本会在同一个服务器终端
+提示输入最新的 Steam Guard 验证码；输入会隐藏，只通过 stdin 传给 SteamCMD。
+不要把验证码发到聊天、Issue 或截图里。
 
 ## Steam 下载 403 或 0x402
 
@@ -156,7 +157,7 @@ Steam CDN / manifest 链路上被拒绝。
 
 继续处理：
 
-3. 如果 SteamCMD 显示 `Steam Guard code:`，在同一个本机终端输入验证码。
+3. 如果脚本提示 `Steam Guard code:`，在同一个本机终端输入验证码。
 4. 如果终端断开但容器还在等待，执行：
 
 ```powershell
