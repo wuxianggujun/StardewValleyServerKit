@@ -3,7 +3,7 @@
 const os = require("node:os");
 const path = require("node:path");
 
-const SAVE_NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
+const SAVE_NAME_PATTERN = /^[\p{L}\p{N}_.-]+$/u;
 const BACKUP_ARCHIVE_PATTERN = /^saves-\d{8}-\d{6}\.tar\.gz$/;
 
 const NEW_GAME_ONLY_SETTING_PATHS = [

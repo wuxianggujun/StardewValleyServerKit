@@ -1006,6 +1006,7 @@ async function listSaves() {
     '  name="${dir##*/}"',
     '  info="$dir/SaveGameInfo"',
     '  main="$dir/$name"',
+    '  [ -f "$main" ] || continue',
     '  mtime="$(stat -c %Y "$dir" 2>/dev/null || echo 0)"',
     '  farm="$(sed -n \'s/.*<farmName>\\([^<]*\\)<\\/farmName>.*/\\1/p\' "$info" 2>/dev/null | head -n 1)"',
     '  farm_type="$(sed -n \'s/.*<whichFarm>\\([^<]*\\)<\\/whichFarm>.*/\\1/p\' "$main" 2>/dev/null | head -n 1)"',
@@ -1076,9 +1077,53 @@ async function readSaveCabinVerification(saveName, failureLabel = "Cabin verific
   };
 }
 
-async function waitForNewGameSave(farmName, sinceMs, timeoutMs = NEW_GAME_SAVE_WAIT_TIMEOUT_MS) {
-  const deadline = Date.now() + timeoutMs;
+function normalizeKnownSaveNames(knownSaveNames) {
+  return new Set([...knownSaveNames || []].map((name) => String(name || "")));
+}
+
+function saveUpdatedMs(save) {
+  return save?.updatedAt ? Date.parse(save.updatedAt) || 0 : 0;
+}
+
+function findNewGameSaveCandidate(saves, farmName, sinceMs, options = {}) {
+  const knownSaveNames = normalizeKnownSaveNames(options.knownSaveNames);
   const minUpdatedMs = Math.max(0, Number(sinceMs || 0) - 10000);
+  const candidates = saves.filter((save) => {
+    if (!save?.name || knownSaveNames.has(save.name)) return false;
+    const updatedMs = saveUpdatedMs(save);
+    return !updatedMs || updatedMs >= minUpdatedMs;
+  });
+
+  const exact = candidates.find((save) => save.farmName === farmName);
+  if (exact) return exact;
+
+  const farmSlug = farmNameSlug(farmName);
+  const bySlug = candidates.find((save) => saveIdentityMatchesFarmSlug(save, farmSlug, false));
+  if (bySlug) return bySlug;
+
+  const bySlugPrefix = candidates.find((save) => saveIdentityMatchesFarmSlug(save, farmSlug, true));
+  if (bySlugPrefix) return bySlugPrefix;
+
+  return candidates.find((save) => {
+    const updatedMs = saveUpdatedMs(save);
+    return updatedMs >= minUpdatedMs;
+  }) || null;
+}
+
+function farmNameSlug(value) {
+  return String(value || "").normalize("NFKC").replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+}
+
+function saveIdentityMatchesFarmSlug(save, farmSlug, allowPrefix) {
+  if (!farmSlug) return false;
+  return [save?.farmName, save?.name]
+    .map(farmNameSlug)
+    .filter(Boolean)
+    .some((slug) => slug === farmSlug || (allowPrefix && (slug.startsWith(farmSlug) || farmSlug.startsWith(slug))));
+}
+
+async function waitForNewGameSave(farmName, sinceMs, timeoutMs = NEW_GAME_SAVE_WAIT_TIMEOUT_MS, options = {}) {
+  const deadline = Date.now() + timeoutMs;
   let lastSeen = "";
 
   while (Date.now() < deadline) {
@@ -1086,17 +1131,8 @@ async function waitForNewGameSave(farmName, sinceMs, timeoutMs = NEW_GAME_SAVE_W
     lastSeen = saves
       .map((save) => `${save.name}:${save.farmName}:cabins=${save.cabinCount}:${save.updatedAt || "unknown"}`)
       .join(", ");
-    const exact = saves.find((save) => {
-      const updatedMs = save.updatedAt ? Date.parse(save.updatedAt) : 0;
-      return save.farmName === farmName && (!updatedMs || updatedMs >= minUpdatedMs);
-    });
-    if (exact) return exact;
-
-    const recent = saves.find((save) => {
-      const updatedMs = save.updatedAt ? Date.parse(save.updatedAt) : 0;
-      return save.cabinCount > 0 && updatedMs >= minUpdatedMs;
-    });
-    if (recent) return recent;
+    const candidate = findNewGameSaveCandidate(saves, farmName, sinceMs, options);
+    if (candidate) return candidate;
 
     await delay(NEW_GAME_SAVE_WAIT_POLL_MS);
   }
@@ -1212,8 +1248,10 @@ function addOperationStep(steps, label, detail = "") {
   });
 }
 
-async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps = []) {
-  const save = await waitForNewGameSave(farmName, newGameStartedAtMs);
+async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps = [], options = {}) {
+  const save = await waitForNewGameSave(farmName, newGameStartedAtMs, undefined, {
+    knownSaveNames: options.knownSaveNames,
+  });
   const selectedSaveName = validateSaveName(save.name);
   addOperationStep(steps, "已确认新存档生成", selectedSaveName);
 
@@ -1259,7 +1297,7 @@ async function restartStackAfterNewGame(farmName, targetCabins, newGameStartedAt
     if (!up.ok) {
       throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
     }
-    const stackState = await inspectStackState();
+    const stackState = await waitForStackReady("重启");
     addOperationStep(
       steps,
       stackRestartVerified(stackState) ? "服务端重启已确认" : "服务端已发送启动命令",
@@ -2497,9 +2535,12 @@ async function waitForStackReady(action, options = {}) {
 async function waitForSmapiCommandPipe(timeoutMs = SMAPI_COMMAND_PIPE_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   let lastOutput = "";
+  const readyCheck =
+    "test -p /tmp/smapi-input && " +
+    "grep -Eq \"Type 'help' for help|Mods loaded and ready|Services loaded and ready\" /tmp/server-output.log 2>/dev/null";
 
   while (Date.now() < deadline) {
-    const result = await docker(["exec", "sdv-server", "sh", "-lc", "test -p /tmp/smapi-input"], {
+    const result = await docker(["exec", "sdv-server", "sh", "-lc", readyCheck], {
       timeoutMs: 6000,
     });
     if (result.ok) return;
@@ -2526,21 +2567,30 @@ async function ensureServerReadyForSmapiCommand() {
   return { wasRunning, started: !wasRunning };
 }
 
-async function sendSmapiCommand(command) {
+function smapiCommandSettleSeconds(options = {}) {
+  const settleMs = Number(options.settleMs ?? 1000);
+  if (!Number.isFinite(settleMs) || settleMs <= 0) return 1;
+  return Math.max(1, Math.min(30, Math.ceil(settleMs / 1000)));
+}
+
+async function sendSmapiCommand(command, options = {}) {
   if (String(command).includes("\n") || String(command).includes("\r")) {
     throw new Error("SMAPI command is invalid.");
   }
+  const settleSeconds = smapiCommandSettleSeconds(options);
   const result = await docker(
     [
       "exec",
       "-e",
       `SDV_SMAPI_COMMAND=${command}`,
+      "-e",
+      `SDV_SMAPI_SETTLE_SECONDS=${settleSeconds}`,
       "sdv-server",
       "sh",
       "-lc",
-      "set -eu; test -p /tmp/smapi-input || { echo 'SMAPI input pipe not found'; exit 1; }; printf '%s\\n' \"$SDV_SMAPI_COMMAND\" > /tmp/smapi-input; sleep 1; tail -n 80 /tmp/server-output.log 2>/dev/null | tail -n 30 || true",
+      "set -eu; test -p /tmp/smapi-input || { echo 'SMAPI input pipe not found'; exit 1; }; printf '%s\\n' \"$SDV_SMAPI_COMMAND\" > /tmp/smapi-input; sleep \"$SDV_SMAPI_SETTLE_SECONDS\"; tail -n 80 /tmp/server-output.log 2>/dev/null | tail -n 30 || true",
     ],
-    { timeoutMs: 12000 },
+    { timeoutMs: options.timeoutMs || 12000 + settleSeconds * 1000 },
   );
   if (!result.ok) {
     throw new Error(await sanitize(result.stderr || result.stdout || "Failed to send SMAPI command."));
@@ -2566,6 +2616,7 @@ async function createNewGame(payload) {
 
   const wasRunning = await isServerContainerRunning();
   const { saves: savesBefore } = await listSaves();
+  const knownSaveNames = savesBefore.map((save) => save.name);
   const hasExistingSaves = savesBefore.length > 0;
   let readiness = null;
   if (wasRunning) {
@@ -2600,7 +2651,9 @@ async function createNewGame(payload) {
       throw new Error(await sanitize(up.stderr || up.stdout || "docker compose up failed"));
     }
     addOperationStep(steps, "已启动服务端", "正在等待服务端生成新存档。");
-    const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps);
+    const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps, {
+      knownSaveNames,
+    });
     return {
       farmName,
       settings: savedConfig.settings,
@@ -2630,20 +2683,47 @@ async function createNewGame(payload) {
   if (commandState.started) {
     addOperationStep(steps, "已启动服务端", "用于接收 SMAPI newgame 命令。");
   }
-  await sendSmapiCommand("settings newgame --confirm");
+  const newGameStartedAtMs = Date.now();
+  await sendSmapiCommand("settings newgame --confirm", { settleMs: 10000, timeoutMs: 30000 });
   addOperationStep(steps, "已发送官方 newgame 命令", "等待新存档落盘。");
+
+  const createdBeforeRestart = await waitForNewGameSave(farmName, newGameStartedAtMs, 30000, {
+    knownSaveNames,
+  }).catch(() => null);
+  if (createdBeforeRestart) {
+    const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps, {
+      knownSaveNames,
+    });
+    return {
+      farmName,
+      settings: savedConfig.settings,
+      preNewGameBackup: preNewGameBackup?.archive || null,
+      commandStartedServer: commandState.started,
+      readiness,
+      restarted: restart.restarted,
+      restartVerified: restart.restartVerified,
+      newSaveName: restart.newSaveName,
+      selectedSaveName: restart.selectedSaveName,
+      stackState: restart.stackState,
+      cabinPatch: restart.cabinPatch,
+      steps,
+      message: restart.message,
+    };
+  }
+
   const downForCreate = await compose(["down"], { timeoutMs: 120000 });
   if (!downForCreate.ok) {
     throw new Error(await sanitize(downForCreate.stderr || downForCreate.stdout || "docker compose down failed"));
   }
   addOperationStep(steps, "已停止服务端", "准备重启并执行官方新建流程。");
-  const newGameStartedAtMs = Date.now();
   const upForCreate = await composeUpDetached({ timeoutMs: 120000 });
   if (!upForCreate.ok) {
     throw new Error(await sanitize(upForCreate.stderr || upForCreate.stdout || "docker compose up failed"));
   }
   addOperationStep(steps, "已重启服务端", "正在等待官方流程生成新存档。");
-  const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps);
+  const restart = await restartStackAfterNewGame(farmName, targetCabins, newGameStartedAtMs, steps, {
+    knownSaveNames,
+  });
 
   return {
     farmName,
@@ -3156,6 +3236,10 @@ module.exports = {
     stackRestartVerified,
     stackStateSummary,
     tailLogText,
+    farmNameSlug,
+    findNewGameSaveCandidate,
+    validateSaveName,
+    smapiCommandSettleSeconds,
     buildSteamAuthLogReport,
     buildSteamAuthDiagnostic,
     buildGameCrashReport,

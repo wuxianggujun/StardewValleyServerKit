@@ -144,6 +144,73 @@ async function main() {
       containers: [{ name: "sdv-server", status: "restarting", health: "unhealthy" }],
     }), /sdv-server=restarting\/unhealthy/);
     assert.equal(__test.tailLogText("a\nb\nc\n", 2, 100), "b\nc");
+    assert.equal(__test.farmNameSlug("Big Farm"), "bigfarm");
+    assert.equal(__test.farmNameSlug("开心 农场"), "开心农场");
+    assert.equal(__test.validateSaveName("开心农场"), "开心农场");
+    assert.throws(() => __test.validateSaveName("../开心农场"), /Save name is invalid/);
+    const newSaveStartedAt = Date.parse("2026-06-05T10:00:00.000Z");
+    const oldJunimoSave = {
+      name: "Junimo_440306200",
+      farmName: "Junimo",
+      cabinCount: 2,
+      updatedAt: "2026-06-05T10:00:20.000Z",
+    };
+    const newBigFarmSave = {
+      name: "BigFarm",
+      farmName: "BigFarm-1",
+      cabinCount: 0,
+      updatedAt: "2026-06-05T10:00:05.000Z",
+    };
+    assert.equal(
+      __test.findNewGameSaveCandidate(
+        [oldJunimoSave, newBigFarmSave],
+        "Big Farm",
+        newSaveStartedAt,
+        { knownSaveNames: ["Junimo_440306200"] },
+      ),
+      newBigFarmSave,
+    );
+    const suffixedFarmSave = {
+      name: "Farm_123456",
+      farmName: "BigFarm-1",
+      cabinCount: 0,
+      updatedAt: "2026-06-05T10:00:06.000Z",
+    };
+    assert.equal(
+      __test.findNewGameSaveCandidate(
+        [oldJunimoSave, suffixedFarmSave],
+        "Big Farm",
+        newSaveStartedAt,
+        { knownSaveNames: ["Junimo_440306200"] },
+      ),
+      suffixedFarmSave,
+    );
+    const unicodeFarmSave = {
+      name: "HappyFarm_123456",
+      farmName: "开心农场-1",
+      cabinCount: 0,
+      updatedAt: "2026-06-05T10:00:07.000Z",
+    };
+    assert.equal(
+      __test.findNewGameSaveCandidate(
+        [oldJunimoSave, unicodeFarmSave],
+        "开心 农场",
+        newSaveStartedAt,
+        { knownSaveNames: ["Junimo_440306200"] },
+      ),
+      unicodeFarmSave,
+    );
+    assert.equal(
+      __test.findNewGameSaveCandidate(
+        [oldJunimoSave],
+        "Big Farm",
+        newSaveStartedAt,
+        { knownSaveNames: ["Junimo_440306200"] },
+      ),
+      null,
+    );
+    assert.equal(__test.smapiCommandSettleSeconds({ settleMs: 10000 }), 10);
+    assert.equal(__test.smapiCommandSettleSeconds({ settleMs: 60000 }), 30);
     assert.match(__test.DOCKER_INSPECT_API_FORMAT, /printf "\\t"/);
     assert.match(__test.DOCKER_INSPECT_API_FORMAT, /json \.Mounts/);
     const steamLoginReport = __test.buildSteamAuthLogReport([
