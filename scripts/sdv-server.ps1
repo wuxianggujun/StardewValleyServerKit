@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("menu", "doctor", "check-env", "steam-config", "access-info", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "join-info", "admin", "admin-public", "admin-detect", "admin-token-rotate", "admin-service-install", "admin-service-install-public", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
+    [ValidateSet("menu", "doctor", "check-env", "steam-config", "access-info", "login", "download", "steamcmd-download", "steam-network", "smoke", "setup", "build", "build-setup", "start", "build-start", "stop", "restart", "logs", "status", "update", "build-update", "backup", "join-info", "admin", "admin-public", "admin-detect", "admin-token-show", "admin-token-rotate", "admin-service-install", "admin-service-install-public", "admin-service-start", "admin-service-stop", "admin-service-restart", "admin-service-status", "admin-service-logs", "vnc-url", "vnc-proxy", "vnc-check", "vnc-fix", "vnc-resize", "host-auto", "host-visibility")]
     [string]$Action = "setup",
 
     [string]$SteamUsername,
@@ -899,11 +899,13 @@ function Show-CredentialStatus {
     Write-Host "environment STEAM_USERNAME: $(Test-SecretValue $envUsername)"
     Write-Host "environment STEAM_PASSWORD: $(Test-SecretValue $envPassword)"
     Write-Host "environment STEAM_REFRESH_TOKEN: $(Test-SecretValue $envRefreshToken)"
+    Write-Host "environment ADMIN_TOKEN: $(Test-SecretValue $env:ADMIN_TOKEN)"
 
     if (Test-Path $EnvFile) {
         Write-Host ".env STEAM_USERNAME: $(Test-SecretValue (Get-EnvValue 'STEAM_USERNAME'))"
         Write-Host ".env STEAM_PASSWORD: $(Test-SecretValue (Get-EnvValue 'STEAM_PASSWORD'))"
         Write-Host ".env STEAM_REFRESH_TOKEN: $(Test-SecretValue (Get-EnvValue 'STEAM_REFRESH_TOKEN'))"
+        Write-Host ".env ADMIN_TOKEN: $(Test-SecretValue (Get-EnvValue 'ADMIN_TOKEN'))"
     }
     else {
         Write-Warn ".env does not exist"
@@ -1092,6 +1094,7 @@ function Show-AccessInfo {
     Write-Host "Game UDP:    $gamePort"
     Write-Host "Query UDP:   $queryPort"
     Write-Host "Admin command: .\setup.ps1 admin"
+    Write-Host "Admin token:  $(Test-SecretValue (Get-EnvValue 'ADMIN_TOKEN'))"
 
     $lanAddresses = Get-LanIPv4Addresses
     if ($lanAddresses.Count -gt 0) {
@@ -1112,24 +1115,63 @@ function Show-AccessInfo {
 }
 
 function Prompt-AdminPanelAfterSetup {
-    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-        Write-Warn "Node.js was not found. Install Node.js, then run '.\setup.ps1 admin' to start the web admin panel."
-        return
-    }
-
     if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) {
         Write-Warn "Run '.\setup.ps1 admin' later if you want to open the local web admin panel."
+        Write-Warn "Run '.\setup.ps1 admin-token-show' or '.\setup.ps1 admin-token-rotate' later if needed."
         return
     }
 
     Write-Step "Optional web admin panel"
-    Write-Host "Start the local web admin panel now? This keeps this terminal open. [y/N]: " -NoNewline
+    Write-Host "Open the web admin wizard now? [y/N]: " -NoNewline
     $answer = Read-Host
     if ($answer -match '^(y|yes)$') {
-        Invoke-AdminPanel
+        Invoke-WebAdminWizard
     }
     else {
-        Write-Ok "Skipped admin panel. Run '.\setup.ps1 admin' later when needed."
+        Write-Ok "Skipped web admin wizard. Run '.\setup.ps1 admin' later when needed."
+    }
+}
+
+function Invoke-WebAdminWizard {
+    if (-not (Test-InteractiveTerminal)) {
+        Write-ErrorExit "The web admin wizard requires an interactive terminal."
+    }
+
+    while ($true) {
+        Write-Host ""
+        Write-Host "== Web admin wizard =="
+        Write-Host ""
+        Write-Host "1) Show current web admin token"
+        Write-Host "2) Rotate web admin token"
+        Write-Host "3) Start local foreground admin panel"
+        Write-Host "4) Show access info"
+        Write-Host "5) Show Linux reverse-proxy commands"
+        Write-Host "0) Back"
+        Write-Host ""
+
+        $choice = Read-Host "Choose an option"
+        switch ($choice) {
+            "1" { Invoke-AdminTokenShow }
+            "2" { Invoke-AdminTokenRotate }
+            "3" { Invoke-AdminPanel }
+            "4" { Ensure-AdminEnvFile; Show-AccessInfo }
+            "5" {
+                Write-Step "Linux web admin service commands"
+                Write-Host "Nginx / 1Panel reverse proxy mode:"
+                Write-Host "  sudo ./scripts/sdv-server.sh admin-service-install"
+                Write-Host "  proxy target: http://127.0.0.1:8088"
+                Write-Host ""
+                Write-Host "Bare public server without reverse proxy:"
+                Write-Host "  sudo ./scripts/sdv-server.sh admin-service-install-public"
+                Write-Host "  public URL: http://<server-public-ip>:8088"
+            }
+            { $_ -in @("0", "q", "Q", "exit", "quit") } {
+                return
+            }
+            default {
+                Write-Warn "Unknown web admin option: $choice"
+            }
+        }
     }
 }
 
@@ -1139,6 +1181,7 @@ function Invoke-SteamCredentialConfig {
     Write-Step "Steam credentials"
     Write-Host "Current STEAM_USERNAME: $(Test-SecretValue (Get-EnvValue 'STEAM_USERNAME'))"
     Write-Host "Current STEAM_PASSWORD: $(Test-SecretValue (Get-EnvValue 'STEAM_PASSWORD'))"
+    Write-Host "Current ADMIN_TOKEN: $(Test-SecretValue (Get-EnvValue 'ADMIN_TOKEN'))"
     Write-Warn "Values are saved to local .env and are not printed."
 
     if ($SteamUsername) {
@@ -1230,10 +1273,12 @@ function Invoke-InteractiveMenu {
         Write-Host "8) Show status"
         Write-Host "9) Follow logs"
         Write-Host "10) Web admin detect / recommendation"
-        Write-Host "11) Web admin install / start wizard"
-        Write-Host "12) Show join info"
-        Write-Host "13) Backup saves"
-        Write-Host "14) Update images and restart"
+        Write-Host "11) Web admin wizard / proxy / token"
+        Write-Host "12) Show web admin token"
+        Write-Host "13) Rotate web admin token"
+        Write-Host "14) Show join info"
+        Write-Host "15) Backup saves"
+        Write-Host "16) Update images and restart"
         Write-Host "0) Exit"
         Write-Host ""
 
@@ -1250,12 +1295,14 @@ function Invoke-InteractiveMenu {
             "9" { Invoke-MenuAction "logs" }
             "10" { Invoke-MenuAction "admin-detect" }
             "11" {
-                Prompt-AdminPanelAfterSetup
+                Invoke-WebAdminWizard
                 Pause-Menu
             }
-            "12" { Invoke-MenuAction "join-info" }
-            "13" { Invoke-MenuAction "backup" }
-            "14" { Invoke-MenuAction "update" }
+            "12" { Invoke-MenuAction "admin-token-show" }
+            "13" { Invoke-MenuAction "admin-token-rotate" }
+            "14" { Invoke-MenuAction "join-info" }
+            "15" { Invoke-MenuAction "backup" }
+            "16" { Invoke-MenuAction "update" }
             { $_ -in @("0", "q", "Q", "exit", "quit") } {
                 Write-Ok "Bye"
                 return
@@ -1489,6 +1536,30 @@ function Invoke-AdminTokenRotate {
     Write-Step "Rotated admin token"
     Write-Ok "ADMIN_TOKEN has been updated in .env and is not printed to logs."
     Write-Warn "Existing browser sessions must log in again."
+}
+
+function Invoke-AdminTokenShow {
+    Ensure-AdminEnvFile
+
+    if (-not (Test-InteractiveTerminal)) {
+        Write-ErrorExit "Showing ADMIN_TOKEN requires an interactive terminal."
+    }
+
+    Write-Step "Web admin token"
+    Write-Warn "This prints the current ADMIN_TOKEN once. Do not paste it into chat, issues, screenshots, or public logs."
+    $answer = Read-Host "Type SHOW to print ADMIN_TOKEN, or press Enter to cancel"
+    if ($answer -ne "SHOW") {
+        Write-Ok "Skipped showing ADMIN_TOKEN."
+        return
+    }
+
+    $token = Get-EnvValue "ADMIN_TOKEN"
+    if (-not $token) {
+        Write-ErrorExit "ADMIN_TOKEN is missing in .env."
+    }
+
+    Write-Host "ADMIN_TOKEN=$token"
+    Write-Warn "Copy this token directly into the web admin login page."
 }
 
 function Invoke-AdminSystemdUnsupported {
@@ -2443,6 +2514,9 @@ switch ($Action) {
     }
     "admin-detect" {
         Invoke-AdminSystemdUnsupported
+    }
+    "admin-token-show" {
+        Invoke-AdminTokenShow
     }
     "admin-token-rotate" {
         Invoke-AdminTokenRotate

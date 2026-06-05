@@ -173,6 +173,7 @@ Windows：
 .\setup.ps1 join-info
 .\setup.ps1 admin
 .\setup.ps1 admin-public
+.\setup.ps1 admin-token-show
 .\setup.ps1 admin-token-rotate
 .\setup.ps1 vnc-url
 .\setup.ps1 vnc-proxy
@@ -257,6 +258,7 @@ Linux / macOS：
 ./scripts/sdv-server.sh admin
 ./scripts/sdv-server.sh admin-public
 ./scripts/sdv-server.sh admin-detect
+./scripts/sdv-server.sh admin-token-show
 ./scripts/sdv-server.sh admin-service-install
 ./scripts/sdv-server.sh admin-service-install-public
 ./scripts/sdv-server.sh admin-service-start
@@ -439,7 +441,9 @@ sudo ./scripts/sdv-server.sh admin-service-install-public
 `admin-service-install-public` 模式监听 `0.0.0.0:8088`，适合没有 Nginx、
 没有 1Panel 的新服务器。使用这个模式时，需要在云厂商安全组和服务器防火墙放行
 `8088/tcp`，然后访问 `http://<server-public-ip>:8088`。登录页使用 `.env`
-里的 `ADMIN_TOKEN`，脚本不会把令牌打印到终端或日志。
+里的 `ADMIN_TOKEN`。如果不想手动打开 `.env`，在交互菜单选择 12，或执行
+`./scripts/sdv-server.sh admin-token-show`，按提示输入 `SHOW` 后只打印一次令牌。
+脚本不会在普通日志、systemd 日志或状态输出里打印完整令牌。
 
 交互式 Linux root 执行 `setup` 结束后，脚本会先检测本机是否存在反向代理候选项：
 `1Panel`、`nginx`、`openresty`、`caddy`、`traefik`、`nginx-proxy-manager`
@@ -449,7 +453,8 @@ sudo ./scripts/sdv-server.sh admin-service-install-public
 - 没检测到反向代理候选项：默认推荐 `admin-service-install-public`
 
 检测到“已安装反向代理”不代表已经为本项目配置好了站点，所以脚本不会静默替你决定；
-它会列出候选项并让你选择 `1/2/3`。
+它会列出候选项，并在 Web admin wizard 里让你选择 Nginx、1Panel、其他反向代理、
+裸服务器公网直连、查看令牌或重置令牌。
 
 也可以随时运行 `./scripts/sdv-server.sh admin-detect` 只读查看检测结果和推荐命令。
 
@@ -458,7 +463,9 @@ sudo ./scripts/sdv-server.sh admin-service-install-public
 下载源默认优先使用 `https://npmmirror.com/mirrors/node`，再回退到 `https://nodejs.org/dist`。
 
 首次启动会在 `.env` 中生成
-`ADMIN_TOKEN`，面板登录时从 `.env` 复制该值；终端和 systemd 日志不会打印完整令牌。管理面板可以查看
+`ADMIN_TOKEN`。面板登录时可以从 `.env` 复制该值，也可以用交互菜单 12 或
+`./scripts/sdv-server.sh admin-token-show` 查看；该命令必须手动输入 `SHOW`，
+不会默认打印令牌。管理面板可以查看
 容器健康状态、加入地址、在线玩家名称、最近日志，保存农场地图、人数、小屋数量、
 端口、进服密码、管理员 Steam64 ID 等配置，管理当前 saves volume 里的存档和备份，
 并对玩家执行授予管理员、删除离线农场角色等操作。运行配置、存档配置和 Mod
@@ -471,9 +478,10 @@ sudo ./scripts/sdv-server.sh admin-service-install-public
 `ADMIN_HOST=127.0.0.1`，由 1Panel、Nginx 或其他 HTTPS 反向代理访问。裸服务器没有
 反向代理时，使用 `admin-service-install-public` 显式切换到公网直连模式。
 
-首次执行 `setup` 结束后，交互式 Linux root 终端会先询问是否安装公网常驻管理面板；
-其他环境会询问是否以前台临时模式启动 Web 管理面板。前台模式选择 `y` 会保持当前终端
-用于运行面板；跳过后也可以随时执行上面的 `admin` 或 systemd 命令再打开。
+首次执行 `setup` 结束后，交互式终端会询问是否打开 Web admin wizard。Linux root
+服务器可以在向导里选择反向代理模式、裸服务器公网直连、查看令牌或重置令牌；其他环境
+仍可以前台临时模式启动 Web 管理面板。前台模式会保持当前终端用于运行面板；跳过后也可以
+随时执行上面的 `admin`、`admin-token-show` 或 systemd 命令再打开。
 如果 `ADMIN_TOKEN` 已经泄露，执行：
 
 ```bash

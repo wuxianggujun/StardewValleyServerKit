@@ -296,6 +296,8 @@ brief interruption of other Docker containers. The script restores the original
 ./setup.sh restart
 ./setup.sh update
 ./setup.sh join-info
+./setup.sh admin-token-show
+./setup.sh admin-token-rotate
 ./scripts/sdv-server.sh admin-detect
 ./scripts/sdv-server.sh admin-service-install
 ./scripts/sdv-server.sh admin-service-install-public
@@ -309,6 +311,10 @@ visit `http://<server-public-ip>:8088`.
 Interactive Linux setup detects common reverse proxy candidates and recommends a
 mode, but still asks the user to choose because installed reverse proxy software
 does not prove a site is configured for this project.
+
+The web admin login uses ADMIN_TOKEN from local .env. To copy it without opening
+.env manually, run `./setup.sh admin-token-show` from an interactive terminal
+and type `SHOW`. The token is not printed during normal setup, status, or logs.
 
 If the server has no Node.js 18+, the Linux script can download a project-local
 Node.js runtime into `.svsk-tools/`. Interactive runs ask first; non-interactive

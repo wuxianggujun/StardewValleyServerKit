@@ -33,6 +33,7 @@ Windows：
 .\setup.ps1 restart
 .\setup.ps1 backup
 .\setup.ps1 admin
+.\setup.ps1 admin-token-show
 .\setup.ps1 admin-token-rotate
 ```
 
@@ -56,6 +57,7 @@ Linux / macOS：
 ./scripts/sdv-server.sh admin-service-install-public
 ./scripts/sdv-server.sh admin-service-status
 ./scripts/sdv-server.sh admin-service-logs
+./scripts/sdv-server.sh admin-token-show
 ./scripts/sdv-server.sh admin-token-rotate
 ```
 
@@ -112,23 +114,29 @@ sudo ./scripts/sdv-server.sh admin-service-install-public
 `admin-service-install-public` 模式监听 `0.0.0.0:8088`，适合没有 Nginx、
 没有 1Panel 的新服务器。使用这个模式时，需要在云厂商安全组和服务器防火墙放行
 `8088/tcp`，然后访问 `http://<server-public-ip>:8088`。登录页使用 `.env`
-里的 `ADMIN_TOKEN`。
+里的 `ADMIN_TOKEN`。如果不想手动打开 `.env`，可以在菜单里选择
+`Show web admin token`，或执行 `./scripts/sdv-server.sh admin-token-show`，
+输入 `SHOW` 后只打印一次令牌。
 
 交互式 Linux root 执行 `setup` 结束后，脚本会检测 `1Panel`、`nginx`、
 `openresty`、`caddy`、`traefik`、`nginx-proxy-manager` 等 systemd 服务、
 命令、常见目录或 Docker 容器。检测结果只用于推荐：检测到反向代理候选项时默认推荐
 `admin-service-install`，否则默认推荐 `admin-service-install-public`。检测到反向代理
-不代表已经为本项目配置好站点，所以脚本仍会让用户选择 `1/2/3`。
+不代表已经为本项目配置好站点，所以 Web admin wizard 仍会让用户明确选择
+Nginx、1Panel、其他反向代理、裸服务器公网直连、查看令牌或重置令牌。
 也可以随时运行 `./scripts/sdv-server.sh admin-detect` 只读查看检测结果和推荐命令。
 
 如果服务器没有 Node.js 18+，Linux 脚本会询问是否下载项目本地 Node.js 到
 `.svsk-tools/`。非交互部署可在 `.env` 中设置 `SVSK_AUTO_INSTALL_NODE=true`。
 
 首次执行 `setup` 结束后，脚本会打印管理面板、noVNC、HTTP API、游戏直连 IP/端口等
-访问入口。交互式 Linux root 终端会询问是否安装公网常驻管理面板；其他环境会询问是否
-以前台临时模式启动 Web 管理面板。
+访问入口。交互式终端会询问是否打开 Web admin wizard；Linux root 服务器可以在向导里
+选择反向代理模式、裸服务器公网直连、查看令牌或重置令牌，其他环境可以以前台临时模式
+启动 Web 管理面板。
 
-首次启动面板会在 `.env` 中生成 `ADMIN_TOKEN`，登录时从 `.env` 复制该值；终端和 systemd 日志不会打印完整令牌。面板可以查看容器健康、加入地址、端口映射、资源占用、在线玩家名称、农场角色和最近日志，也可以保存常用开服配置，管理当前 saves volume 里的存档和备份，并执行授予管理员、删除离线角色等玩家管理操作。运行配置、存档配置和 Mod 配置弹窗都提供“保存并重启”按钮，用于保存后立即重启游戏服务端。
+首次启动面板会在 `.env` 中生成 `ADMIN_TOKEN`。登录时可以从 `.env` 复制该值，也可以
+通过菜单 12 或 `./scripts/sdv-server.sh admin-token-show` 查看；该命令必须手动输入
+`SHOW`，不会默认打印令牌。面板可以查看容器健康、加入地址、端口映射、资源占用、在线玩家名称、农场角色和最近日志，也可以保存常用开服配置，管理当前 saves volume 里的存档和备份，并执行授予管理员、删除离线角色等玩家管理操作。运行配置、存档配置和 Mod 配置弹窗都提供“保存并重启”按钮，用于保存后立即重启游戏服务端。
 面板右上角支持简体中文 / English 切换；前端文案集中在
 `scripts/admin-panel/i18n.js`，新增语言时按现有 key 补齐字典。
 

@@ -1255,6 +1255,7 @@ configure_steam_credentials() {
   step "Steam credentials"
   printf 'Current STEAM_USERNAME: %s\n' "$has_username"
   printf 'Current STEAM_PASSWORD: %s\n' "$has_password"
+  printf 'Current ADMIN_TOKEN: %s\n' "$(secret_status "$(get_env_value ADMIN_TOKEN)")"
   warn "Values are saved to local .env and are not printed."
 
   read -r -p "Steam username (leave blank to keep current): " steam_username
@@ -1303,6 +1304,15 @@ env_or_default() {
   fi
 }
 
+secret_status() {
+  local value="${1:-}"
+  if [[ -n "$value" ]]; then
+    printf 'set'
+  else
+    printf 'missing'
+  fi
+}
+
 show_access_info() {
   if [[ ! -f "$ENV_FILE" ]]; then
     warn ".env does not exist. Showing default local access URLs."
@@ -1330,6 +1340,7 @@ show_access_info() {
   printf 'Game UDP:    %s\n' "$game_port"
   printf 'Query UDP:   %s\n' "$query_port"
   printf 'Admin command: ./scripts/sdv-server.sh admin\n'
+  printf 'Admin token:  %s\n' "$(secret_status "$(get_env_value ADMIN_TOKEN)")"
 
   step "LAN IPv4 candidates"
   if ! list_lan_ipv4_addresses; then
@@ -1391,71 +1402,104 @@ show_admin_service_recommendation() {
   fi
 }
 
-prompt_admin_panel_after_setup() {
-  if ! ensure_node_available 1; then
+admin_token_show() {
+  ensure_admin_env_file
+
+  if ! interactive_terminal; then
+    die "Showing ADMIN_TOKEN requires an interactive terminal."
+  fi
+
+  local answer token
+  step "Web admin token"
+  warn "This prints the current ADMIN_TOKEN once. Do not paste it into chat, issues, screenshots, or public logs."
+  read -r -p "Type SHOW to print ADMIN_TOKEN, or press Enter to cancel: " answer
+  if [[ "$answer" != "SHOW" ]]; then
+    ok "Skipped showing ADMIN_TOKEN."
     return 0
   fi
 
-  if [[ ! -t 0 || ! -t 1 ]]; then
-    warn "Run ./scripts/sdv-server.sh admin-service-install-public later if this is a bare public server without Nginx or 1Panel."
-    warn "Run ./scripts/sdv-server.sh admin-service-install later if you will use Nginx or 1Panel reverse proxy."
-    return 0
+  token="$(get_env_value ADMIN_TOKEN)"
+  if [[ -z "$token" ]]; then
+    die "ADMIN_TOKEN is missing in .env."
+  fi
+  printf 'ADMIN_TOKEN=%s\n' "$token"
+  warn "Copy this token directly into the web admin login page."
+}
+
+admin_panel_wizard() {
+  if ! interactive_terminal; then
+    die "The web admin wizard requires a TTY. Use './scripts/sdv-server.sh admin-detect' and './scripts/sdv-server.sh admin-token-show' from a terminal."
   fi
 
-  local answer
-  step "Optional web admin panel"
-  if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] && [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-    local findings recommended
-    findings="$(detect_reverse_proxy_candidates | sort -u)"
-    show_admin_service_recommendation "$findings"
-    if [[ -n "$findings" ]]; then
-      recommended="proxy"
-    else
-      recommended="public"
-    fi
+  ensure_admin_env_file
 
-    if [[ "$recommended" == "proxy" ]]; then
-      printf '%s\n' '1) Install reverse-proxy mode on 127.0.0.1:8088 (recommended)'
-      printf '%s\n' '2) Install direct public mode on 0.0.0.0:8088'
-    else
-      printf '%s\n' '1) Install direct public mode on 0.0.0.0:8088 (recommended)'
-      printf '%s\n' '2) Install reverse-proxy mode on 127.0.0.1:8088'
-    fi
-    printf '%s\n' '3) Skip systemd admin service'
-    read -r -p "Choose admin panel mode [1/2/3]: " answer
-    case "${answer:-1}" in
-      1)
-        if [[ "$recommended" == "proxy" ]]; then
-          admin_service_install
-        else
-          admin_service_install public
-        fi
-        return 0
-        ;;
-      2)
-        if [[ "$recommended" == "proxy" ]]; then
-          admin_service_install public
-        else
-          admin_service_install
-        fi
-        return 0
-        ;;
-      *)
-        warn "Skipped systemd admin service."
-        ;;
-    esac
-  elif [[ "$(uname -s)" == "Linux" ]] && command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-    warn "For a bare public server, run: sudo ./scripts/sdv-server.sh admin-service-install-public"
-    warn "For Nginx or 1Panel reverse proxy mode, run: sudo ./scripts/sdv-server.sh admin-service-install"
+  local findings recommended choice
+  findings="$(detect_reverse_proxy_candidates | sort -u)"
+  show_admin_service_recommendation "$findings"
+  if [[ -n "$findings" ]]; then
+    recommended="proxy"
+  else
+    recommended="public"
   fi
 
-  read -r -p "Start the local web admin panel now? This keeps this terminal open. [y/N]: " answer
-  case "$answer" in
-    y|Y|yes|YES)
+  step "Web admin wizard"
+  printf '%s\n' '1) Nginx reverse proxy -> install local mode on 127.0.0.1:8088'
+  printf '%s\n' '2) 1Panel reverse proxy -> install local mode on 127.0.0.1:8088'
+  printf '%s\n' '3) Caddy / Traefik / other reverse proxy -> install local mode on 127.0.0.1:8088'
+  printf '%s\n' '4) No reverse proxy -> install public mode on 0.0.0.0:8088'
+  printf '%s\n' '5) Show current web admin token'
+  printf '%s\n' '6) Rotate web admin token'
+  printf '%s\n' '7) Start local foreground admin panel'
+  printf '%s\n' '8) Show detection only'
+  printf '%s\n' '0) Back'
+  read -r -p "Choose an option: " choice
+
+  case "$choice" in
+    1|2|3)
+      if [[ "$recommended" == "proxy" ]]; then
+        warn "Reverse proxy mode uses 127.0.0.1:8088. Point your Nginx / 1Panel / other proxy site to that address."
+      else
+        warn "Reverse proxy mode was not auto-detected, but you can still use it if a proxy exists."
+      fi
+      admin_service_install
+      ;;
+    4)
+      warn "Direct public mode exposes 0.0.0.0:8088. Restrict it to trusted IPs with cloud firewall rules."
+      admin_service_install public
+      ;;
+    5)
+      admin_token_show
+      ;;
+    6)
+      admin_token_rotate
+      ;;
+    7)
       admin_panel
       ;;
+    8)
+      show_admin_service_recommendation "$findings"
+      ;;
     *)
-      ok "Skipped admin panel. Run ./scripts/sdv-server.sh admin later when needed."
+      ok "Skipped web admin wizard."
+      ;;
+  esac
+}
+
+prompt_admin_panel_after_setup() {
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    warn "Run ./scripts/sdv-server.sh admin later if you want to open the foreground web admin panel."
+    warn "Run ./scripts/sdv-server.sh admin-detect, admin-token-show, admin-token-rotate, admin-service-install, or admin-service-install-public later as needed."
+    return 0
+  fi
+
+  step "Optional web admin panel"
+  read -r -p "Open the web admin wizard now? [y/N]: " answer
+  case "$answer" in
+    y|Y|yes|YES)
+      admin_panel_wizard
+      ;;
+    *)
+      ok "Skipped web admin wizard. Run ./scripts/sdv-server.sh admin later when needed."
       ;;
   esac
 }
@@ -1493,10 +1537,12 @@ interactive_menu() {
 8) Show status
 9) Follow logs
 10) Web admin detect / recommendation
-11) Web admin install / start wizard
-12) Show join info
-13) Backup saves
-14) Update images and restart
+11) Web admin wizard / proxy / token
+12) Show web admin token
+13) Rotate web admin token
+14) Show join info
+15) Backup saves
+16) Update images and restart
 0) Exit
 
 MENU
@@ -1533,16 +1579,22 @@ MENU
         run_menu_action admin-detect
         ;;
       11)
-        prompt_admin_panel_after_setup
+        admin_panel_wizard
         pause_menu
         ;;
       12)
-        run_menu_action join-info
+        run_menu_action admin-token-show
         ;;
       13)
-        run_menu_action backup
+        run_menu_action admin-token-rotate
         ;;
       14)
+        run_menu_action join-info
+        ;;
+      15)
+        run_menu_action backup
+        ;;
+      16)
         run_menu_action update
         ;;
       0|q|Q|exit|quit)
@@ -2304,7 +2356,7 @@ build_local_images() {
 }
 
 case "$ACTION" in
-  menu|steam-config|access-info|admin|admin-public|admin-detect|admin-token-rotate|admin-service-install|admin-service-install-public|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
+  menu|steam-config|access-info|admin|admin-public|admin-detect|admin-token-show|admin-token-rotate|admin-service-install|admin-service-install-public|admin-service-start|admin-service-stop|admin-service-restart|admin-service-status|admin-service-logs)
     ;;
   doctor)
     step "Checking Docker"
@@ -2347,10 +2399,12 @@ case "$ACTION" in
     printf 'environment STEAM_USERNAME: %s\n' "$([[ -n "${STEAM_USERNAME:-${STEAM_USER:-${STEAM_ACCOUNT:-${STEAM_LOGIN:-}}}}" ]] && printf set || printf missing)"
     printf 'environment STEAM_PASSWORD: %s\n' "$([[ -n "${STEAM_PASSWORD:-${STEAM_PASS:-}}" ]] && printf set || printf missing)"
     printf 'environment STEAM_REFRESH_TOKEN: %s\n' "$([[ -n "${STEAM_REFRESH_TOKEN:-}" ]] && printf set || printf missing)"
+    printf 'environment ADMIN_TOKEN: %s\n' "$([[ -n "${ADMIN_TOKEN:-}" ]] && printf set || printf missing)"
     if [[ -f "$ENV_FILE" ]]; then
       printf '.env STEAM_USERNAME: %s\n' "$([[ -n "$(get_env_value STEAM_USERNAME)" ]] && printf set || printf missing)"
       printf '.env STEAM_PASSWORD: %s\n' "$([[ -n "$(get_env_value STEAM_PASSWORD)" ]] && printf set || printf missing)"
       printf '.env STEAM_REFRESH_TOKEN: %s\n' "$([[ -n "$(get_env_value STEAM_REFRESH_TOKEN)" ]] && printf set || printf missing)"
+      printf '.env ADMIN_TOKEN: %s\n' "$([[ -n "$(get_env_value ADMIN_TOKEN)" ]] && printf set || printf missing)"
     else
       printf 'WARN .env does not exist\n'
     fi
@@ -2497,6 +2551,9 @@ case "$ACTION" in
       printf '%s\n' "Recommended command: sudo ./scripts/sdv-server.sh admin-service-install-public"
     fi
     ;;
+  admin-token-show)
+    admin_token_show
+    ;;
   admin-token-rotate)
     admin_token_rotate
     ;;
@@ -2522,6 +2579,6 @@ case "$ACTION" in
     admin_service_logs
     ;;
   *)
-    die "Unknown command: $ACTION. Available: menu/doctor/check-env/steam-config/access-info/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-detect/admin-token-rotate/admin-service-install/admin-service-install-public/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
+    die "Unknown command: $ACTION. Available: menu/doctor/check-env/steam-config/access-info/login/download/steamcmd-download/steam-network/smoke/setup/build/build-setup/start/build-start/stop/restart/logs/status/update/build-update/backup/join-info/admin/admin-public/admin-detect/admin-token-show/admin-token-rotate/admin-service-install/admin-service-install-public/admin-service-start/admin-service-stop/admin-service-restart/admin-service-status/admin-service-logs/vnc-check/vnc-fix/vnc-resize/host-auto/host-visibility"
     ;;
 esac

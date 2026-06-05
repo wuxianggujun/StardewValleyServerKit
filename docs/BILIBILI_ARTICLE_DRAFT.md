@@ -17,7 +17,11 @@ chmod +x ./setup.sh
 
 1. 先选择 `Fill or update Steam username/password`，输入 Steam 账号密码。
 2. 再选择 `One-click setup / deploy / repair`，开始拉镜像、登录、下载和启动。
-3. 后续维护可以继续用菜单里的启动、重启、日志、备份和管理面板选项。
+3. 需要网页登录时选择 `Web admin wizard / proxy / token`，按服务器情况选择
+   Nginx、1Panel、其他反向代理或裸服务器公网直连。
+4. 登录令牌可以通过菜单里的 `Show web admin token` 查看；必须手动输入 `SHOW`，
+   脚本才会只打印一次。
+5. 后续维护可以继续用菜单里的启动、重启、日志、备份和管理面板选项。
 
 一键部署动作会自动完成这些事情：
 
@@ -44,8 +48,9 @@ sudo ./scripts/sdv-server.sh admin-service-install-public
 http://<服务器公网IP>:8088
 ```
 
-登录使用服务器 `.env` 里的 `ADMIN_TOKEN`。`8080` 是服务端 HTTP API，不是网页登录页；
-直接用浏览器打开 `8080` 看到 `Unauthorized` 属于正常现象。
+登录使用服务器 `.env` 里的 `ADMIN_TOKEN`。如果不想手动打开 `.env`，运行
+`./setup.sh admin-token-show`，按提示输入 `SHOW` 后复制令牌。`8080` 是服务端
+HTTP API，不是网页登录页；直接用浏览器打开 `8080` 看到 `Unauthorized` 属于正常现象。
 
 如果服务器没有 Node.js 18+，脚本会询问是否下载项目本地 Node.js 到 `.svsk-tools/`。
 这不是全局安装，不会污染系统 Node 环境。
@@ -59,7 +64,8 @@ sudo ./scripts/sdv-server.sh admin-service-install
 再把域名反向代理到 `http://127.0.0.1:8088`。
 
 交互式 `setup` 会检测 1Panel、Nginx、Caddy、Traefik 等候选项并给出推荐，但不会
-静默替你决定，因为“安装了反代”不等于“已经为这个项目配置好了站点”。
+静默替你决定，因为“安装了反代”不等于“已经为这个项目配置好了站点”。向导会让用户
+明确选择 Nginx、1Panel、其他反代或裸服务器公网直连。
 
 ## Docker Hub 下载失败怎么办
 
@@ -97,6 +103,7 @@ Steam 账号，用来下载正版游戏文件。
 ./setup.sh menu
 ./setup.sh doctor
 ./setup.sh steam-config
+./setup.sh admin-token-show
 ./setup.sh status
 ./setup.sh logs
 ./setup.sh restart
