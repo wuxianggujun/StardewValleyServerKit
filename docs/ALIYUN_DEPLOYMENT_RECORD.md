@@ -55,6 +55,8 @@ http://139.196.225.211:8088
 ```
 
 登录使用服务器 `.env` 中的 `ADMIN_TOKEN`。不要把该令牌写进文档、聊天或截图。
+如果服务器没有 Node.js 18+，脚本会下载项目本地 Node.js 到 `.svsk-tools/`；
+非交互执行时可临时传入 `SVSK_AUTO_INSTALL_NODE=true`。
 
 注意：`http://139.196.225.211:8080` 是 JunimoServer HTTP API，不是网页登录页。
 直接访问 `8080` 返回 `Unauthorized. Provide a valid Authorization header: Bearer <api-key>`

@@ -278,6 +278,138 @@ interactive_terminal() {
   [[ -t 0 && -t 1 ]]
 }
 
+node_auto_install_allowed() {
+  local value="${SVSK_AUTO_INSTALL_NODE:-}"
+  if [[ -z "$value" ]]; then
+    value="$(get_env_value SVSK_AUTO_INSTALL_NODE || true)"
+  fi
+  truthy_value "$value"
+}
+
+node_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)
+      printf '%s' "x64"
+      ;;
+    aarch64|arm64)
+      printf '%s' "arm64"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+node_major_version() {
+  "$1" -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || return 1
+}
+
+node_version_ok() {
+  local node_bin="$1"
+  local major
+  major="$(node_major_version "$node_bin" || true)"
+  [[ "$major" =~ ^[0-9]+$ && "$major" -ge 18 ]]
+}
+
+activate_local_node() {
+  local node_bin="$ROOT_DIR/.svsk-tools/node-current/bin/node"
+  [[ -x "$node_bin" ]] || return 1
+  node_version_ok "$node_bin" || return 1
+  export PATH="$ROOT_DIR/.svsk-tools/node-current/bin:$PATH"
+}
+
+download_file() {
+  local url="$1"
+  local output="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --connect-timeout 20 --retry 2 --retry-delay 2 -o "$output" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$output" "$url"
+  else
+    return 1
+  fi
+}
+
+install_local_node() {
+  [[ "$(uname -s)" == "Linux" ]] || die "Automatic local Node.js install is only supported on Linux."
+
+  local version="${SVSK_NODE_VERSION:-20.11.1}"
+  local arch
+  arch="$(node_arch)" || die "Unsupported CPU architecture for local Node.js install: $(uname -m)"
+
+  local tools_dir="$ROOT_DIR/.svsk-tools"
+  local install_dir="$tools_dir/node-v$version-linux-$arch"
+  local current_dir="$tools_dir/node-current"
+  local archive="$tools_dir/node-v$version-linux-$arch.tar.xz"
+  local bases="${SVSK_NODE_DOWNLOAD_BASES:-$(get_env_value SVSK_NODE_DOWNLOAD_BASES || true)}"
+  bases="${bases:-https://npmmirror.com/mirrors/node https://nodejs.org/dist}"
+  local base url downloaded=0
+
+  mkdir -p "$tools_dir"
+
+  if [[ ! -x "$install_dir/bin/node" ]]; then
+    for base in $bases; do
+      base="${base%/}"
+      url="$base/v$version/node-v$version-linux-$arch.tar.xz"
+      step "Downloading local Node.js from $base"
+      if download_file "$url" "$archive"; then
+        downloaded=1
+        break
+      fi
+      warn "Failed to download Node.js from $base"
+    done
+
+    [[ "$downloaded" == "1" ]] || die "Could not download Node.js. Set SVSK_NODE_DOWNLOAD_BASES to a reachable mirror and retry."
+    tar -xJf "$archive" -C "$tools_dir"
+    rm -f "$archive"
+  fi
+
+  ln -sfn "$install_dir" "$current_dir"
+  export PATH="$current_dir/bin:$PATH"
+  node_version_ok "$current_dir/bin/node" || die "Installed Node.js is too old or invalid: $current_dir/bin/node"
+  ok "Local Node.js ready: $("$current_dir/bin/node" -v)"
+}
+
+ensure_node_available() {
+  local optional="${1:-0}"
+  local node_bin
+
+  node_bin="$(command -v node || true)"
+  if [[ -n "$node_bin" ]] && node_version_ok "$node_bin"; then
+    return 0
+  fi
+  if [[ -n "$node_bin" ]]; then
+    warn "System Node.js is too old for the admin panel: $("$node_bin" -v 2>/dev/null || printf unknown)"
+  fi
+
+  if activate_local_node; then
+    return 0
+  fi
+
+  if node_auto_install_allowed; then
+    install_local_node
+    return 0
+  fi
+
+  if interactive_terminal; then
+    local answer
+    read -r -p "Node.js 18+ is required for the web admin panel. Install a local Node.js runtime under .svsk-tools now? [y/N]: " answer
+    case "$answer" in
+      y|Y|yes|YES)
+        install_local_node
+        return 0
+        ;;
+    esac
+  fi
+
+  warn "Node.js 18+ is required for the web admin panel."
+  warn "Rerun with SVSK_AUTO_INSTALL_NODE=true to download a project-local Node.js runtime."
+  if [[ "$optional" == "1" ]]; then
+    return 1
+  fi
+  die "Node.js 18+ was not found."
+}
+
 compose_run_login() {
   if interactive_terminal; then
     compose run --rm -it steam-auth login
@@ -1175,8 +1307,7 @@ show_access_info() {
 }
 
 prompt_admin_panel_after_setup() {
-  if ! command -v node >/dev/null 2>&1; then
-    warn "Node.js was not found. Install Node.js, then run ./scripts/sdv-server.sh admin to start the web admin panel."
+  if ! ensure_node_available 1; then
     return 0
   fi
 
@@ -1310,7 +1441,7 @@ join_info() {
 
 admin_panel() {
   local public_mode="${1:-0}"
-  command -v node >/dev/null 2>&1 || die "Command not found: node. Please install Node.js first."
+  ensure_node_available
 
   local admin_host admin_port
   if [[ "$public_mode" == "1" ]]; then
@@ -1365,7 +1496,7 @@ Wants=docker.service
 Type=simple
 WorkingDirectory=$ROOT_DIR
 Environment=SDV_ADMIN_ROOT=$ROOT_DIR
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH=$ROOT_DIR/.svsk-tools/node-current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/bin/env node $ROOT_DIR/scripts/admin-panel.js
 Restart=always
 RestartSec=3
@@ -1379,7 +1510,7 @@ admin_service_install() {
   local mode="${1:-local}"
   require_linux_systemd_root
   ensure_admin_env_file
-  command -v node >/dev/null 2>&1 || die "Command not found: node. Please install Node.js first."
+  ensure_node_available
 
   set_env_value ADMIN_PORT "$(env_or_default ADMIN_PORT 8088)"
   if [[ "$mode" == "public" ]]; then

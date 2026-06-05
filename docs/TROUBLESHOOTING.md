@@ -85,6 +85,8 @@ http://<server-public-ip>:8088
 ```
 
 登录使用 `.env` 中的 `ADMIN_TOKEN`，不要把它发到聊天、Issue 或截图里。
+如果服务器没有 Node.js 18+，交互式脚本会询问是否下载项目本地 Node.js 到
+`.svsk-tools/`；非交互部署可设置 `SVSK_AUTO_INSTALL_NODE=true`。
 
 ## Steam 授权失败
 

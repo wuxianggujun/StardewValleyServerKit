@@ -91,6 +91,9 @@ sudo ./scripts/sdv-server.sh admin-service-install-public
 `8088/tcp`，然后访问 `http://<server-public-ip>:8088`。登录页使用 `.env`
 里的 `ADMIN_TOKEN`。
 
+如果服务器没有 Node.js 18+，Linux 脚本会询问是否下载项目本地 Node.js 到
+`.svsk-tools/`。非交互部署可在 `.env` 中设置 `SVSK_AUTO_INSTALL_NODE=true`。
+
 首次执行 `setup` 结束后，脚本会打印管理面板、noVNC、HTTP API、游戏直连 IP/端口等
 访问入口。交互式 Linux root 终端会询问是否安装公网常驻管理面板；其他环境会询问是否
 以前台临时模式启动 Web 管理面板。

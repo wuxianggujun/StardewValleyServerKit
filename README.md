@@ -425,6 +425,10 @@ sudo ./scripts/sdv-server.sh admin-service-install-public
 `8088/tcp`，然后访问 `http://<server-public-ip>:8088`。登录页使用 `.env`
 里的 `ADMIN_TOKEN`，脚本不会把令牌打印到终端或日志。
 
+如果服务器没有 Node.js 18+，Linux 脚本会询问是否下载项目本地 Node.js 到
+`.svsk-tools/`。非交互部署可在 `.env` 中设置 `SVSK_AUTO_INSTALL_NODE=true`，
+下载源默认优先使用 `https://npmmirror.com/mirrors/node`，再回退到 `https://nodejs.org/dist`。
+
 首次启动会在 `.env` 中生成
 `ADMIN_TOKEN`，面板登录时从 `.env` 复制该值；终端和 systemd 日志不会打印完整令牌。管理面板可以查看
 容器健康状态、加入地址、在线玩家名称、最近日志，保存农场地图、人数、小屋数量、
@@ -552,6 +556,8 @@ RealVNC 如果能看到画面但不能点击，先确认 Viewer 没有开启 `Vi
 - `ADMIN_TOKEN`：Web 管理面板令牌。
 - `ADMIN_HOST` / `ADMIN_PORT`：Web 管理面板监听地址和端口。
 - `ADMIN_ALLOW_PUBLIC_HTTP`：是否允许管理面板明文 HTTP 监听非本机地址。默认关闭；`admin-service-install-public` 会显式开启它。
+- `SVSK_AUTO_INSTALL_NODE`：是否允许 Linux 脚本为 Web 管理面板下载项目本地 Node.js 运行时。
+- `SVSK_NODE_DOWNLOAD_BASES`：Node.js 下载镜像列表，默认优先使用 npmmirror，再回退到 nodejs.org。
 - `SERVER_PASSWORD`：玩家进服后的登录密码，留空表示关闭。
 - `GAME_PORT` / `QUERY_PORT`：游戏连接和查询端口。
 - `AUTO_BACKUP_ENABLED`：是否由 Web 管理面板定时导出 saves volume 备份。

@@ -5,6 +5,7 @@ data/
 backups/
 logs/
 dist/
+.svsk-tools/
 *.log
 system-mods/SVSKCrashGuard/dist/*
 !system-mods/SVSKCrashGuard/dist/.gitkeep

@@ -41,6 +41,9 @@ http://<服务器公网IP>:8088
 登录使用服务器 `.env` 里的 `ADMIN_TOKEN`。`8080` 是服务端 HTTP API，不是网页登录页；
 直接用浏览器打开 `8080` 看到 `Unauthorized` 属于正常现象。
 
+如果服务器没有 Node.js 18+，脚本会询问是否下载项目本地 Node.js 到 `.svsk-tools/`。
+这不是全局安装，不会污染系统 Node 环境。
+
 如果已经有 Nginx、1Panel 或 HTTPS 反向代理，则使用更安全的本地监听模式：
 
 ```bash
