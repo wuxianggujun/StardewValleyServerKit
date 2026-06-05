@@ -137,8 +137,8 @@ copy_common_tree() {
       --exclude='./data' \
       --exclude='./backups' \
       --exclude='./logs' \
-      --exclude='./.env' \
-      --exclude='./.env.local' \
+      --exclude='./.env*' \
+      --exclude='*/.env*' \
       --exclude='./docker-compose.build.yml' \
       --exclude='./CONTRIBUTING.md' \
       --exclude='./release-images.ps1' \
@@ -153,6 +153,10 @@ copy_common_tree() {
     cd "$destination"
     tar -xf -
   )
+
+  if [[ -f "$ROOT_DIR/.env.example" ]]; then
+    cp "$ROOT_DIR/.env.example" "$destination/.env.example"
+  fi
 }
 
 copy_source_tree() {
@@ -163,6 +167,8 @@ copy_source_tree() {
     cd "$source"
     tar \
       --exclude='./.git' \
+      --exclude='./.env*' \
+      --exclude='*/.env*' \
       --exclude='*/bin' \
       --exclude='*/obj' \
       --exclude='*/node_modules' \
@@ -217,150 +223,20 @@ write_quickstart() {
   local package_root="$1"
   local package_type="$2"
   local quickstart_path="$package_root/QUICKSTART.md"
+  local template_path
+  local content
 
   if [[ "$package_type" == "source-build" ]]; then
-    cat > "$quickstart_path" <<EOF
-# Stardew Valley Server Kit - Source Build Quickstart
-
-This package is for maintainers or advanced users who want to build Docker images on the target server.
-
-## Linux server
-
-\`\`\`bash
-mkdir -p stardew-valley-server-kit
-cd stardew-valley-server-kit
-# unzip the release archive here
-chmod +x ./setup-build.sh
-./setup-build.sh doctor
-./setup-build.sh
-\`\`\`
-
-If Docker is missing, install Docker Engine with Compose v2 first. On Ubuntu/Debian, the short path is:
-
-\`\`\`bash
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker \$USER
-newgrp docker
-\`\`\`
-
-This package must contain these build inputs:
-
-- server/Dockerfile
-- steam-service/Dockerfile
-- discord-bot/Dockerfile
-
-## Useful commands
-
-\`\`\`bash
-./setup-build.sh status
-./setup-build.sh logs
-./setup-build.sh restart
-./setup-build.sh update
-./setup-build.sh join-info
-./scripts/sdv-server.sh admin-service-install
-./scripts/sdv-server.sh admin-service-install-public
-\`\`\`
-EOF
-    return
+    template_path="$ROOT_DIR/docs/release/QUICKSTART_SOURCE_BUILD.md"
+  else
+    template_path="$ROOT_DIR/docs/release/QUICKSTART_PULL.md"
   fi
 
-  cat > "$quickstart_path" <<EOF
-# Stardew Valley Server Kit - Server Quickstart
-
-This package is for normal server owners. It pulls published Docker images and does not require source code.
-
-Project mirror for China users:
-
-- Gitee: https://gitee.com/wuxianggujun/StardewValleyServerKit
-
-Images configured in this package:
-
-- ${IMAGE_NAMESPACE}/server:${IMAGE_VERSION}
-- ${IMAGE_NAMESPACE}/steam-service:${IMAGE_VERSION}
-- ${IMAGE_NAMESPACE}/discord-bot:${IMAGE_VERSION}
-
-## Linux server
-
-\`\`\`bash
-mkdir -p stardew-valley-server-kit
-cd stardew-valley-server-kit
-# unzip the release archive here
-chmod +x ./setup.sh
-./setup.sh doctor
-./setup.sh
-\`\`\`
-
-\`./setup.sh\` without arguments opens an interactive menu. Use option 2 to
-fill or update Steam username/password, then option 1 to run the one-click
-setup/deploy/repair flow. Steam passwords are saved only in local \`.env\` and
-are not printed.
-
-If Docker is missing, install Docker Engine with Compose v2 first. On Ubuntu/Debian, the short path is:
-
-\`\`\`bash
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker \$USER
-newgrp docker
-\`\`\`
-
-If Docker Hub is slow or unreachable, \`./setup.sh\` first tries the normal pull path.
-After a confirmed registry timeout, it can ask whether to temporarily configure Docker
-registry mirrors and restart Docker. Type \`yes\` only if this server can tolerate a
-brief interruption of other Docker containers. The script restores the original
-\`/etc/docker/daemon.json\` after image downloads finish.
-
-## Useful commands
-
-\`\`\`bash
-./setup.sh menu
-./setup.sh doctor
-./setup.sh steam-config
-./setup.sh access-info
-./setup.sh status
-./setup.sh logs
-./setup.sh restart
-./setup.sh update
-./setup.sh join-info
-./setup.sh admin-token-show
-./setup.sh admin-token-rotate
-./scripts/sdv-server.sh admin-detect
-./scripts/sdv-server.sh admin-service-install
-./scripts/sdv-server.sh admin-service-install-public
-\`\`\`
-
-\`admin-service-install\` is for Nginx/1Panel reverse proxy mode on
-\`127.0.0.1:8088\`. \`admin-service-install-public\` is for a bare public
-server without reverse proxy; open TCP 8088 in the cloud security group and
-visit \`http://<server-public-ip>:8088\`.
-
-Interactive Linux setup detects common reverse proxy candidates and recommends a
-mode, but still asks the user to choose because installed reverse proxy software
-does not prove a site is configured for this project.
-
-The web admin login uses ADMIN_TOKEN from local .env. To copy it without opening
-.env manually, run \`./setup.sh admin-token-show\` from an interactive terminal
-and type \`SHOW\`. The token is not printed during normal setup, status, or logs.
-
-## Saves and custom farms
-
-After deployment, open the web admin panel and use the Saves page instead of
-editing Docker volumes by hand.
-
-- To create your real farm, click Create map, fill the farm name, map type,
-  cabin/player settings, and profit margin, then confirm.
-- To switch saves, select the save for next load and restart the game server.
-- To delete the default/test save, make sure players are offline, click Delete
-  on that save, and type the full save name to confirm.
-- Before deleting a save, the panel backs up the whole saves volume and then
-  removes only the selected save directory.
-- Restoring a backup replaces the whole saves volume, not just one save.
-
-If the server has no Node.js 18+, the Linux script can download a project-local
-Node.js runtime into \`.svsk-tools/\`. Interactive runs ask first; non-interactive
-runs can set \`SVSK_AUTO_INSTALL_NODE=true\`.
-
-Do not use setup-build in this package. Source-build packages are separate and include Dockerfile directories.
-EOF
+  [[ -f "$template_path" ]] || die "Quickstart template not found: $template_path"
+  content="$(< "$template_path")"
+  content="${content//__IMAGE_NAMESPACE__/$IMAGE_NAMESPACE}"
+  content="${content//__IMAGE_VERSION__/$IMAGE_VERSION}"
+  printf '%s\n' "$content" > "$quickstart_path"
 }
 
 zip_stage() {
