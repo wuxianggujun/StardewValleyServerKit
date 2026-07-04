@@ -16,36 +16,67 @@ public sealed class ModEntry : Mod
     private const uint UpdatesPerSecond = 60;
 
     private static IMonitor? StaticMonitor;
-    private static readonly System.Reflection.FieldInfo? HasDedicatedHostField =
-        AccessTools.Field(typeof(FarmerTeam), "hasDedicatedHost");
 
     private ModConfig Config = new();
+    private System.Reflection.FieldInfo? HasDedicatedHostField;
     private uint UpdateCount;
     private uint SleepReadyStartedAt;
     private uint LastSleepGuardLogAt;
+    private uint LastSleepGuardErrorAt;
     private bool LoggedDedicatedHostFlag;
 
     public override void Entry(IModHelper helper)
     {
         StaticMonitor = Monitor;
-        Config = helper.ReadConfig<ModConfig>();
+        Config = ReadConfigOrDefault(helper);
 
-        helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
-        helper.ConsoleCommands.Add(
-            "svsk_sleep_guard",
-            "Checks and nudges the SVSK dedicated-host sleep ready guard. Usage: svsk_sleep_guard [status|force]",
-            OnSleepGuardCommand);
-
-        var harmony = new Harmony(ModManifest.UniqueID);
-        var target = FindPlayerDisconnectedTarget();
-        if (target == null)
+        try
         {
+            helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
+            helper.ConsoleCommands.Add(
+                "svsk_sleep_guard",
+                "Checks and nudges the SVSK dedicated-host sleep ready guard. Usage: svsk_sleep_guard [status|force]",
+                OnSleepGuardCommand);
+
             Monitor.Log(
-                "[SVSK Crash Guard] No playerDisconnected(long) target found; disconnect crash guard is not active.",
-                LogLevel.Error);
+                $"[SVSK Crash Guard] Sleep ready guard is {(Config.EnableSleepGuard ? "enabled" : "disabled")}; force dedicated host flag is {(Config.ForceDedicatedHostFlag ? "enabled" : "disabled")}.",
+                LogLevel.Info);
         }
-        else
+        catch (Exception ex)
         {
+            Monitor.Log($"[SVSK Crash Guard] Failed to register sleep ready guard: {ex}", LogLevel.Error);
+        }
+
+        InstallDisconnectGuard();
+    }
+
+    private ModConfig ReadConfigOrDefault(IModHelper helper)
+    {
+        try
+        {
+            return helper.ReadConfig<ModConfig>();
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"[SVSK Crash Guard] Failed to read config.json; using defaults. Error: {ex.GetBaseException().Message}", LogLevel.Warn);
+            return new ModConfig();
+        }
+    }
+
+    private void InstallDisconnectGuard()
+    {
+        try
+        {
+            var harmony = new Harmony(ModManifest.UniqueID);
+            var target = FindPlayerDisconnectedTarget();
+            if (target == null)
+            {
+                Monitor.Log(
+                    "[SVSK Crash Guard] No playerDisconnected(long) target found; disconnect crash guard is not active.",
+                    LogLevel.Error);
+                return;
+            }
+
             harmony.Patch(
                 original: target,
                 finalizer: new HarmonyMethod(typeof(ModEntry), nameof(PlayerDisconnected_Finalizer)));
@@ -54,13 +85,30 @@ public sealed class ModEntry : Mod
                 $"[SVSK Crash Guard] Installed disconnect guard on {target.DeclaringType?.FullName}.{target.Name}.",
                 LogLevel.Info);
         }
-
-        Monitor.Log(
-            $"[SVSK Crash Guard] Sleep ready guard is {(Config.EnableSleepGuard ? "enabled" : "disabled")}; force dedicated host flag is {(Config.ForceDedicatedHostFlag ? "enabled" : "disabled")}.",
-            LogLevel.Info);
+        catch (Exception ex)
+        {
+            Monitor.Log($"[SVSK Crash Guard] Failed to install disconnect guard; sleep ready guard will continue. Error: {ex}", LogLevel.Error);
+        }
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
+    {
+        try
+        {
+            OnUpdateTickedCore();
+        }
+        catch (Exception ex)
+        {
+            if (LastSleepGuardErrorAt == 0 || UpdateCount - LastSleepGuardErrorAt >= UpdatesPerSecond * 10)
+            {
+                Monitor.Log($"[SVSK Crash Guard] Sleep ready guard tick failed: {ex.GetBaseException().Message}", LogLevel.Warn);
+                LastSleepGuardErrorAt = UpdateCount;
+            }
+            ResetSleepReadyTracking();
+        }
+    }
+
+    private void OnUpdateTickedCore()
     {
         if (!Config.EnableSleepGuard)
         {
@@ -85,29 +133,36 @@ public sealed class ModEntry : Mod
 
     private void OnSleepGuardCommand(string command, string[] args)
     {
-        var action = args.Length > 0 ? args[0].Trim().ToLowerInvariant() : "force";
-        if (!CanGuardHost())
+        try
         {
-            Monitor.Log("[SVSK Crash Guard] Sleep guard is not available until a multiplayer host save is loaded.", LogLevel.Warn);
-            return;
-        }
+            var action = args.Length > 0 ? args[0].Trim().ToLowerInvariant() : "force";
+            if (!CanGuardHost())
+            {
+                Monitor.Log("[SVSK Crash Guard] Sleep guard is not available until a multiplayer host save is loaded.", LogLevel.Warn);
+                return;
+            }
 
-        if (action is not "status" and not "force")
+            if (action is not "status" and not "force")
+            {
+                Monitor.Log("[SVSK Crash Guard] Usage: svsk_sleep_guard [status|force]", LogLevel.Info);
+                return;
+            }
+
+            var beforeDedicatedHost = Game1.HasDedicatedHost;
+            if (action == "force")
+            {
+                EnsureDedicatedHostFlag("command");
+                GuardSleepReadyCheck(force: true);
+            }
+
+            Monitor.Log(
+                $"[SVSK Crash Guard] Sleep guard status: dedicatedHost={beforeDedicatedHost}->{Game1.HasDedicatedHost}, sleepReady={Game1.netReady.GetNumberReady(SleepReadyCheckId)}/{Game1.netReady.GetNumberRequired(SleepReadyCheckId)}, complete={Game1.netReady.IsReady(SleepReadyCheckId)}, location={Game1.currentLocation?.NameOrUniqueName ?? "unknown"}.",
+                LogLevel.Info);
+        }
+        catch (Exception ex)
         {
-            Monitor.Log("[SVSK Crash Guard] Usage: svsk_sleep_guard [status|force]", LogLevel.Info);
-            return;
+            Monitor.Log($"[SVSK Crash Guard] Sleep guard command failed: {ex}", LogLevel.Error);
         }
-
-        var beforeDedicatedHost = Game1.HasDedicatedHost;
-        if (action == "force")
-        {
-            EnsureDedicatedHostFlag("command");
-            GuardSleepReadyCheck(force: true);
-        }
-
-        Monitor.Log(
-            $"[SVSK Crash Guard] Sleep guard status: dedicatedHost={beforeDedicatedHost}->{Game1.HasDedicatedHost}, sleepReady={Game1.netReady.GetNumberReady(SleepReadyCheckId)}/{Game1.netReady.GetNumberRequired(SleepReadyCheckId)}, complete={Game1.netReady.IsReady(SleepReadyCheckId)}, location={Game1.currentLocation?.NameOrUniqueName ?? "unknown"}.",
-            LogLevel.Info);
     }
 
     private bool CanGuardHost()
@@ -127,27 +182,36 @@ public sealed class ModEntry : Mod
             return false;
         }
 
-        var netBool = HasDedicatedHostField?.GetValue(Game1.player.team);
-        if (netBool == null)
+        try
         {
-            Monitor.Log("[SVSK Crash Guard] Could not find FarmerTeam.hasDedicatedHost; sleep guard cannot enable dedicated-host automation.", LogLevel.Warn);
+            HasDedicatedHostField ??= AccessTools.Field(typeof(FarmerTeam), "hasDedicatedHost");
+            var netBool = HasDedicatedHostField?.GetValue(Game1.player.team);
+            if (netBool == null)
+            {
+                Monitor.Log("[SVSK Crash Guard] Could not find FarmerTeam.hasDedicatedHost; sleep guard cannot enable dedicated-host automation.", LogLevel.Warn);
+                return false;
+            }
+
+            var valueProperty = AccessTools.Property(netBool.GetType(), "Value");
+            if (valueProperty == null)
+            {
+                Monitor.Log("[SVSK Crash Guard] Could not find NetBool.Value on FarmerTeam.hasDedicatedHost; sleep guard cannot enable dedicated-host automation.", LogLevel.Warn);
+                return false;
+            }
+
+            valueProperty.SetValue(netBool, true);
+            if (!LoggedDedicatedHostFlag)
+            {
+                Monitor.Log($"[SVSK Crash Guard] Enabled Stardew dedicated-host automation flag ({reason}).", LogLevel.Info);
+                LoggedDedicatedHostFlag = true;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"[SVSK Crash Guard] Failed to enable dedicated-host automation flag: {ex.GetBaseException().Message}", LogLevel.Warn);
             return false;
         }
-
-        var valueProperty = AccessTools.Property(netBool.GetType(), "Value");
-        if (valueProperty == null)
-        {
-            Monitor.Log("[SVSK Crash Guard] Could not find NetBool.Value on FarmerTeam.hasDedicatedHost; sleep guard cannot enable dedicated-host automation.", LogLevel.Warn);
-            return false;
-        }
-
-        valueProperty.SetValue(netBool, true);
-        if (!LoggedDedicatedHostFlag)
-        {
-            Monitor.Log($"[SVSK Crash Guard] Enabled Stardew dedicated-host automation flag ({reason}).", LogLevel.Info);
-            LoggedDedicatedHostFlag = true;
-        }
-        return true;
     }
 
     private void GuardSleepReadyCheck(bool force)
@@ -180,8 +244,15 @@ public sealed class ModEntry : Mod
 
         if (Game1.IsDedicatedHost)
         {
-            Game1.dedicatedServer.Tick();
-            TryConfirmActiveSleepDialog();
+            try
+            {
+                Game1.dedicatedServer.Tick();
+                TryConfirmActiveSleepDialog();
+            }
+            catch (Exception ex)
+            {
+                Monitor.Log($"[SVSK Crash Guard] Dedicated server tick nudge failed: {ex.GetBaseException().Message}", LogLevel.Warn);
+            }
         }
 
         if (force || elapsedSeconds >= Math.Max(1, Config.SleepReadyTimeoutSeconds))

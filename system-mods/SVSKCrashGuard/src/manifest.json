@@ -1,7 +1,7 @@
 {
   "Name": "SVSK Crash Guard",
   "Author": "StardewValleyServerKit",
-  "Version": "1.1.0",
+  "Version": "1.1.1",
   "Description": "Prevents dedicated-server new-day sync crashes and nudges stuck sleep ready checks.",
   "UniqueID": "SVSK.CrashGuard",
   "EntryDll": "SVSKCrashGuard.dll",
