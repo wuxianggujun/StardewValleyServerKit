@@ -526,6 +526,54 @@ docker port sdv-server
 4. 用测试存档复现。
 5. 对照 `TEST_PLAN.md` 检查特殊日期。
 
+## 黑屏显示“正在等待其他玩家……(1/2)”
+
+现象：
+
+- 玩家睡觉后黑屏，左下角一直显示 `正在等待其他玩家……(1/2)` 或类似计数。
+- noVNC 里无法正常退回菜单，服务器也没有立刻崩溃。
+- 常见于节日、地震、夜间事件或其他过夜流程触发后。
+
+根因通常不是“NPC 不睡觉”，而是无头房主仍被游戏当成一个多人玩家位。
+Stardew 1.6 原版有 dedicated host 自动睡觉逻辑：其他玩家都准备睡觉时，
+房主会自动传回床并确认 `Sleep_Yes`。如果 JunimoServer 的 Host Auto/专用房主标记没有生效，
+远端玩家就会一直等房主进入同一个 `sleep` ready check。
+
+临时处理：
+
+```bash
+cd /opt/stardew/StardewValleyServerKit || exit 1
+
+# 旧版本可先确认/切换 JunimoServer 自动房主模式。
+bash ./setup.sh host-auto
+
+# 更新并加载 SVSK Crash Guard 1.1.0 后，可手动推进当前 sleep ready check。
+docker exec -i sdv-server sh -lc 'printf "%s\n" "svsk_sleep_guard force" > /tmp/smapi-input'
+docker compose --env-file .env logs --no-color server | grep -E "SVSK Crash Guard|sleep ready|dedicated-host|Nudged" | tail -n 80
+```
+
+长期修复：
+
+```bash
+cd /opt/stardew/StardewValleyServerKit || exit 1
+git pull --ff-only
+bash ./scripts/build-crash-guard.sh
+docker compose --env-file .env down
+docker compose --env-file .env up -d
+```
+
+`SVSK Crash Guard` 1.1.0 起会在服务端加载后自动确认 dedicated host 标记，
+并在 `sleep` ready check 卡住时调用原版 `DedicatedServer.Tick()` 推进房主睡觉流程。
+如果需要关闭该兜底，可编辑 `SVSKCrashGuard/config.json`：
+
+```json
+{
+  "EnableSleepGuard": true,
+  "ForceDedicatedHostFlag": true,
+  "SleepReadyTimeoutSeconds": 8
+}
+```
+
 ## 过夜时报 `LidgrenServer.playerDisconnected`
 
 现象：

@@ -1,8 +1,8 @@
 {
   "Name": "SVSK Crash Guard",
   "Author": "StardewValleyServerKit",
-  "Version": "1.0.0",
-  "Description": "Prevents a known dedicated-server crash when a player disconnects during new-day multiplayer sync.",
+  "Version": "1.1.0",
+  "Description": "Prevents dedicated-server new-day sync crashes and nudges stuck sleep ready checks.",
   "UniqueID": "SVSK.CrashGuard",
   "EntryDll": "SVSKCrashGuard.dll",
   "MinimumApiVersion": "4.0.0",

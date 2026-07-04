@@ -1,5 +1,7 @@
 # Stardew Valley Headless Server Kit
 
+[![爱发电](https://img.shields.io/badge/%E7%88%B1%E5%8F%91%E7%94%B5-%E6%94%AF%E6%8C%81%E5%BC%80%E6%BA%90-946ce6?style=flat-square)](https://ifdian.net/a/wuxianggujun)
+
 > 星露谷物语无头服务器一键搭建包：基于 Docker、JunimoServer 和 SMAPI Mods，让农场可以长期在线。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -253,6 +255,7 @@ Windows 本地测试对应：
 ## 支持项目
 
 如果这个工具帮你省了时间，可以扫下面的二维码支持一下。
+如果更习惯在线赞助，也可以通过 [爱发电支持无相孤君继续开源](https://ifdian.net/a/wuxianggujun)。
 
 | 微信赞赏码 | 支付宝收款码 |
 | :---: | :---: |
