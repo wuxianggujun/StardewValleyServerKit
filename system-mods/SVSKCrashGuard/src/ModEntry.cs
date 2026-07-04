@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
 using HarmonyLib;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
@@ -52,15 +54,53 @@ public sealed class ModEntry : Mod
 
     private ModConfig ReadConfigOrDefault(IModHelper helper)
     {
+        var configPath = Path.Combine(helper.DirectoryPath, "config.json");
+        if (!File.Exists(configPath))
+        {
+            Monitor.Log("[SVSK Crash Guard] config.json not found; using built-in defaults.", LogLevel.Info);
+            return new ModConfig();
+        }
+
         try
         {
-            return helper.ReadConfig<ModConfig>();
+            return ParseConfig(File.ReadAllText(configPath));
         }
         catch (Exception ex)
         {
             Monitor.Log($"[SVSK Crash Guard] Failed to read config.json; using defaults. Error: {ex.GetBaseException().Message}", LogLevel.Warn);
             return new ModConfig();
         }
+    }
+
+    private static ModConfig ParseConfig(string json)
+    {
+        var config = new ModConfig();
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            return config;
+        }
+
+        var root = document.RootElement;
+        if (root.TryGetProperty(nameof(ModConfig.EnableSleepGuard), out var enableSleepGuard)
+            && enableSleepGuard.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            config.EnableSleepGuard = enableSleepGuard.GetBoolean();
+        }
+
+        if (root.TryGetProperty(nameof(ModConfig.ForceDedicatedHostFlag), out var forceDedicatedHostFlag)
+            && forceDedicatedHostFlag.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            config.ForceDedicatedHostFlag = forceDedicatedHostFlag.GetBoolean();
+        }
+
+        if (root.TryGetProperty(nameof(ModConfig.SleepReadyTimeoutSeconds), out var sleepReadyTimeoutSeconds)
+            && sleepReadyTimeoutSeconds.TryGetInt32(out var timeoutSeconds))
+        {
+            config.SleepReadyTimeoutSeconds = Math.Max(1, timeoutSeconds);
+        }
+
+        return config;
     }
 
     private void InstallDisconnectGuard()

@@ -2,7 +2,7 @@
   <PropertyGroup>
     <AssemblyName>SVSKCrashGuard</AssemblyName>
     <RootNamespace>SVSKCrashGuard</RootNamespace>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <TargetFramework>net6.0</TargetFramework>
     <EnableHarmony>true</EnableHarmony>
     <EnableModDeploy>false</EnableModDeploy>
