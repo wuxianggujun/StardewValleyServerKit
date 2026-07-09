@@ -51,7 +51,10 @@ async function main() {
   assert.deepEqual(responseBody, { status: 200, body: { logs: "ok", page: 3 } });
 
   assert.match(PAGE, /id="logPagination"/);
-  assert.match(PAGE, /id="olderLogsBtn"/);
+  assert.match(PAGE, /id="logPageInput"/);
+  assert.match(PAGE, /id="goToLogsPageBtn"/);
+  assert.match(PAGE, /id="lastLogsPageBtn"/);
+  assert.doesNotMatch(PAGE, /id="olderLogsBtn"/);
   const adminSource = await require("node:fs/promises").readFile(require("node:path").join(__dirname, "..", "admin-panel.js"), "utf8");
   assert.match(adminSource, /"--timestamps"/);
   console.log("logs.self-test ok");

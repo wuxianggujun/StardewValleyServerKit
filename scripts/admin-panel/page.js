@@ -364,6 +364,8 @@ const PAGE = String.raw`<!doctype html>
     }
     .log-pagination-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
     .log-pagination select { width: auto; min-width: 92px; min-height: 34px; padding: 5px 8px; }
+    .log-page-jump { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+    .log-page-jump input { width: 72px; min-height: 34px; padding: 5px 8px; text-align: center; }
     .log-page-summary { color: var(--muted); font-size: 12px; white-space: nowrap; }
     pre {
       margin: 0;
@@ -506,6 +508,8 @@ const PAGE = String.raw`<!doctype html>
       .log-pagination { align-items: stretch; flex-direction: column; }
       .log-pagination-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .log-pagination-controls button, .log-pagination-controls select { width: 100%; }
+      .log-page-jump { grid-column: 1 / -1; }
+      .log-page-jump input { width: 100%; }
       .log-page-summary { white-space: normal; }
       .modal { padding: 10px; }
       .modal-panel { max-height: calc(100vh - 20px); padding: 17px; border-radius: 15px; }
@@ -811,9 +815,15 @@ const PAGE = String.raw`<!doctype html>
           </div>
           <div id="logPagination" class="log-pagination">
             <div class="log-pagination-controls">
-              <button id="latestLogsBtn" type="button" data-i18n="logs.latest"></button>
-              <button id="newerLogsBtn" type="button" data-i18n="logs.newer"></button>
-              <button id="olderLogsBtn" type="button" data-i18n="logs.older"></button>
+              <button id="firstLogsPageBtn" type="button" data-i18n="logs.firstPage"></button>
+              <button id="previousLogsPageBtn" type="button" data-i18n="logs.previousPage"></button>
+              <label class="log-page-jump">
+                <span data-i18n="logs.page"></span>
+                <input id="logPageInput" type="number" min="1" value="1" inputmode="numeric" data-i18n-aria-label="logs.pageInput" />
+                <button id="goToLogsPageBtn" type="button" data-i18n="logs.goToPage"></button>
+              </label>
+              <button id="nextLogsPageBtn" type="button" data-i18n="logs.nextPage"></button>
+              <button id="lastLogsPageBtn" type="button" data-i18n="logs.lastPage"></button>
               <select id="logPageSize" data-i18n-aria-label="logs.pageSize">
                 <option value="100">100</option>
                 <option value="200" selected>200</option>
@@ -1040,9 +1050,12 @@ const PAGE = String.raw`<!doctype html>
     const playerManagerPanel = document.querySelector("#playerManagerPanel");
     const logsPanel = document.querySelector("#logs");
     const loadLogsBtn = document.querySelector("#loadLogsBtn");
-    const latestLogsBtn = document.querySelector("#latestLogsBtn");
-    const newerLogsBtn = document.querySelector("#newerLogsBtn");
-    const olderLogsBtn = document.querySelector("#olderLogsBtn");
+    const firstLogsPageBtn = document.querySelector("#firstLogsPageBtn");
+    const previousLogsPageBtn = document.querySelector("#previousLogsPageBtn");
+    const logPageInput = document.querySelector("#logPageInput");
+    const goToLogsPageBtn = document.querySelector("#goToLogsPageBtn");
+    const nextLogsPageBtn = document.querySelector("#nextLogsPageBtn");
+    const lastLogsPageBtn = document.querySelector("#lastLogsPageBtn");
     const logPageSize = document.querySelector("#logPageSize");
     const logPageSummary = document.querySelector("#logPageSummary");
     const logPagination = document.querySelector("#logPagination");
@@ -1167,9 +1180,12 @@ const PAGE = String.raw`<!doctype html>
         totalLines: Number(data.totalLines || 0),
       };
       logPageSize.value = String(logPageState.pageSize);
-      latestLogsBtn.disabled = logPageState.page <= 1;
-      newerLogsBtn.disabled = !data.hasNewerPage;
-      olderLogsBtn.disabled = !data.hasOlderPage;
+      logPageInput.value = String(logPageState.page);
+      logPageInput.max = String(logPageState.totalPages);
+      firstLogsPageBtn.disabled = logPageState.page <= 1;
+      previousLogsPageBtn.disabled = logPageState.page <= 1;
+      nextLogsPageBtn.disabled = logPageState.page >= logPageState.totalPages;
+      lastLogsPageBtn.disabled = logPageState.page >= logPageState.totalPages;
       logPageSummary.textContent = t("logs.pageSummary", {
         page: logPageState.page,
         totalPages: logPageState.totalPages,
@@ -1179,7 +1195,7 @@ const PAGE = String.raw`<!doctype html>
 
     async function loadLogPage(page = 1) {
       const pageSize = Number(logPageSize.value || logPageState.pageSize || 200);
-      [loadLogsBtn, latestLogsBtn, newerLogsBtn, olderLogsBtn, logPageSize].forEach((element) => {
+      [loadLogsBtn, firstLogsPageBtn, previousLogsPageBtn, logPageInput, goToLogsPageBtn, nextLogsPageBtn, lastLogsPageBtn, logPageSize].forEach((element) => {
         element.disabled = true;
       });
       try {
@@ -1191,9 +1207,12 @@ const PAGE = String.raw`<!doctype html>
       } finally {
         loadLogsBtn.disabled = false;
         logPageSize.disabled = false;
-        latestLogsBtn.disabled = logPageState.page <= 1;
-        newerLogsBtn.disabled = logPageState.page <= 1;
-        olderLogsBtn.disabled = logPageState.page >= logPageState.totalPages;
+        logPageInput.disabled = false;
+        goToLogsPageBtn.disabled = false;
+        firstLogsPageBtn.disabled = logPageState.page <= 1;
+        previousLogsPageBtn.disabled = logPageState.page <= 1;
+        nextLogsPageBtn.disabled = logPageState.page >= logPageState.totalPages;
+        lastLogsPageBtn.disabled = logPageState.page >= logPageState.totalPages;
       }
     }
 
@@ -3195,10 +3214,27 @@ const PAGE = String.raw`<!doctype html>
       }
     });
 
+    function goToRequestedLogPage() {
+      const requestedPage = Number.parseInt(logPageInput.value, 10);
+      const safePage = Number.isInteger(requestedPage)
+        ? Math.min(Math.max(requestedPage, 1), logPageState.totalPages)
+        : logPageState.page;
+      logPageInput.value = String(safePage);
+      loadLogPage(safePage);
+    }
+
     loadLogsBtn.addEventListener("click", () => loadLogPage(1));
-    latestLogsBtn.addEventListener("click", () => loadLogPage(1));
-    newerLogsBtn.addEventListener("click", () => loadLogPage(Math.max(1, logPageState.page - 1)));
-    olderLogsBtn.addEventListener("click", () => loadLogPage(Math.min(logPageState.totalPages, logPageState.page + 1)));
+    firstLogsPageBtn.addEventListener("click", () => loadLogPage(1));
+    previousLogsPageBtn.addEventListener("click", () => loadLogPage(Math.max(1, logPageState.page - 1)));
+    goToLogsPageBtn.addEventListener("click", goToRequestedLogPage);
+    logPageInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        goToRequestedLogPage();
+      }
+    });
+    nextLogsPageBtn.addEventListener("click", () => loadLogPage(Math.min(logPageState.totalPages, logPageState.page + 1)));
+    lastLogsPageBtn.addEventListener("click", () => loadLogPage(logPageState.totalPages));
     logPageSize.addEventListener("change", () => loadLogPage(1));
 
     diagnosticsBtn.addEventListener("click", async () => {
