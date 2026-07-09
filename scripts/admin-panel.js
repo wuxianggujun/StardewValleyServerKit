@@ -70,6 +70,8 @@ const STACK_FAILURE_LOG_LINES = 180;
 const STACK_FAILURE_LOG_MAX_CHARS = 7000;
 const LATEST_LOG_LINES = 5000;
 const LATEST_LOG_MAX_BYTES = 4 * 1024 * 1024;
+const DEFAULT_LOG_PAGE_SIZE = 200;
+const MAX_LOG_PAGE_SIZE = 1000;
 const STACK_REQUIRED_CONTAINERS = ["sdv-server", "sdv-steam-auth"];
 const DOCKER_INSPECT_API_FORMAT = '{{.State.Running}}{{printf "\\t"}}{{json .Config.Env}}{{printf "\\t"}}{{json .Mounts}}';
 const ADMIN_ALLOW_PUBLIC_HTTP_KEY = "ADMIN_ALLOW_PUBLIC_HTTP";
@@ -2121,14 +2123,42 @@ function isSafeForImmediateRestart(readiness) {
   return ["safe-empty", "safe-saved"].includes(readiness?.mode);
 }
 
+function paginateLogText(text, options = {}) {
+  const requestedPage = Number.parseInt(options.page || "1", 10);
+  const requestedPageSize = Number.parseInt(options.pageSize || DEFAULT_LOG_PAGE_SIZE, 10);
+  const pageSize = Number.isInteger(requestedPageSize)
+    ? Math.min(Math.max(requestedPageSize, 50), MAX_LOG_PAGE_SIZE)
+    : DEFAULT_LOG_PAGE_SIZE;
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  const totalLines = lines.length;
+  const totalPages = Math.max(1, Math.ceil(totalLines / pageSize));
+  const page = Number.isInteger(requestedPage)
+    ? Math.min(Math.max(requestedPage, 1), totalPages)
+    : 1;
+  const end = Math.max(0, totalLines - ((page - 1) * pageSize));
+  const start = Math.max(0, end - pageSize);
+  return {
+    logs: lines.slice(start, end).join("\n"),
+    page,
+    pageSize,
+    totalLines,
+    totalPages,
+    hasNewerPage: page > 1,
+    hasOlderPage: page < totalPages,
+  };
+}
+
 async function latestLogs(options = {}) {
   const tail = Number.parseInt(options.tail || LATEST_LOG_LINES, 10);
   const safeTail = Number.isFinite(tail) && tail > 0 ? Math.min(tail, 20000) : LATEST_LOG_LINES;
   const logs = await compose(
-    ["logs", "--tail", String(safeTail), "--no-color", "server", "steam-auth"],
+    ["logs", "--tail", String(safeTail), "--timestamps", "--no-color", "server", "steam-auth"],
     { timeoutMs: 20000, maxOutputBytes: LATEST_LOG_MAX_BYTES },
   );
-  return { logs: await sanitize(logs.stdout || logs.stderr || "") };
+  const sanitizedLogs = await sanitize(logs.stdout || logs.stderr || "");
+  if (options.paginate !== true) return { logs: sanitizedLogs };
+  return paginateLogText(sanitizedLogs, options);
 }
 
 async function latestServerLogText() {
@@ -3305,6 +3335,7 @@ module.exports = {
     diagnosticSummary,
     parsePublishedPortLine,
     parsePublishedPorts,
+    paginateLogText,
     DOCKER_INSPECT_API_FORMAT,
   },
 };

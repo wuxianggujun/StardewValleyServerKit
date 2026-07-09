@@ -269,7 +269,12 @@ function createApiHandler(deps) {
     return;
   }
   if (pathname === "/api/logs" && req.method === "GET") {
-    json(res, 200, await latestLogs());
+    const url = new URL(req.url, `http://${effectiveRequestHost(req) || "127.0.0.1"}`);
+    json(res, 200, await latestLogs({
+      paginate: true,
+      page: url.searchParams.get("page"),
+      pageSize: url.searchParams.get("pageSize"),
+    }));
     return;
   }
   if (pathname === "/api/diagnostics" && req.method === "GET") {

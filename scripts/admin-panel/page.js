@@ -351,6 +351,20 @@ const PAGE = String.raw`<!doctype html>
       margin: 0 0 7px;
       padding: 11px;
     }
+    .log-pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(4, 12, 9, 0.38);
+    }
+    .log-pagination-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+    .log-pagination select { width: auto; min-width: 92px; min-height: 34px; padding: 5px 8px; }
+    .log-page-summary { color: var(--muted); font-size: 12px; white-space: nowrap; }
     pre {
       margin: 0;
       min-height: 360px;
@@ -489,6 +503,10 @@ const PAGE = String.raw`<!doctype html>
       fieldset { padding: 13px; }
       .toolbar button { max-width: 100%; }
       .diagnostic-summary { grid-template-columns: 1fr; }
+      .log-pagination { align-items: stretch; flex-direction: column; }
+      .log-pagination-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .log-pagination-controls button, .log-pagination-controls select { width: 100%; }
+      .log-page-summary { white-space: normal; }
       .modal { padding: 10px; }
       .modal-panel { max-height: calc(100vh - 20px); padding: 17px; border-radius: 15px; }
     }
@@ -791,6 +809,20 @@ const PAGE = String.raw`<!doctype html>
               <button id="copyLogsBtn" type="button" data-i18n="logs.copy"></button>
             </div>
           </div>
+          <div id="logPagination" class="log-pagination">
+            <div class="log-pagination-controls">
+              <button id="latestLogsBtn" type="button" data-i18n="logs.latest"></button>
+              <button id="newerLogsBtn" type="button" data-i18n="logs.newer"></button>
+              <button id="olderLogsBtn" type="button" data-i18n="logs.older"></button>
+              <select id="logPageSize" data-i18n-aria-label="logs.pageSize">
+                <option value="100">100</option>
+                <option value="200" selected>200</option>
+                <option value="500">500</option>
+                <option value="1000">1000</option>
+              </select>
+            </div>
+            <span id="logPageSummary" class="log-page-summary"></span>
+          </div>
           <pre id="logs"></pre>
         </div>
       </div>
@@ -1008,6 +1040,12 @@ const PAGE = String.raw`<!doctype html>
     const playerManagerPanel = document.querySelector("#playerManagerPanel");
     const logsPanel = document.querySelector("#logs");
     const loadLogsBtn = document.querySelector("#loadLogsBtn");
+    const latestLogsBtn = document.querySelector("#latestLogsBtn");
+    const newerLogsBtn = document.querySelector("#newerLogsBtn");
+    const olderLogsBtn = document.querySelector("#olderLogsBtn");
+    const logPageSize = document.querySelector("#logPageSize");
+    const logPageSummary = document.querySelector("#logPageSummary");
+    const logPagination = document.querySelector("#logPagination");
     const diagnosticsBtn = document.querySelector("#diagnosticsBtn");
     const copyLogsBtn = document.querySelector("#copyLogsBtn");
     const languageSelect = document.querySelector("#languageSelect");
@@ -1017,6 +1055,8 @@ const PAGE = String.raw`<!doctype html>
     let hasConfig = false;
     let shutdownPollTimer = null;
     let logsMode = "recent";
+    let logPageState = { page: 1, pageSize: 200, totalPages: 1, totalLines: 0 };
+    let logsLoaded = false;
     let latestStatus = null;
     let latestConfig = null;
     let latestSaveManagement = null;
@@ -1079,6 +1119,13 @@ const PAGE = String.raw`<!doctype html>
       if (latestSaveManagement) renderSaveManagement(latestSaveManagement);
       if (latestPlayerManagement && !latestStatus) renderPlayerManagement(latestPlayerManagement);
       if (latestModManagement) renderModManagement(latestModManagement);
+      if (logsLoaded) {
+        renderLogPagination({
+          ...logPageState,
+          hasNewerPage: logPageState.page > 1,
+          hasOlderPage: logPageState.page < logPageState.totalPages,
+        });
+      }
     }
 
     applyStaticTranslations();
@@ -1090,6 +1137,9 @@ const PAGE = String.raw`<!doctype html>
       btn.classList.add("active");
       document.querySelectorAll(".tab-pane").forEach((p) => p.classList.add("hidden"));
       document.querySelector('[data-pane="' + btn.dataset.tab + '"]').classList.remove("hidden");
+      if (btn.dataset.tab === "logs" && !logsLoaded) {
+        loadLogPage(1).catch((error) => setLogsText(error.message, "full"));
+      }
     });
 
     languageSelect.addEventListener("change", () => setLanguage(languageSelect.value));
@@ -1106,6 +1156,44 @@ const PAGE = String.raw`<!doctype html>
       logsMode = mode || logsMode;
       if (shouldStickToBottom || mode === "full") {
         logsPanel.scrollTop = logsPanel.scrollHeight;
+      }
+    }
+
+    function renderLogPagination(data) {
+      logPageState = {
+        page: Number(data.page || 1),
+        pageSize: Number(data.pageSize || 200),
+        totalPages: Number(data.totalPages || 1),
+        totalLines: Number(data.totalLines || 0),
+      };
+      logPageSize.value = String(logPageState.pageSize);
+      latestLogsBtn.disabled = logPageState.page <= 1;
+      newerLogsBtn.disabled = !data.hasNewerPage;
+      olderLogsBtn.disabled = !data.hasOlderPage;
+      logPageSummary.textContent = t("logs.pageSummary", {
+        page: logPageState.page,
+        totalPages: logPageState.totalPages,
+        totalLines: logPageState.totalLines,
+      });
+    }
+
+    async function loadLogPage(page = 1) {
+      const pageSize = Number(logPageSize.value || logPageState.pageSize || 200);
+      [loadLogsBtn, latestLogsBtn, newerLogsBtn, olderLogsBtn, logPageSize].forEach((element) => {
+        element.disabled = true;
+      });
+      try {
+        const data = await request("/api/logs?page=" + encodeURIComponent(page) + "&pageSize=" + encodeURIComponent(pageSize));
+        setLogsText(data.logs, "full");
+        logPagination.classList.remove("hidden");
+        renderLogPagination(data);
+        logsLoaded = true;
+      } finally {
+        loadLogsBtn.disabled = false;
+        logPageSize.disabled = false;
+        latestLogsBtn.disabled = logPageState.page <= 1;
+        newerLogsBtn.disabled = logPageState.page <= 1;
+        olderLogsBtn.disabled = logPageState.page >= logPageState.totalPages;
       }
     }
 
@@ -2438,6 +2526,7 @@ const PAGE = String.raw`<!doctype html>
       try {
         const report = await request("/api/diagnostics");
         setLogsText(diagnosticsText(report), "diagnostics");
+        logPagination.classList.add("hidden");
         const loadReport = report.mods?.loadReport || {};
         setMessage(modsMessage, t("mods.diagnosed", {
           loaded: loadReport.loadedSummaryCount == null ? t("mods.loadUnknown") : loadReport.loadedSummaryCount,
@@ -3106,21 +3195,18 @@ const PAGE = String.raw`<!doctype html>
       }
     });
 
-    loadLogsBtn.addEventListener("click", async () => {
-      loadLogsBtn.disabled = true;
-      try {
-        const logs = await request("/api/logs");
-        setLogsText(logs.logs, "full");
-      } finally {
-        loadLogsBtn.disabled = false;
-      }
-    });
+    loadLogsBtn.addEventListener("click", () => loadLogPage(1));
+    latestLogsBtn.addEventListener("click", () => loadLogPage(1));
+    newerLogsBtn.addEventListener("click", () => loadLogPage(Math.max(1, logPageState.page - 1)));
+    olderLogsBtn.addEventListener("click", () => loadLogPage(Math.min(logPageState.totalPages, logPageState.page + 1)));
+    logPageSize.addEventListener("change", () => loadLogPage(1));
 
     diagnosticsBtn.addEventListener("click", async () => {
       diagnosticsBtn.disabled = true;
       try {
         const report = await request("/api/diagnostics");
         setLogsText(diagnosticsText(report), "diagnostics");
+        logPagination.classList.add("hidden");
       } finally {
         diagnosticsBtn.disabled = false;
       }
